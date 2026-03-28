@@ -114,8 +114,9 @@ class Schema {
 	 * @return bool
 	 */
 	public static function table_exists( Connection $conn, string $table ): bool {
-		$stmt = $conn->pdo()->prepare( 'SHOW TABLES LIKE ?' );
-		$stmt->execute( array( $table ) );
+		// SHOW TABLES LIKE does not support prepared statement placeholders.
+		$escaped = str_replace( array( '%', '_' ), array( '\\%', '\\_' ), $table );
+		$stmt    = $conn->pdo()->query( "SHOW TABLES LIKE '" . addslashes( $escaped ) . "'" );
 		return (bool) $stmt->fetch();
 	}
 }
