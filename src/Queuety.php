@@ -122,6 +122,13 @@ class Queuety {
 	private static ?ChunkStore $chunk_store = null;
 
 	/**
+	 * Workflow event log instance.
+	 *
+	 * @var WorkflowEventLog|null
+	 */
+	private static ?WorkflowEventLog $workflow_event_log = null;
+
+	/**
 	 * Cache backend instance.
 	 *
 	 * @var Cache|null
@@ -148,18 +155,19 @@ class Queuety {
 			self::$cache = CacheFactory::create();
 		}
 
-		self::$queue             = new Queue( $conn, self::$cache );
-		self::$logger            = new Logger( $conn );
-		self::$workflow          = new Workflow( $conn, self::$queue, self::$logger, self::$cache );
-		self::$registry          = new HandlerRegistry();
-		self::$rate_limiter      = new RateLimiter( $conn, self::$cache );
-		self::$scheduler         = new Scheduler( $conn, self::$queue );
-		self::$workflow_registry = new WorkflowRegistry();
-		self::$metrics           = new Metrics( $conn );
-		self::$webhook_notifier  = new WebhookNotifier( $conn );
-		self::$batch_manager     = new BatchManager( $conn );
-		self::$chunk_store       = new ChunkStore( $conn );
-		self::$worker            = new Worker(
+		self::$queue              = new Queue( $conn, self::$cache );
+		self::$logger             = new Logger( $conn );
+		self::$workflow_event_log = new WorkflowEventLog( $conn );
+		self::$workflow           = new Workflow( $conn, self::$queue, self::$logger, self::$cache, self::$workflow_event_log );
+		self::$registry           = new HandlerRegistry();
+		self::$rate_limiter       = new RateLimiter( $conn, self::$cache );
+		self::$scheduler          = new Scheduler( $conn, self::$queue );
+		self::$workflow_registry  = new WorkflowRegistry();
+		self::$metrics            = new Metrics( $conn );
+		self::$webhook_notifier   = new WebhookNotifier( $conn );
+		self::$batch_manager      = new BatchManager( $conn );
+		self::$chunk_store        = new ChunkStore( $conn );
+		self::$worker             = new Worker(
 			$conn,
 			self::$queue,
 			self::$logger,
@@ -171,6 +179,7 @@ class Queuety {
 			self::$webhook_notifier,
 			self::$batch_manager,
 			self::$chunk_store,
+			self::$workflow_event_log,
 		);
 	}
 
@@ -692,6 +701,39 @@ class Queuety {
 	}
 
 	/**
+	 * Get the workflow event log instance.
+	 *
+	 * @return WorkflowEventLog
+	 */
+	public static function workflow_events(): WorkflowEventLog {
+		self::ensure_initialized();
+		return self::$workflow_event_log;
+	}
+
+	/**
+	 * Get the full timeline of events for a workflow.
+	 *
+	 * @param int $workflow_id Workflow ID.
+	 * @return array Array of event rows, ordered by id.
+	 */
+	public static function workflow_timeline( int $workflow_id ): array {
+		self::ensure_initialized();
+		return self::$workflow_event_log->get_timeline( $workflow_id );
+	}
+
+	/**
+	 * Get the state snapshot at a specific workflow step.
+	 *
+	 * @param int $workflow_id Workflow ID.
+	 * @param int $step_index  Step index.
+	 * @return array|null The state snapshot, or null if not found.
+	 */
+	public static function workflow_state_at( int $workflow_id, int $step_index ): ?array {
+		self::ensure_initialized();
+		return self::$workflow_event_log->get_state_at_step( $workflow_id, $step_index );
+	}
+
+	/**
 	 * Replace the queue with a fake for testing.
 	 *
 	 * Returns a QueueFake instance that records all dispatched jobs
@@ -708,21 +750,22 @@ class Queuety {
 	 * Reset the singleton state (for testing).
 	 */
 	public static function reset(): void {
-		self::$conn              = null;
-		self::$queue             = null;
-		self::$logger            = null;
-		self::$workflow          = null;
-		self::$worker            = null;
-		self::$registry          = null;
-		self::$rate_limiter      = null;
-		self::$scheduler         = null;
-		self::$workflow_registry = null;
-		self::$metrics           = null;
-		self::$webhook_notifier  = null;
-		self::$batch_manager     = null;
-		self::$chunk_store       = null;
-		self::$cache             = null;
-		self::$queue_fake        = null;
+		self::$conn               = null;
+		self::$queue              = null;
+		self::$logger             = null;
+		self::$workflow           = null;
+		self::$worker             = null;
+		self::$registry           = null;
+		self::$rate_limiter       = null;
+		self::$scheduler          = null;
+		self::$workflow_registry  = null;
+		self::$metrics            = null;
+		self::$webhook_notifier   = null;
+		self::$batch_manager      = null;
+		self::$chunk_store        = null;
+		self::$workflow_event_log = null;
+		self::$cache              = null;
+		self::$queue_fake         = null;
 	}
 
 	/**

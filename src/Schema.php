@@ -18,17 +18,18 @@ class Schema {
 	 * @param Connection $conn Database connection.
 	 */
 	public static function install( Connection $conn ): void {
-		$pdo          = $conn->pdo();
-		$jobs         = $conn->table( Config::table_jobs() );
-		$wf           = $conn->table( Config::table_workflows() );
-		$logs         = $conn->table( Config::table_logs() );
-		$schedules    = $conn->table( Config::table_schedules() );
-		$queue_states = $conn->table( Config::table_queue_states() );
-		$webhooks     = $conn->table( Config::table_webhooks() );
-		$signals      = $conn->table( Config::table_signals() );
-		$locks        = $conn->table( Config::table_locks() );
-		$batches      = $conn->table( Config::table_batches() );
-		$chunks       = $conn->table( Config::table_chunks() );
+		$pdo             = $conn->pdo();
+		$jobs            = $conn->table( Config::table_jobs() );
+		$wf              = $conn->table( Config::table_workflows() );
+		$logs            = $conn->table( Config::table_logs() );
+		$schedules       = $conn->table( Config::table_schedules() );
+		$queue_states    = $conn->table( Config::table_queue_states() );
+		$webhooks        = $conn->table( Config::table_webhooks() );
+		$signals         = $conn->table( Config::table_signals() );
+		$locks           = $conn->table( Config::table_locks() );
+		$batches         = $conn->table( Config::table_batches() );
+		$chunks          = $conn->table( Config::table_chunks() );
+		$workflow_events = $conn->table( Config::table_workflow_events() );
 
 		$pdo->exec(
 			"CREATE TABLE IF NOT EXISTS {$jobs} (
@@ -190,6 +191,23 @@ class Schema {
 				INDEX idx_workflow_step (workflow_id, step_index)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$workflow_events} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				workflow_id BIGINT UNSIGNED NOT NULL,
+				step_index TINYINT UNSIGNED NOT NULL,
+				handler VARCHAR(255) NOT NULL,
+				event ENUM('step_started', 'step_completed', 'step_failed', 'state_snapshot') NOT NULL,
+				state_snapshot LONGTEXT DEFAULT NULL,
+				step_output LONGTEXT DEFAULT NULL,
+				duration_ms INT UNSIGNED DEFAULT NULL,
+				error_message TEXT DEFAULT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				INDEX idx_workflow (workflow_id, step_index),
+				INDEX idx_created (created_at)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
 	}
 
 	/**
@@ -198,18 +216,20 @@ class Schema {
 	 * @param Connection $conn Database connection.
 	 */
 	public static function uninstall( Connection $conn ): void {
-		$pdo          = $conn->pdo();
-		$jobs         = $conn->table( Config::table_jobs() );
-		$wf           = $conn->table( Config::table_workflows() );
-		$logs         = $conn->table( Config::table_logs() );
-		$schedules    = $conn->table( Config::table_schedules() );
-		$queue_states = $conn->table( Config::table_queue_states() );
-		$webhooks     = $conn->table( Config::table_webhooks() );
-		$signals      = $conn->table( Config::table_signals() );
-		$locks        = $conn->table( Config::table_locks() );
-		$batches      = $conn->table( Config::table_batches() );
-		$chunks       = $conn->table( Config::table_chunks() );
+		$pdo             = $conn->pdo();
+		$jobs            = $conn->table( Config::table_jobs() );
+		$wf              = $conn->table( Config::table_workflows() );
+		$logs            = $conn->table( Config::table_logs() );
+		$schedules       = $conn->table( Config::table_schedules() );
+		$queue_states    = $conn->table( Config::table_queue_states() );
+		$webhooks        = $conn->table( Config::table_webhooks() );
+		$signals         = $conn->table( Config::table_signals() );
+		$locks           = $conn->table( Config::table_locks() );
+		$batches         = $conn->table( Config::table_batches() );
+		$chunks          = $conn->table( Config::table_chunks() );
+		$workflow_events = $conn->table( Config::table_workflow_events() );
 
+		$pdo->exec( "DROP TABLE IF EXISTS {$workflow_events}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$chunks}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$batches}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$locks}" );
@@ -349,6 +369,35 @@ class Schema {
 				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				INDEX idx_job (job_id, chunk_index),
 				INDEX idx_workflow_step (workflow_id, step_index)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
+	}
+
+	/**
+	 * Migrate from v0.10.x to v0.11.0.
+	 *
+	 * Creates the queuety_workflow_events table for workflow event log support.
+	 *
+	 * @param Connection $conn Database connection.
+	 */
+	public static function migrate_0110( Connection $conn ): void {
+		$pdo             = $conn->pdo();
+		$workflow_events = $conn->table( Config::table_workflow_events() );
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$workflow_events} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				workflow_id BIGINT UNSIGNED NOT NULL,
+				step_index TINYINT UNSIGNED NOT NULL,
+				handler VARCHAR(255) NOT NULL,
+				event ENUM('step_started', 'step_completed', 'step_failed', 'state_snapshot') NOT NULL,
+				state_snapshot LONGTEXT DEFAULT NULL,
+				step_output LONGTEXT DEFAULT NULL,
+				duration_ms INT UNSIGNED DEFAULT NULL,
+				error_message TEXT DEFAULT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				INDEX idx_workflow (workflow_id, step_index),
+				INDEX idx_created (created_at)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 	}

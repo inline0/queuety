@@ -21,13 +21,24 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * ## OPTIONS
 	 *
 	 * [--queue=<queue>]
-	 * : Queue to process. Default: 'default'.
+	 * : Queue(s) to process, in priority order. Comma-separated values are
+	 *   supported for multi-queue workers. The worker tries to claim from each
+	 *   queue in the listed order; the first queue with an available job wins.
+	 *   Default: 'default'.
 	 *
 	 * [--once]
 	 * : Process one batch and exit.
 	 *
 	 * [--workers=<n>]
 	 * : Fork N worker processes (requires pcntl extension).
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Process a single queue
+	 *     wp queuety work --queue=default
+	 *
+	 *     # Process multiple queues in priority order
+	 *     wp queuety work --queue=critical,default,low
 	 *
 	 * @param array $args       Positional arguments.
 	 * @param array $assoc_args Associative arguments.
@@ -72,7 +83,8 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * ## OPTIONS
 	 *
 	 * [--queue=<queue>]
-	 * : Queue to flush. Default: 'default'.
+	 * : Queue(s) to flush, in priority order. Comma-separated values are
+	 *   supported. Default: 'default'.
 	 *
 	 * @param array $args       Positional arguments.
 	 * @param array $assoc_args Associative arguments.

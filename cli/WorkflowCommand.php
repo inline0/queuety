@@ -139,4 +139,83 @@ class WorkflowCommand extends \WP_CLI_Command {
 
 		\WP_CLI\Utils\format_items( $format, $items, array( 'ID', 'Name', 'Status', 'Step' ) );
 	}
+
+	/**
+	 * Show the event timeline for a workflow.
+	 *
+	 * Displays all step events (started, completed, failed) with timestamps,
+	 * handlers, and durations.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <id>
+	 * : Workflow ID.
+	 *
+	 * [--format=<format>]
+	 * : Output format. Default: 'table'.
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function timeline( $args, $assoc_args ) {
+		$workflow_id = (int) $args[0];
+		$format      = $assoc_args['format'] ?? 'table';
+		$events      = Queuety::workflow_timeline( $workflow_id );
+
+		if ( empty( $events ) ) {
+			\WP_CLI::log( "No events found for workflow #{$workflow_id}." );
+			return;
+		}
+
+		$items = array_map(
+			fn( array $event ) => array(
+				'ID'          => $event['id'],
+				'Step'        => $event['step_index'],
+				'Event'       => $event['event'],
+				'Handler'     => $event['handler'],
+				'Duration_ms' => $event['duration_ms'] ?? '-',
+				'Error'       => $event['error_message'] ?? '-',
+				'Created_at'  => $event['created_at'],
+			),
+			$events
+		);
+
+		\WP_CLI\Utils\format_items(
+			$format,
+			$items,
+			array( 'ID', 'Step', 'Event', 'Handler', 'Duration_ms', 'Error', 'Created_at' )
+		);
+	}
+
+	/**
+	 * Show the state snapshot at a specific workflow step.
+	 *
+	 * Displays the full workflow state as it was after the given step completed.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <id>
+	 * : Workflow ID.
+	 *
+	 * <step>
+	 * : Step index (0-based).
+	 *
+	 * @subcommand state-at
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function state_at( $args, $assoc_args ) {
+		$workflow_id = (int) $args[0];
+		$step_index  = (int) $args[1];
+		$snapshot    = Queuety::workflow_state_at( $workflow_id, $step_index );
+
+		if ( null === $snapshot ) {
+			\WP_CLI::error( "No state snapshot found for workflow #{$workflow_id} at step {$step_index}." );
+			return;
+		}
+
+		\WP_CLI::log( "State at step {$step_index} for workflow #{$workflow_id}:" );
+		\WP_CLI::log( json_encode( $snapshot, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
+	}
 }

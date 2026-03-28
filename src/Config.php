@@ -180,6 +180,15 @@ class Config {
 	}
 
 	/**
+	 * Get the workflow events table name.
+	 *
+	 * @return string
+	 */
+	public static function table_workflow_events(): string {
+		return defined( 'QUEUETY_TABLE_WORKFLOW_EVENTS' ) ? QUEUETY_TABLE_WORKFLOW_EVENTS : 'queuety_workflow_events';
+	}
+
+	/**
 	 * Get the default cache TTL in seconds.
 	 *
 	 * @return int

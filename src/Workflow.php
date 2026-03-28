@@ -28,16 +28,18 @@ class Workflow {
 	/**
 	 * Constructor.
 	 *
-	 * @param Connection $conn   Database connection.
-	 * @param Queue      $queue  Queue operations.
-	 * @param Logger     $logger Logger instance.
-	 * @param Cache|null $cache  Optional cache backend for reducing DB reads.
+	 * @param Connection            $conn      Database connection.
+	 * @param Queue                 $queue     Queue operations.
+	 * @param Logger                $logger    Logger instance.
+	 * @param Cache|null            $cache     Optional cache backend for reducing DB reads.
+	 * @param WorkflowEventLog|null $event_log Optional workflow event log for state snapshots.
 	 */
 	public function __construct(
 		private readonly Connection $conn,
 		private readonly Queue $queue,
 		private readonly Logger $logger,
 		private readonly ?Cache $cache = null,
+		private readonly ?WorkflowEventLog $event_log = null,
 	) {}
 
 	/**
@@ -592,6 +594,24 @@ class Workflow {
 				$re_row = $re_stmt->fetch();
 				$state  = json_decode( $re_row['state'], true ) ?: array();
 
+				// Record workflow event log for completed parallel step.
+				if ( null !== $this->event_log ) {
+					$snapshot = array_filter(
+						$state,
+						fn( string $key ) => ! str_starts_with( $key, '_' ),
+						ARRAY_FILTER_USE_KEY
+					);
+
+					$this->event_log->record_step_completed(
+						workflow_id: $workflow_id,
+						step_index: $current_step,
+						handler: $job_row['handler'] ?? '',
+						state_snapshot: $snapshot,
+						step_output: $step_output,
+						duration_ms: $duration_ms,
+					);
+				}
+
 				$next_step = $current_step + 1;
 				$is_last   = $next_step >= $total_steps;
 				$is_paused = WorkflowStatus::Paused->value === $wf_row['status'];
@@ -731,6 +751,25 @@ class Workflow {
 					'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
 				)
 			);
+
+			// Record workflow event log (state snapshot).
+			if ( null !== $this->event_log ) {
+				// Build a public-only snapshot (strip reserved keys).
+				$snapshot = array_filter(
+					$state,
+					fn( string $key ) => ! str_starts_with( $key, '_' ),
+					ARRAY_FILTER_USE_KEY
+				);
+
+				$this->event_log->record_step_completed(
+					workflow_id: $workflow_id,
+					step_index: $current_step,
+					handler: $job_row['handler'] ?? '',
+					state_snapshot: $snapshot,
+					step_output: $step_output,
+					duration_ms: $duration_ms,
+				);
+			}
 
 			// Enqueue next step or log workflow completion.
 			if ( $is_last ) {

@@ -28,17 +28,18 @@ class Worker {
 	/**
 	 * Constructor.
 	 *
-	 * @param Connection           $conn              Database connection.
-	 * @param Queue                $queue             Queue operations.
-	 * @param Logger               $logger            Logger instance.
-	 * @param Workflow             $workflow          Workflow manager.
-	 * @param HandlerRegistry      $registry          Handler registry.
-	 * @param Config               $config            Configuration.
-	 * @param RateLimiter|null     $rate_limiter      Optional rate limiter.
-	 * @param Scheduler|null       $scheduler         Optional scheduler for recurring jobs.
-	 * @param WebhookNotifier|null $webhook_notifier  Optional webhook notifier.
-	 * @param BatchManager|null    $batch_manager     Optional batch manager.
-	 * @param ChunkStore|null      $chunk_store       Optional chunk store for streaming steps.
+	 * @param Connection            $conn              Database connection.
+	 * @param Queue                 $queue             Queue operations.
+	 * @param Logger                $logger            Logger instance.
+	 * @param Workflow              $workflow          Workflow manager.
+	 * @param HandlerRegistry       $registry          Handler registry.
+	 * @param Config                $config            Configuration.
+	 * @param RateLimiter|null      $rate_limiter      Optional rate limiter.
+	 * @param Scheduler|null        $scheduler         Optional scheduler for recurring jobs.
+	 * @param WebhookNotifier|null  $webhook_notifier  Optional webhook notifier.
+	 * @param BatchManager|null     $batch_manager     Optional batch manager.
+	 * @param ChunkStore|null       $chunk_store       Optional chunk store for streaming steps.
+	 * @param WorkflowEventLog|null $event_log         Optional workflow event log.
 	 */
 	public function __construct(
 		private readonly Connection $conn,
@@ -52,44 +53,91 @@ class Worker {
 		private readonly ?WebhookNotifier $webhook_notifier = null,
 		private readonly ?BatchManager $batch_manager = null,
 		private readonly ?ChunkStore $chunk_store = null,
+		private readonly ?WorkflowEventLog $event_log = null,
 	) {}
+
+	/**
+	 * Parse a queue name parameter into an ordered list of queue names.
+	 *
+	 * Accepts a single queue name, a comma-separated string (e.g. "critical,default,low"),
+	 * or an array of queue names. Returns an array in priority order.
+	 *
+	 * @param string|array $queue_name Queue name(s).
+	 * @return string[] Ordered list of queue names.
+	 */
+	private function parse_queue_names( string|array $queue_name ): array {
+		if ( is_array( $queue_name ) ) {
+			return array_values( array_map( 'trim', $queue_name ) );
+		}
+
+		if ( str_contains( $queue_name, ',' ) ) {
+			return array_values( array_filter( array_map( 'trim', explode( ',', $queue_name ) ) ) );
+		}
+
+		return array( $queue_name );
+	}
+
+	/**
+	 * Try to claim a job from an ordered list of queues.
+	 *
+	 * Iterates through queues in priority order, skipping paused queues.
+	 * Returns the first successfully claimed job, or null if all queues are empty.
+	 *
+	 * @param string[] $queues       Ordered list of queue names.
+	 * @param bool     $log_paused   Whether to log paused queue messages.
+	 * @return Job|null The claimed job, or null if no job is available.
+	 */
+	private function claim_from_queues( array $queues, bool $log_paused = false ): ?Job {
+		foreach ( $queues as $q ) {
+			if ( $this->queue->is_queue_paused( $q ) ) {
+				if ( $log_paused ) {
+					$this->logger->log(
+						LogEvent::Started,
+						array(
+							'handler' => '_worker',
+							'queue'   => $q,
+							'context' => array( 'message' => "Queue '{$q}' is paused, skipping." ),
+						)
+					);
+				}
+				continue;
+			}
+
+			$this->debug_log( 'Attempting to claim job from queue.', $q );
+			$job = $this->queue->claim( $q );
+
+			if ( null !== $job ) {
+				return $job;
+			}
+
+			$this->debug_log( 'No job claimed, queue is empty.', $q );
+		}
+
+		return null;
+	}
 
 	/**
 	 * Run the worker loop.
 	 *
-	 * @param string $queue_name Queue to process.
-	 * @param bool   $once       If true, process one batch and exit.
+	 * Supports processing multiple queues in priority order. When a comma-separated
+	 * string or array is provided, the worker tries to claim from each queue in order,
+	 * processing the first available job.
+	 *
+	 * @param string|array $queue_name Queue name(s) to process. Supports comma-separated
+	 *                                 strings (e.g. "critical,default,low") or arrays.
+	 * @param bool         $once       If true, process one batch and exit.
 	 */
-	public function run( string $queue_name = 'default', bool $once = false ): void {
+	public function run( string|array $queue_name = 'default', bool $once = false ): void {
+		$queues               = $this->parse_queue_names( $queue_name );
 		$jobs_processed       = 0;
 		$stale_check_timer    = time();
 		$schedule_check_timer = time();
+		$primary_queue        = $queues[0];
 
 		while ( ! $this->should_stop ) {
-			// Check if queue is paused before claiming.
-			if ( $this->queue->is_queue_paused( $queue_name ) ) {
-				if ( $once ) {
-					break;
-				}
-				$this->logger->log(
-					LogEvent::Started,
-					array(
-						'handler' => '_worker',
-						'queue'   => $queue_name,
-						'context' => array( 'message' => "Queue '{$queue_name}' is paused, skipping." ),
-					)
-				);
-				sleep( Config::worker_sleep() );
-				continue;
-			}
-
-			$this->debug_log( 'Attempting to claim job from queue.', $queue_name );
-
-			$job = $this->queue->claim( $queue_name );
+			$job = $this->claim_from_queues( $queues, log_paused: true );
 
 			if ( null === $job ) {
-				$this->debug_log( 'No job claimed, queue is empty.', $queue_name );
-
 				if ( $once ) {
 					break;
 				}
@@ -103,7 +151,7 @@ class Worker {
 
 				// Check for due schedules periodically.
 				if ( null !== $this->scheduler && time() - $schedule_check_timer >= 60 ) {
-					$this->debug_log( 'Running scheduler tick.', $queue_name );
+					$this->debug_log( 'Running scheduler tick.', $primary_queue );
 					$this->scheduler->tick();
 					$schedule_check_timer = time();
 				}
@@ -115,10 +163,10 @@ class Worker {
 			if ( null !== $this->rate_limiter ) {
 				$this->register_handler_rate_limit( $job->handler );
 
-				$this->debug_log( "Checking rate limit for handler: {$job->handler}", $queue_name );
+				$this->debug_log( "Checking rate limit for handler: {$job->handler}", $job->queue );
 
 				if ( $this->rate_limiter->is_limited( $job->handler ) ) {
-					$this->debug_log( "Handler {$job->handler} is rate-limited, unclaiming job #{$job->id}.", $queue_name );
+					$this->debug_log( "Handler {$job->handler} is rate-limited, unclaiming job #{$job->id}.", $job->queue );
 					$this->queue->unclaim( $job->id );
 					if ( $once ) {
 						break;
@@ -159,23 +207,24 @@ class Worker {
 	}
 
 	/**
-	 * Process all pending jobs in a queue until empty.
+	 * Process all pending jobs in a queue (or multiple queues) until empty.
 	 *
-	 * @param string $queue_name Queue to flush.
+	 * When multiple queues are specified, they are processed in priority order.
+	 * The worker claims from the highest-priority queue first and falls through
+	 * to lower-priority queues only when higher ones are empty.
+	 *
+	 * @param string|array $queue_name Queue name(s) to flush. Supports comma-separated
+	 *                                 strings (e.g. "critical,default,low") or arrays.
 	 * @return int Total jobs processed.
 	 */
-	public function flush( string $queue_name = 'default' ): int {
+	public function flush( string|array $queue_name = 'default' ): int {
+		$queues       = $this->parse_queue_names( $queue_name );
 		$count        = 0;
 		$last_skipped = null;
 		$skip_streak  = 0;
 
 		while ( true ) {
-			// Check if queue is paused before claiming.
-			if ( $this->queue->is_queue_paused( $queue_name ) ) {
-				break;
-			}
-
-			$job = $this->queue->claim( $queue_name );
+			$job = $this->claim_from_queues( $queues );
 			if ( null === $job ) {
 				break;
 			}
@@ -247,6 +296,15 @@ class Worker {
 				'attempt'     => $job->attempts,
 			)
 		);
+
+		// Record step_started event for workflow steps.
+		if ( null !== $this->event_log && $job->is_workflow_step() && null !== $job->step_index ) {
+			$this->event_log->record_step_started(
+				workflow_id: $job->workflow_id,
+				step_index: $job->step_index,
+				handler: $job->handler,
+			);
+		}
 
 		// Install timeout alarm if pcntl is available.
 		if ( $pcntl_available ) {
@@ -474,6 +532,17 @@ class Worker {
 			}
 		} catch ( \Throwable $e ) {
 			$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
+
+			// Record step_failed event for workflow steps.
+			if ( null !== $this->event_log && $job->is_workflow_step() && null !== $job->step_index ) {
+				$this->event_log->record_step_failed(
+					workflow_id: $job->workflow_id,
+					step_index: $job->step_index,
+					handler: $job->handler,
+					error: $e->getMessage(),
+					duration_ms: $duration_ms,
+				);
+			}
 
 			// Determine effective max_attempts (job property overrides DB value).
 			$effective_max = $max_attempts;
