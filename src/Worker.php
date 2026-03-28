@@ -26,14 +26,15 @@ class Worker {
 	/**
 	 * Constructor.
 	 *
-	 * @param Connection       $conn         Database connection.
-	 * @param Queue            $queue        Queue operations.
-	 * @param Logger           $logger       Logger instance.
-	 * @param Workflow         $workflow     Workflow manager.
-	 * @param HandlerRegistry  $registry     Handler registry.
-	 * @param Config           $config       Configuration.
-	 * @param RateLimiter|null $rate_limiter Optional rate limiter.
-	 * @param Scheduler|null   $scheduler    Optional scheduler for recurring jobs.
+	 * @param Connection           $conn              Database connection.
+	 * @param Queue                $queue             Queue operations.
+	 * @param Logger               $logger            Logger instance.
+	 * @param Workflow             $workflow          Workflow manager.
+	 * @param HandlerRegistry      $registry          Handler registry.
+	 * @param Config               $config            Configuration.
+	 * @param RateLimiter|null     $rate_limiter      Optional rate limiter.
+	 * @param Scheduler|null       $scheduler         Optional scheduler for recurring jobs.
+	 * @param WebhookNotifier|null $webhook_notifier  Optional webhook notifier.
 	 */
 	public function __construct(
 		private readonly Connection $conn,
@@ -44,6 +45,7 @@ class Worker {
 		private readonly Config $config,
 		private readonly ?RateLimiter $rate_limiter = null,
 		private readonly ?Scheduler $scheduler = null,
+		private readonly ?WebhookNotifier $webhook_notifier = null,
 	) {}
 
 	/**
@@ -75,9 +77,13 @@ class Worker {
 				continue;
 			}
 
+			$this->debug_log( 'Attempting to claim job from queue.', $queue_name );
+
 			$job = $this->queue->claim( $queue_name );
 
 			if ( null === $job ) {
+				$this->debug_log( 'No job claimed, queue is empty.', $queue_name );
+
 				if ( $once ) {
 					break;
 				}
@@ -91,6 +97,7 @@ class Worker {
 
 				// Check for due schedules periodically.
 				if ( null !== $this->scheduler && time() - $schedule_check_timer >= 60 ) {
+					$this->debug_log( 'Running scheduler tick.', $queue_name );
 					$this->scheduler->tick();
 					$schedule_check_timer = time();
 				}
@@ -102,7 +109,10 @@ class Worker {
 			if ( null !== $this->rate_limiter ) {
 				$this->register_handler_rate_limit( $job->handler );
 
+				$this->debug_log( "Checking rate limit for handler: {$job->handler}", $queue_name );
+
 				if ( $this->rate_limiter->is_limited( $job->handler ) ) {
+					$this->debug_log( "Handler {$job->handler} is rate-limited, unclaiming job #{$job->id}.", $queue_name );
 					$this->queue->unclaim( $job->id );
 					if ( $once ) {
 						break;
@@ -255,6 +265,7 @@ class Worker {
 				);
 			} else {
 
+				$this->debug_log( "Resolving handler: {$job->handler}", $job->queue );
 				$handler = $this->registry->resolve( $job->handler );
 
 				// Register rate limit from handler config if available.
@@ -301,6 +312,16 @@ class Worker {
 							'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
 						)
 					);
+
+					$this->notify_webhook(
+						'job.completed',
+						array(
+							'job_id'      => $job->id,
+							'handler'     => $job->handler,
+							'queue'       => $job->queue,
+							'duration_ms' => $duration_ms,
+						)
+					);
 				}
 			} // End of sub-workflow else block.
 
@@ -331,9 +352,29 @@ class Worker {
 					)
 				);
 
+				$this->notify_webhook(
+					'job.buried',
+					array(
+						'job_id'        => $job->id,
+						'handler'       => $job->handler,
+						'queue'         => $job->queue,
+						'error_message' => $e->getMessage(),
+					)
+				);
+
 				// If part of a workflow, mark the workflow as failed.
 				if ( $job->is_workflow_step() ) {
 					$this->workflow->fail( $job->workflow_id, $job->id, $e->getMessage() );
+
+					$this->notify_webhook(
+						'workflow.failed',
+						array(
+							'workflow_id'   => $job->workflow_id,
+							'job_id'        => $job->id,
+							'handler'       => $job->handler,
+							'error_message' => $e->getMessage(),
+						)
+					);
 				}
 			} else {
 				// Retry with backoff.
@@ -353,6 +394,17 @@ class Worker {
 						'error_message' => $e->getMessage(),
 						'error_class'   => get_class( $e ),
 						'error_trace'   => $e->getTraceAsString(),
+					)
+				);
+
+				$this->notify_webhook(
+					'job.failed',
+					array(
+						'job_id'        => $job->id,
+						'handler'       => $job->handler,
+						'queue'         => $job->queue,
+						'attempt'       => $job->attempts,
+						'error_message' => $e->getMessage(),
 					)
 				);
 
@@ -467,6 +519,41 @@ class Worker {
 				);
 			}
 		}
+	}
+
+	/**
+	 * Write a debug log entry if debug mode is enabled.
+	 *
+	 * @param string $message Debug message.
+	 * @param string $queue   Queue name.
+	 */
+	private function debug_log( string $message, string $queue = 'default' ): void {
+		if ( ! Config::debug() ) {
+			return;
+		}
+
+		$this->logger->log(
+			LogEvent::Debug,
+			array(
+				'handler' => '_worker',
+				'queue'   => $queue,
+				'context' => array( 'message' => $message ),
+			)
+		);
+	}
+
+	/**
+	 * Send a webhook notification if a notifier is configured.
+	 *
+	 * @param string $event Event name.
+	 * @param array  $data  Payload data.
+	 */
+	private function notify_webhook( string $event, array $data ): void {
+		if ( null === $this->webhook_notifier ) {
+			return;
+		}
+
+		$this->webhook_notifier->notify( $event, $data );
 	}
 
 	/**

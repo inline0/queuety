@@ -18,10 +18,11 @@ class LogEventTest extends TestCase {
 		$this->assertSame( 'workflow_failed', LogEvent::WorkflowFailed->value );
 		$this->assertSame( 'workflow_paused', LogEvent::WorkflowPaused->value );
 		$this->assertSame( 'workflow_resumed', LogEvent::WorkflowResumed->value );
+		$this->assertSame( 'debug', LogEvent::Debug->value );
 	}
 
 	public function test_all_cases(): void {
-		$this->assertCount( 10, LogEvent::cases() );
+		$this->assertCount( 11, LogEvent::cases() );
 	}
 
 	public function test_from_valid_value(): void {
@@ -100,5 +101,6 @@ class LogEventTest extends TestCase {
 		$this->assertContains( 'WorkflowFailed', $names );
 		$this->assertContains( 'WorkflowPaused', $names );
 		$this->assertContains( 'WorkflowResumed', $names );
+		$this->assertContains( 'Debug', $names );
 	}
 }

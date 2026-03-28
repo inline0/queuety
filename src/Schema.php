@@ -24,6 +24,7 @@ class Schema {
 		$logs         = $conn->table( Config::table_logs() );
 		$schedules    = $conn->table( Config::table_schedules() );
 		$queue_states = $conn->table( Config::table_queue_states() );
+		$webhooks     = $conn->table( Config::table_webhooks() );
 
 		$pdo->exec(
 			"CREATE TABLE IF NOT EXISTS {$jobs} (
@@ -81,7 +82,7 @@ class Schema {
 				step_index TINYINT UNSIGNED DEFAULT NULL,
 				handler VARCHAR(255) NOT NULL,
 				queue VARCHAR(64) NOT NULL DEFAULT 'default',
-				event ENUM('started', 'completed', 'failed', 'buried', 'retried', 'workflow_started', 'workflow_completed', 'workflow_failed', 'workflow_paused', 'workflow_resumed') NOT NULL,
+				event ENUM('started', 'completed', 'failed', 'buried', 'retried', 'workflow_started', 'workflow_completed', 'workflow_failed', 'workflow_paused', 'workflow_resumed', 'debug') NOT NULL,
 				attempt TINYINT UNSIGNED DEFAULT NULL,
 				duration_ms INT UNSIGNED DEFAULT NULL,
 				memory_peak_kb INT UNSIGNED DEFAULT NULL,
@@ -122,6 +123,16 @@ class Schema {
 				paused_at DATETIME DEFAULT NULL
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$webhooks} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				event VARCHAR(64) NOT NULL,
+				url VARCHAR(2048) NOT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				INDEX idx_event (event)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
 	}
 
 	/**
@@ -136,7 +147,9 @@ class Schema {
 		$logs         = $conn->table( Config::table_logs() );
 		$schedules    = $conn->table( Config::table_schedules() );
 		$queue_states = $conn->table( Config::table_queue_states() );
+		$webhooks     = $conn->table( Config::table_webhooks() );
 
+		$pdo->exec( "DROP TABLE IF EXISTS {$webhooks}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$logs}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$schedules}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$queue_states}" );

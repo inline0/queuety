@@ -90,6 +90,20 @@ class Queuety {
 	private static ?WorkflowRegistry $workflow_registry = null;
 
 	/**
+	 * Metrics instance.
+	 *
+	 * @var Metrics|null
+	 */
+	private static ?Metrics $metrics = null;
+
+	/**
+	 * Webhook notifier instance.
+	 *
+	 * @var WebhookNotifier|null
+	 */
+	private static ?WebhookNotifier $webhook_notifier = null;
+
+	/**
 	 * Initialize Queuety with a database connection.
 	 *
 	 * @param Connection $conn Database connection.
@@ -103,6 +117,8 @@ class Queuety {
 		self::$rate_limiter      = new RateLimiter( $conn );
 		self::$scheduler         = new Scheduler( $conn, self::$queue );
 		self::$workflow_registry = new WorkflowRegistry();
+		self::$metrics           = new Metrics( $conn );
+		self::$webhook_notifier  = new WebhookNotifier( $conn );
 		self::$worker            = new Worker(
 			$conn,
 			self::$queue,
@@ -112,6 +128,7 @@ class Queuety {
 			new Config(),
 			self::$rate_limiter,
 			self::$scheduler,
+			self::$webhook_notifier,
 		);
 	}
 
@@ -448,6 +465,40 @@ class Queuety {
 	}
 
 	/**
+	 * Get the Metrics instance.
+	 *
+	 * @return Metrics
+	 */
+	public static function metrics(): Metrics {
+		self::ensure_initialized();
+		return self::$metrics;
+	}
+
+	/**
+	 * Get the WebhookNotifier instance.
+	 *
+	 * @return WebhookNotifier
+	 */
+	public static function webhook_notifier(): WebhookNotifier {
+		self::ensure_initialized();
+		return self::$webhook_notifier;
+	}
+
+	/**
+	 * Auto-discover and register handler classes from a directory.
+	 *
+	 * @param string $directory Absolute path to the directory to scan.
+	 * @param string $namespace PSR-4 namespace prefix for the directory.
+	 * @return int Number of handlers registered.
+	 * @throws \RuntimeException If the directory does not exist.
+	 */
+	public static function discover_handlers( string $directory, string $namespace ): int {
+		self::ensure_initialized();
+		$discovery = new HandlerDiscovery();
+		return $discovery->register_all( $directory, $namespace, self::$registry );
+	}
+
+	/**
 	 * Reset the singleton state (for testing).
 	 */
 	public static function reset(): void {
@@ -460,6 +511,8 @@ class Queuety {
 		self::$rate_limiter      = null;
 		self::$scheduler         = null;
 		self::$workflow_registry = null;
+		self::$metrics           = null;
+		self::$webhook_notifier  = null;
 	}
 
 	/**

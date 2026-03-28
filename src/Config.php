@@ -133,4 +133,22 @@ class Config {
 	public static function table_queue_states(): string {
 		return defined( 'QUEUETY_TABLE_QUEUE_STATES' ) ? QUEUETY_TABLE_QUEUE_STATES : 'queuety_queue_states';
 	}
+
+	/**
+	 * Get the webhooks table name.
+	 *
+	 * @return string
+	 */
+	public static function table_webhooks(): string {
+		return defined( 'QUEUETY_TABLE_WEBHOOKS' ) ? QUEUETY_TABLE_WEBHOOKS : 'queuety_webhooks';
+	}
+
+	/**
+	 * Check if debug mode is enabled.
+	 *
+	 * @return bool
+	 */
+	public static function debug(): bool {
+		return defined( 'QUEUETY_DEBUG' ) && QUEUETY_DEBUG;
+	}
 }

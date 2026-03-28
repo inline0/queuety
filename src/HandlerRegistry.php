@@ -7,6 +7,8 @@
 
 namespace Queuety;
 
+use Queuety\Attributes\QueuetyHandler;
+
 /**
  * Maps handler names to their class implementations.
  */
@@ -46,6 +48,9 @@ class HandlerRegistry {
 			throw new \RuntimeException( "Handler not found: {$name}" );
 		}
 
+		// Auto-register from QueuetyHandler attribute when resolving a class.
+		$this->auto_register_from_attribute( $class );
+
 		$instance = new $class();
 
 		if ( ! ( $instance instanceof Handler ) && ! ( $instance instanceof Step ) ) {
@@ -53,6 +58,31 @@ class HandlerRegistry {
 		}
 
 		return $instance;
+	}
+
+	/**
+	 * Check a class for a QueuetyHandler attribute and auto-register the name mapping.
+	 *
+	 * @param string $class Fully qualified class name.
+	 */
+	public function auto_register_from_attribute( string $class ): void {
+		if ( ! class_exists( $class ) ) {
+			return;
+		}
+
+		try {
+			$reflection = new \ReflectionClass( $class );
+		} catch ( \ReflectionException ) {
+			return;
+		}
+
+		$attrs = $reflection->getAttributes( QueuetyHandler::class );
+		if ( ! empty( $attrs ) ) {
+			$attr = $attrs[0]->newInstance();
+			if ( ! isset( $this->handlers[ $attr->name ] ) ) {
+				$this->register( $attr->name, $class );
+			}
+		}
 	}
 
 	/**

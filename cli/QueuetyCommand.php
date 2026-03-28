@@ -319,6 +319,145 @@ class QueuetyCommand extends \WP_CLI_Command {
 	}
 
 	/**
+	 * Show full details of a job.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <id>
+	 * : Job ID to inspect.
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function inspect( $args, $assoc_args ) {
+		$job_id = (int) $args[0];
+		$job    = Queuety::queue()->find( $job_id );
+
+		if ( null === $job ) {
+			\WP_CLI::error( "Job #{$job_id} not found." );
+			return;
+		}
+
+		\WP_CLI::line( "Job #{$job->id}" );
+		\WP_CLI::line( "Handler:      {$job->handler}" );
+		\WP_CLI::line( "Queue:        {$job->queue}" );
+		\WP_CLI::line( "Status:       {$job->status->value}" );
+		\WP_CLI::line( "Priority:     {$job->priority->value}" );
+		\WP_CLI::line( "Attempts:     {$job->attempts}/{$job->max_attempts}" );
+		\WP_CLI::line( "Created:      {$job->created_at->format( 'Y-m-d H:i:s' )}" );
+		\WP_CLI::line( "Available at: {$job->available_at->format( 'Y-m-d H:i:s' )}" );
+
+		if ( null !== $job->reserved_at ) {
+			\WP_CLI::line( "Reserved at:  {$job->reserved_at->format( 'Y-m-d H:i:s' )}" );
+		}
+		if ( null !== $job->completed_at ) {
+			\WP_CLI::line( "Completed at: {$job->completed_at->format( 'Y-m-d H:i:s' )}" );
+		}
+		if ( null !== $job->failed_at ) {
+			\WP_CLI::line( "Failed at:    {$job->failed_at->format( 'Y-m-d H:i:s' )}" );
+		}
+		if ( null !== $job->error_message ) {
+			\WP_CLI::line( "Error:        {$job->error_message}" );
+		}
+		if ( null !== $job->workflow_id ) {
+			\WP_CLI::line( "Workflow ID:  {$job->workflow_id}" );
+			\WP_CLI::line( "Step index:   {$job->step_index}" );
+		}
+		if ( null !== $job->depends_on ) {
+			\WP_CLI::line( "Depends on:   {$job->depends_on}" );
+		}
+
+		\WP_CLI::line( '' );
+		\WP_CLI::line( 'Payload:' );
+		\WP_CLI::line( json_encode( $job->payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
+
+		$logs = Queuety::logger()->for_job( $job_id );
+		if ( ! empty( $logs ) ) {
+			\WP_CLI::line( '' );
+			\WP_CLI::line( 'Log history:' );
+			$fields = array( 'id', 'event', 'attempt', 'duration_ms', 'error_message', 'created_at' );
+			\WP_CLI\Utils\format_items( 'table', $logs, $fields );
+		}
+	}
+
+	/**
+	 * Show metrics for all handlers.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [--minutes=<minutes>]
+	 * : Time window in minutes. Default: 60.
+	 *
+	 * [--format=<format>]
+	 * : Output format. Default: 'table'.
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function metrics( $args, $assoc_args ) {
+		$minutes = (int) ( $assoc_args['minutes'] ?? 60 );
+		$format  = $assoc_args['format'] ?? 'table';
+		$stats   = Queuety::metrics()->handler_stats( $minutes );
+
+		if ( empty( $stats ) ) {
+			\WP_CLI::log( "No metrics data found for the last {$minutes} minutes." );
+			return;
+		}
+
+		$fields = array( 'handler', 'completed', 'failed', 'avg_ms', 'p95_ms', 'error_rate' );
+		\WP_CLI\Utils\format_items( $format, $stats, $fields );
+	}
+
+	/**
+	 * Discover handler classes in a directory.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <directory>
+	 * : Directory to scan for handler classes.
+	 *
+	 * <namespace>
+	 * : PSR-4 namespace prefix for the directory.
+	 *
+	 * [--register]
+	 * : Actually register discovered handlers.
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function discover( $args, $assoc_args ) {
+		$directory = $args[0];
+		$namespace = $args[1];
+		$register  = isset( $assoc_args['register'] );
+
+		$discovery  = new \Queuety\HandlerDiscovery();
+		$discovered = $discovery->discover( $directory, $namespace );
+
+		if ( empty( $discovered ) ) {
+			\WP_CLI::log( 'No handlers found.' );
+			return;
+		}
+
+		$items = array();
+		foreach ( $discovered as $entry ) {
+			$items[] = array(
+				'class' => $entry['class'],
+				'type'  => $entry['type'],
+				'name'  => $entry['name'] ?? '(none)',
+			);
+		}
+
+		\WP_CLI\Utils\format_items( 'table', $items, array( 'class', 'type', 'name' ) );
+
+		if ( $register ) {
+			$count = $discovery->register_all( $directory, $namespace, Queuety::registry() );
+			\WP_CLI::success( "Registered {$count} handlers." );
+		} else {
+			\WP_CLI::log( 'Use --register to register discovered handlers.' );
+		}
+	}
+
+	/**
 	 * Get the database connection via reflection.
 	 *
 	 * @return \Queuety\Connection
