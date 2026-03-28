@@ -7,6 +7,8 @@
 
 namespace Queuety;
 
+use Queuety\Cache\CacheFactory;
+use Queuety\Contracts\Cache;
 use Queuety\Contracts\Job as JobContract;
 use Queuety\Enums\ExpressionType;
 use Queuety\Enums\Priority;
@@ -120,6 +122,13 @@ class Queuety {
 	private static ?ChunkStore $chunk_store = null;
 
 	/**
+	 * Cache backend instance.
+	 *
+	 * @var Cache|null
+	 */
+	private static ?Cache $cache = null;
+
+	/**
 	 * Queue fake for testing.
 	 *
 	 * @var QueueFake|null
@@ -132,12 +141,18 @@ class Queuety {
 	 * @param Connection $conn Database connection.
 	 */
 	public static function init( Connection $conn ): void {
-		self::$conn              = $conn;
-		self::$queue             = new Queue( $conn );
+		self::$conn = $conn;
+
+		// Create cache if not already set via set_cache().
+		if ( null === self::$cache ) {
+			self::$cache = CacheFactory::create();
+		}
+
+		self::$queue             = new Queue( $conn, self::$cache );
 		self::$logger            = new Logger( $conn );
-		self::$workflow          = new Workflow( $conn, self::$queue, self::$logger );
+		self::$workflow          = new Workflow( $conn, self::$queue, self::$logger, self::$cache );
 		self::$registry          = new HandlerRegistry();
-		self::$rate_limiter      = new RateLimiter( $conn );
+		self::$rate_limiter      = new RateLimiter( $conn, self::$cache );
 		self::$scheduler         = new Scheduler( $conn, self::$queue );
 		self::$workflow_registry = new WorkflowRegistry();
 		self::$metrics           = new Metrics( $conn );
@@ -550,6 +565,29 @@ class Queuety {
 	}
 
 	/**
+	 * Get the cache backend instance.
+	 *
+	 * @return Cache
+	 */
+	public static function cache(): Cache {
+		self::ensure_initialized();
+		return self::$cache;
+	}
+
+	/**
+	 * Override the cache backend.
+	 *
+	 * Call this before init() to use a custom cache implementation.
+	 * If called after init(), the new cache will only take effect on the
+	 * next init() call.
+	 *
+	 * @param Cache $cache Cache backend to use.
+	 */
+	public static function set_cache( Cache $cache ): void {
+		self::$cache = $cache;
+	}
+
+	/**
 	 * Get the internal Connection instance.
 	 *
 	 * @return Connection
@@ -683,6 +721,7 @@ class Queuety {
 		self::$webhook_notifier  = null;
 		self::$batch_manager     = null;
 		self::$chunk_store       = null;
+		self::$cache             = null;
 		self::$queue_fake        = null;
 	}
 

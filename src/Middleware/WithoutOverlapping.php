@@ -8,6 +8,7 @@
 namespace Queuety\Middleware;
 
 use Queuety\Config;
+use Queuety\Contracts\Cache;
 use Queuety\Contracts\Middleware;
 use Queuety\Queuety;
 
@@ -15,7 +16,8 @@ use Queuety\Queuety;
  * Middleware that prevents overlapping execution of jobs sharing a logical key.
  *
  * Similar to UniqueJob but keyed on a logical operation name with an
- * automatic expiry to prevent dead locks from crashed workers.
+ * automatic expiry to prevent dead locks from crashed workers. Uses cache
+ * as a first-pass check when available, with DB as the authoritative lock.
  */
 class WithoutOverlapping implements Middleware {
 
@@ -37,16 +39,34 @@ class WithoutOverlapping implements Middleware {
 	 * @param \Closure $next The next middleware or core handler.
 	 */
 	public function handle( object $job, \Closure $next ): void {
-		$owner = bin2hex( random_bytes( 16 ) );
-		$conn  = Queuety::connection();
-		$table = $conn->table( Config::table_locks() );
+		$owner     = bin2hex( random_bytes( 16 ) );
+		$conn      = Queuety::connection();
+		$table     = $conn->table( Config::table_locks() );
+		$cache     = $this->resolve_cache();
+		$cache_key = "queuety:overlap:{$this->key}";
 
 		// Clean up expired locks before attempting acquisition.
 		$this->cleanup_expired( $table, $conn );
 
+		// Try cache-first lock (atomic add) when available.
+		$cache_locked = false;
+		if ( null !== $cache ) {
+			$cache_locked = $cache->add( $cache_key, $owner, $this->release_after );
+
+			if ( ! $cache_locked ) {
+				// Cache says lock is held; skip this job.
+				return;
+			}
+		}
+
+		// DB lock is authoritative.
 		$acquired = $this->acquire_lock( $table, $this->key, $owner, $conn );
 
 		if ( ! $acquired ) {
+			// Clean up cache lock if we got it but DB says no.
+			if ( $cache_locked && null !== $cache ) {
+				$cache->delete( $cache_key );
+			}
 			return;
 		}
 
@@ -54,6 +74,23 @@ class WithoutOverlapping implements Middleware {
 			$next( $job );
 		} finally {
 			$this->release_lock( $table, $this->key, $owner, $conn );
+
+			if ( null !== $cache ) {
+				$cache->delete( $cache_key );
+			}
+		}
+	}
+
+	/**
+	 * Resolve the cache instance from the facade, returning null if unavailable.
+	 *
+	 * @return Cache|null
+	 */
+	private function resolve_cache(): ?Cache {
+		try {
+			return Queuety::cache();
+		} catch ( \Throwable ) {
+			return null;
 		}
 	}
 

@@ -7,6 +7,7 @@
 
 namespace Queuety;
 
+use Queuety\Contracts\Cache;
 use Queuety\Enums\BackoffStrategy;
 use Queuety\Enums\JobStatus;
 use Queuety\Enums\Priority;
@@ -19,10 +20,12 @@ class Queue {
 	/**
 	 * Constructor.
 	 *
-	 * @param Connection $conn Database connection.
+	 * @param Connection $conn  Database connection.
+	 * @param Cache|null $cache Optional cache backend for reducing DB queries.
 	 */
 	public function __construct(
 		private readonly Connection $conn,
+		private readonly ?Cache $cache = null,
 	) {}
 
 	/**
@@ -524,6 +527,11 @@ class Queue {
 			ON DUPLICATE KEY UPDATE paused = 1, paused_at = NOW()"
 		);
 		$stmt->execute( array( 'queue' => $queue ) );
+
+		// Update cache to reflect the new paused state.
+		if ( null !== $this->cache ) {
+			$this->cache->set( "queuety:paused:{$queue}", true, Config::cache_ttl() );
+		}
 	}
 
 	/**
@@ -537,6 +545,11 @@ class Queue {
 			"DELETE FROM {$table} WHERE queue = :queue"
 		);
 		$stmt->execute( array( 'queue' => $queue ) );
+
+		// Invalidate cache so workers pick up the resumed state.
+		if ( null !== $this->cache ) {
+			$this->cache->delete( "queuety:paused:{$queue}" );
+		}
 	}
 
 	/**
@@ -546,6 +559,17 @@ class Queue {
 	 * @return bool
 	 */
 	public function is_queue_paused( string $queue ): bool {
+		// Try cache first.
+		if ( null !== $this->cache ) {
+			$cache_key = "queuety:paused:{$queue}";
+			$cached    = $this->cache->get( $cache_key );
+
+			if ( null !== $cached ) {
+				return (bool) $cached;
+			}
+		}
+
+		// Fall through to DB.
 		$table = $this->conn->table( Config::table_queue_states() );
 		$stmt  = $this->conn->pdo()->prepare(
 			"SELECT paused FROM {$table} WHERE queue = :queue"
@@ -553,7 +577,14 @@ class Queue {
 		$stmt->execute( array( 'queue' => $queue ) );
 		$row = $stmt->fetch();
 
-		return $row && (bool) $row['paused'];
+		$paused = $row && (bool) $row['paused'];
+
+		// Cache the result.
+		if ( null !== $this->cache ) {
+			$this->cache->set( "queuety:paused:{$queue}", $paused, Config::cache_ttl() );
+		}
+
+		return $paused;
 	}
 
 	/**

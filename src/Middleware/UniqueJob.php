@@ -8,13 +8,15 @@
 namespace Queuety\Middleware;
 
 use Queuety\Config;
+use Queuety\Contracts\Cache;
 use Queuety\Contracts\Middleware;
 use Queuety\Queuety;
 
 /**
  * Middleware that prevents concurrent execution of jobs with the same key.
  *
- * Uses a database lock table to ensure only one instance of a job
+ * Uses a cache lock first (atomic add) when available, with a database lock
+ * table as the authoritative fallback to ensure only one instance of a job
  * with a given key can execute at a time.
  */
 class UniqueJob implements Middleware {
@@ -35,14 +37,32 @@ class UniqueJob implements Middleware {
 	 * @param \Closure $next The next middleware or core handler.
 	 */
 	public function handle( object $job, \Closure $next ): void {
-		$lock_key = $this->key ?? get_class( $job );
-		$owner    = bin2hex( random_bytes( 16 ) );
-		$conn     = Queuety::connection();
-		$table    = $conn->table( Config::table_locks() );
+		$lock_key  = $this->key ?? get_class( $job );
+		$owner     = bin2hex( random_bytes( 16 ) );
+		$conn      = Queuety::connection();
+		$table     = $conn->table( Config::table_locks() );
+		$cache     = $this->resolve_cache();
+		$cache_key = "queuety:lock:{$lock_key}";
 
+		// Try cache-first lock (atomic add) when available.
+		$cache_locked = false;
+		if ( null !== $cache ) {
+			$cache_locked = $cache->add( $cache_key, $owner, Config::max_execution_time() );
+
+			if ( ! $cache_locked ) {
+				// Cache says lock is held; skip this job.
+				return;
+			}
+		}
+
+		// DB lock is authoritative.
 		$acquired = $this->acquire_lock( $table, $lock_key, $owner, $conn );
 
 		if ( ! $acquired ) {
+			// Clean up cache lock if we got it but DB says no.
+			if ( $cache_locked && null !== $cache ) {
+				$cache->delete( $cache_key );
+			}
 			return;
 		}
 
@@ -50,6 +70,23 @@ class UniqueJob implements Middleware {
 			$next( $job );
 		} finally {
 			$this->release_lock( $table, $lock_key, $owner, $conn );
+
+			if ( null !== $cache ) {
+				$cache->delete( $cache_key );
+			}
+		}
+	}
+
+	/**
+	 * Resolve the cache instance from the facade, returning null if unavailable.
+	 *
+	 * @return Cache|null
+	 */
+	private function resolve_cache(): ?Cache {
+		try {
+			return Queuety::cache();
+		} catch ( \Throwable ) {
+			return null;
 		}
 	}
 

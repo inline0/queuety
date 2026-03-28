@@ -7,6 +7,7 @@
 
 namespace Queuety;
 
+use Queuety\Contracts\Cache;
 use Queuety\Enums\LogEvent;
 
 /**
@@ -54,10 +55,12 @@ class RateLimiter {
 	/**
 	 * Constructor.
 	 *
-	 * @param Connection $conn Database connection.
+	 * @param Connection $conn  Database connection.
+	 * @param Cache|null $cache Optional cache backend for sharing state across workers.
 	 */
 	public function __construct(
 		private readonly Connection $conn,
+		private readonly ?Cache $cache = null,
 	) {}
 
 	/**
@@ -109,6 +112,19 @@ class RateLimiter {
 			$this->counters[ $handler ]      = 0;
 			$this->window_starts[ $handler ] = time();
 			$this->last_refresh[ $handler ]  = 0.0;
+		}
+
+		// Try reading from shared cache before querying DB.
+		if ( null !== $this->cache ) {
+			$cache_key = "queuety:rate_limit:{$handler}";
+			$cached    = $this->cache->get( $cache_key );
+
+			if ( null !== $cached ) {
+				$this->counters[ $handler ]     = (int) $cached;
+				$this->last_refresh[ $handler ] = microtime( true );
+
+				return $this->counters[ $handler ] >= $limit['max'];
+			}
 		}
 
 		// Refresh from DB if stale.
@@ -182,5 +198,11 @@ class RateLimiter {
 
 		$this->counters[ $handler ]     = $row ? (int) $row['cnt'] : 0;
 		$this->last_refresh[ $handler ] = microtime( true );
+
+		// Write count to shared cache so other workers can read it.
+		if ( null !== $this->cache ) {
+			$cache_key = "queuety:rate_limit:{$handler}";
+			$this->cache->set( $cache_key, $this->counters[ $handler ], Config::cache_ttl() );
+		}
 	}
 }

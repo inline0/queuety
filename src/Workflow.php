@@ -7,6 +7,7 @@
 
 namespace Queuety;
 
+use Queuety\Contracts\Cache;
 use Queuety\Enums\JobStatus;
 use Queuety\Enums\LogEvent;
 use Queuety\Enums\Priority;
@@ -18,16 +19,25 @@ use Queuety\Enums\WorkflowStatus;
 class Workflow {
 
 	/**
+	 * Cache TTL for workflow state reads, in seconds.
+	 *
+	 * @var int
+	 */
+	private const STATE_CACHE_TTL = 2;
+
+	/**
 	 * Constructor.
 	 *
 	 * @param Connection $conn   Database connection.
 	 * @param Queue      $queue  Queue operations.
 	 * @param Logger     $logger Logger instance.
+	 * @param Cache|null $cache  Optional cache backend for reducing DB reads.
 	 */
 	public function __construct(
 		private readonly Connection $conn,
 		private readonly Queue $queue,
 		private readonly Logger $logger,
+		private readonly ?Cache $cache = null,
 	) {}
 
 	/**
@@ -640,6 +650,7 @@ class Workflow {
 				}
 
 				$pdo->commit();
+				$this->invalidate_workflow_cache( $workflow_id );
 				return;
 			}
 
@@ -748,6 +759,7 @@ class Workflow {
 			}
 
 			$pdo->commit();
+			$this->invalidate_workflow_cache( $workflow_id );
 		} catch ( \Throwable $e ) {
 			if ( $pdo->inTransaction() ) {
 				$pdo->rollBack();
@@ -1138,6 +1150,16 @@ class Workflow {
 	 * @return WorkflowState|null
 	 */
 	public function status( int $workflow_id ): ?WorkflowState {
+		// Try cache first.
+		if ( null !== $this->cache ) {
+			$cache_key = "queuety:wf_status:{$workflow_id}";
+			$cached    = $this->cache->get( $cache_key );
+
+			if ( $cached instanceof WorkflowState ) {
+				return $cached;
+			}
+		}
+
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
 		$stmt   = $this->conn->pdo()->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id" );
 		$stmt->execute( array( 'id' => $workflow_id ) );
@@ -1156,7 +1178,7 @@ class Workflow {
 			ARRAY_FILTER_USE_KEY
 		);
 
-		return new WorkflowState(
+		$result = new WorkflowState(
 			workflow_id: (int) $row['id'],
 			name: $row['name'],
 			status: WorkflowStatus::from( $row['status'] ),
@@ -1166,6 +1188,13 @@ class Workflow {
 			parent_workflow_id: $row['parent_workflow_id'] ? (int) $row['parent_workflow_id'] : null,
 			parent_step_index: $row['parent_step_index'] !== null ? (int) $row['parent_step_index'] : null,
 		);
+
+		// Cache the result.
+		if ( null !== $this->cache ) {
+			$this->cache->set( "queuety:wf_status:{$workflow_id}", $result, self::STATE_CACHE_TTL );
+		}
+
+		return $result;
 	}
 
 	/**
@@ -1384,6 +1413,16 @@ class Workflow {
 	 * @return array|null Full state array, or null if not found.
 	 */
 	public function get_state( int $workflow_id ): ?array {
+		// Try cache first.
+		if ( null !== $this->cache ) {
+			$cache_key = "queuety:wf_state:{$workflow_id}";
+			$cached    = $this->cache->get( $cache_key );
+
+			if ( null !== $cached ) {
+				return $cached;
+			}
+		}
+
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
 		$stmt   = $this->conn->pdo()->prepare( "SELECT state FROM {$wf_tbl} WHERE id = :id" );
 		$stmt->execute( array( 'id' => $workflow_id ) );
@@ -1393,6 +1432,27 @@ class Workflow {
 			return null;
 		}
 
-		return json_decode( $row['state'], true ) ?: array();
+		$state = json_decode( $row['state'], true ) ?: array();
+
+		// Cache the result.
+		if ( null !== $this->cache ) {
+			$this->cache->set( "queuety:wf_state:{$workflow_id}", $state, self::STATE_CACHE_TTL );
+		}
+
+		return $state;
+	}
+
+	/**
+	 * Invalidate cached workflow state and status after a mutation.
+	 *
+	 * @param int $workflow_id The workflow ID whose cache entries should be cleared.
+	 */
+	private function invalidate_workflow_cache( int $workflow_id ): void {
+		if ( null === $this->cache ) {
+			return;
+		}
+
+		$this->cache->delete( "queuety:wf_state:{$workflow_id}" );
+		$this->cache->delete( "queuety:wf_status:{$workflow_id}" );
 	}
 }

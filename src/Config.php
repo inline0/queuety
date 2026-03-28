@@ -180,6 +180,15 @@ class Config {
 	}
 
 	/**
+	 * Get the default cache TTL in seconds.
+	 *
+	 * @return int
+	 */
+	public static function cache_ttl(): int {
+		return defined( 'QUEUETY_CACHE_TTL' ) ? (int) QUEUETY_CACHE_TTL : 5;
+	}
+
+	/**
 	 * Check if debug mode is enabled.
 	 *
 	 * @return bool
