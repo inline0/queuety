@@ -19,7 +19,7 @@ wp queuety work [--queue=<queue>] [--once] [--workers=<n>]
 
 | Option | Description |
 |---|---|
-| `--queue=<queue>` | Queue to process (default: `default`) |
+| `--queue=<queue>` | Queue(s) to process, comma-separated for priority ordering (default: `default`) |
 | `--once` | Process one batch and exit |
 | `--workers=<n>` | Fork N worker processes (requires `pcntl` extension) |
 
@@ -30,12 +30,17 @@ wp queuety work
 # Process a specific queue
 wp queuety work --queue=emails
 
+# Process multiple queues in priority order
+wp queuety work --queue=critical,default,low
+
 # One-shot mode
 wp queuety work --once
 
 # Multi-worker mode
 wp queuety work --workers=4
 ```
+
+When multiple queues are specified, the worker tries to claim from each queue in the listed order. The first queue with an available job wins. See [Workers](/docs/features/workers) for deployment strategies.
 
 ### `wp queuety flush`
 
@@ -47,7 +52,15 @@ wp queuety flush [--queue=<queue>]
 
 | Option | Description |
 |---|---|
-| `--queue=<queue>` | Queue to flush (default: `default`) |
+| `--queue=<queue>` | Queue(s) to flush, comma-separated for priority ordering (default: `default`) |
+
+```bash
+# Flush a single queue
+wp queuety flush --queue=emails
+
+# Flush multiple queues in priority order
+wp queuety flush --queue=critical,default,low
+```
 
 ### `wp queuety dispatch`
 
@@ -300,6 +313,44 @@ wp queuety workflow cancel <id>
 ```bash
 wp queuety workflow cancel 42
 ```
+
+### `wp queuety workflow timeline`
+
+Show the event timeline for a workflow. Displays all step events (started, completed, failed) with timestamps, handlers, and durations.
+
+```bash
+wp queuety workflow timeline <id> [--format=<format>]
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID (required) |
+| `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml` |
+
+```bash
+wp queuety workflow timeline 42
+```
+
+Output columns: `ID`, `Step`, `Event`, `Handler`, `Duration_ms`, `Error`, `Created_at`.
+
+### `wp queuety workflow state-at`
+
+Show the state snapshot at a specific workflow step. Displays the full workflow state as it was after the given step completed.
+
+```bash
+wp queuety workflow state-at <id> <step>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID (required) |
+| `<step>` | Step index, 0-based (required) |
+
+```bash
+wp queuety workflow state-at 42 0
+```
+
+See [Workflow Event Log](/docs/workflows/event-log) for details on what gets recorded and use cases.
 
 ## Schedule commands
 

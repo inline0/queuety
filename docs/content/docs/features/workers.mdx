@@ -19,7 +19,7 @@ This starts a single worker on the `default` queue. It runs in a loop: claim a j
 
 | Option | Description |
 |---|---|
-| `--queue=<queue>` | Queue to process (default: `default`) |
+| `--queue=<queue>` | Queue(s) to process, comma-separated for priority ordering (default: `default`) |
 | `--once` | Process one batch and exit |
 | `--workers=<n>` | Fork N worker processes (requires `pcntl` extension) |
 
@@ -32,6 +32,80 @@ wp queuety work --once
 
 # Run 4 concurrent workers
 wp queuety work --workers=4
+```
+
+## Multi-queue priorities
+
+A single worker can process multiple queues in priority order. Pass a comma-separated list of queue names to `--queue`:
+
+```bash
+wp queuety work --queue=critical,default,low
+```
+
+The worker tries to claim a job from each queue in the listed order. It checks `critical` first. If `critical` has a job, it processes that job. If `critical` is empty, it moves on to `default`, and then to `low`. This means higher-priority queues always drain before lower-priority ones.
+
+### How priority ordering works
+
+On each iteration of the worker loop:
+
+1. Try to claim from the first queue in the list
+2. If that queue is empty (or paused), try the next queue
+3. Repeat until a job is claimed or all queues are exhausted
+4. If no job is found in any queue, sleep and retry
+
+This is a strict priority model. A steady stream of `critical` jobs will starve `default` and `low`. If you need guaranteed throughput on lower-priority queues, use dedicated workers instead (see below).
+
+### Using multi-queue in PHP
+
+The `Worker::run()` and `Worker::flush()` methods accept either a string or an array:
+
+```php
+// Comma-separated string
+Queuety::worker()->run( 'critical,default,low' );
+
+// Array
+Queuety::worker()->run( [ 'critical', 'default', 'low' ] );
+
+// flush() also supports multi-queue
+$count = Queuety::worker()->flush( 'critical,default,low' );
+```
+
+### Deployment strategies
+
+**Dedicated workers per queue** give you full control over concurrency and isolation. Each queue gets its own worker process(es) and cannot be starved by other queues:
+
+```ini
+[program:queuety-critical]
+command=wp queuety work --queue=critical
+numprocs=4
+
+[program:queuety-default]
+command=wp queuety work --queue=default
+numprocs=2
+
+[program:queuety-low]
+command=wp queuety work --queue=low
+numprocs=1
+```
+
+**Priority ordering with a single worker** is simpler to manage and works well when lower-priority queues can tolerate delays:
+
+```ini
+[program:queuety-worker]
+command=wp queuety work --queue=critical,default,low
+numprocs=2
+```
+
+You can also combine both approaches: dedicated workers for `critical` to guarantee throughput, and a priority-ordered worker for everything else:
+
+```ini
+[program:queuety-critical]
+command=wp queuety work --queue=critical
+numprocs=2
+
+[program:queuety-fallback]
+command=wp queuety work --queue=default,low
+numprocs=2
 ```
 
 ## Worker lifecycle
