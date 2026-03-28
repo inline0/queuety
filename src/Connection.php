@@ -51,7 +51,11 @@ class Connection {
 	 */
 	public function pdo(): PDO {
 		if ( null === $this->pdo ) {
-			$dsn       = "mysql:host={$this->host};dbname={$this->dbname};charset=utf8mb4";
+			if ( str_starts_with( $this->host, '/' ) ) {
+				$dsn = "mysql:unix_socket={$this->host};dbname={$this->dbname};charset=utf8mb4";
+			} else {
+				$dsn = "mysql:host={$this->host};dbname={$this->dbname};charset=utf8mb4";
+			}
 			$this->pdo = new PDO(
 				$dsn,
 				$this->user,

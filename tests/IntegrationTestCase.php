@@ -36,11 +36,12 @@ class IntegrationTestCase extends QueuetyTestCase {
 
 	protected function skip_if_no_database(): void {
 		try {
-			$dsn = sprintf(
-				'mysql:host=%s;dbname=%s;charset=utf8mb4',
-				QUEUETY_TEST_DB_HOST,
-				QUEUETY_TEST_DB_NAME
-			);
+			$host = QUEUETY_TEST_DB_HOST;
+			if ( str_starts_with( $host, '/' ) ) {
+				$dsn = sprintf( 'mysql:unix_socket=%s;dbname=%s;charset=utf8mb4', $host, QUEUETY_TEST_DB_NAME );
+			} else {
+				$dsn = sprintf( 'mysql:host=%s;dbname=%s;charset=utf8mb4', $host, QUEUETY_TEST_DB_NAME );
+			}
 			new \PDO( $dsn, QUEUETY_TEST_DB_USER, QUEUETY_TEST_DB_PASS );
 		} catch ( \PDOException $e ) {
 			$this->markTestSkipped( 'MySQL is not available: ' . $e->getMessage() );
