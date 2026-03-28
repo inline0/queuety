@@ -94,7 +94,7 @@ class Schema {
 			"CREATE TABLE IF NOT EXISTS {$schedules} (
 				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 				handler VARCHAR(255) NOT NULL,
-				payload LONGTEXT NOT NULL DEFAULT '{}',
+				payload LONGTEXT NOT NULL,
 				queue VARCHAR(64) NOT NULL DEFAULT 'default',
 				expression VARCHAR(255) NOT NULL,
 				expression_type ENUM('interval', 'cron') NOT NULL,
