@@ -667,6 +667,33 @@ class Queuety {
 	}
 
 	/**
+	 * Load and register workflow definitions from a directory.
+	 *
+	 * Each .php file in the directory should return a WorkflowBuilder.
+	 * Classes defined in the files are auto-loaded when required.
+	 *
+	 * @param string $directory Absolute path to the workflows directory.
+	 * @param bool   $recursive Whether to scan subdirectories.
+	 * @return int Number of workflows registered.
+	 * @throws \RuntimeException If the directory does not exist.
+	 */
+	public static function load_workflows( string $directory, bool $recursive = false ): int {
+		self::ensure_initialized();
+		return WorkflowLoader::load( $directory, $recursive );
+	}
+
+	/**
+	 * Load and register a single workflow file.
+	 *
+	 * @param string $file_path Absolute path to the workflow PHP file.
+	 * @return WorkflowTemplate|null The registered template, or null if invalid.
+	 */
+	public static function load_workflow_file( string $file_path ): ?WorkflowTemplate {
+		self::ensure_initialized();
+		return WorkflowLoader::load_file( $file_path );
+	}
+
+	/**
 	 * Get the Metrics instance.
 	 *
 	 * @return Metrics
