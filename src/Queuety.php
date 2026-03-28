@@ -113,6 +113,13 @@ class Queuety {
 	private static ?BatchManager $batch_manager = null;
 
 	/**
+	 * Chunk store instance for streaming steps.
+	 *
+	 * @var ChunkStore|null
+	 */
+	private static ?ChunkStore $chunk_store = null;
+
+	/**
 	 * Queue fake for testing.
 	 *
 	 * @var QueueFake|null
@@ -136,6 +143,7 @@ class Queuety {
 		self::$metrics           = new Metrics( $conn );
 		self::$webhook_notifier  = new WebhookNotifier( $conn );
 		self::$batch_manager     = new BatchManager( $conn );
+		self::$chunk_store       = new ChunkStore( $conn );
 		self::$worker            = new Worker(
 			$conn,
 			self::$queue,
@@ -147,6 +155,7 @@ class Queuety {
 			self::$scheduler,
 			self::$webhook_notifier,
 			self::$batch_manager,
+			self::$chunk_store,
 		);
 	}
 
@@ -509,6 +518,16 @@ class Queuety {
 	}
 
 	/**
+	 * Get the chunk store instance.
+	 *
+	 * @return ChunkStore
+	 */
+	public static function chunk_store(): ChunkStore {
+		self::ensure_initialized();
+		return self::$chunk_store;
+	}
+
+	/**
 	 * Create a new recurring schedule.
 	 *
 	 * @param string $handler Handler name or class.
@@ -663,6 +682,7 @@ class Queuety {
 		self::$metrics           = null;
 		self::$webhook_notifier  = null;
 		self::$batch_manager     = null;
+		self::$chunk_store       = null;
 		self::$queue_fake        = null;
 	}
 

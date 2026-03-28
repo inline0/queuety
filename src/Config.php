@@ -171,6 +171,15 @@ class Config {
 	}
 
 	/**
+	 * Get the chunks table name.
+	 *
+	 * @return string
+	 */
+	public static function table_chunks(): string {
+		return defined( 'QUEUETY_TABLE_CHUNKS' ) ? QUEUETY_TABLE_CHUNKS : 'queuety_chunks';
+	}
+
+	/**
 	 * Check if debug mode is enabled.
 	 *
 	 * @return bool

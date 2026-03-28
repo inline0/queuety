@@ -28,6 +28,7 @@ class Schema {
 		$signals      = $conn->table( Config::table_signals() );
 		$locks        = $conn->table( Config::table_locks() );
 		$batches      = $conn->table( Config::table_batches() );
+		$chunks       = $conn->table( Config::table_chunks() );
 
 		$pdo->exec(
 			"CREATE TABLE IF NOT EXISTS {$jobs} (
@@ -175,6 +176,20 @@ class Schema {
 				finished_at DATETIME DEFAULT NULL
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$chunks} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				job_id BIGINT UNSIGNED NOT NULL,
+				workflow_id BIGINT UNSIGNED DEFAULT NULL,
+				step_index TINYINT UNSIGNED DEFAULT NULL,
+				chunk_index INT UNSIGNED NOT NULL,
+				content LONGTEXT NOT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				INDEX idx_job (job_id, chunk_index),
+				INDEX idx_workflow_step (workflow_id, step_index)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
 	}
 
 	/**
@@ -193,7 +208,9 @@ class Schema {
 		$signals      = $conn->table( Config::table_signals() );
 		$locks        = $conn->table( Config::table_locks() );
 		$batches      = $conn->table( Config::table_batches() );
+		$chunks       = $conn->table( Config::table_chunks() );
 
+		$pdo->exec( "DROP TABLE IF EXISTS {$chunks}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$batches}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$locks}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$signals}" );
@@ -307,6 +324,32 @@ class Schema {
 
 		$pdo->exec(
 			"ALTER TABLE {$schedules} ADD COLUMN overlap_policy ENUM('allow', 'skip', 'buffer') NOT NULL DEFAULT 'allow' AFTER next_run"
+		);
+	}
+
+	/**
+	 * Migrate from v0.8.x to v0.9.0.
+	 *
+	 * Creates the queuety_chunks table for durable streaming step support.
+	 *
+	 * @param Connection $conn Database connection.
+	 */
+	public static function migrate_090( Connection $conn ): void {
+		$pdo    = $conn->pdo();
+		$chunks = $conn->table( Config::table_chunks() );
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$chunks} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				job_id BIGINT UNSIGNED NOT NULL,
+				workflow_id BIGINT UNSIGNED DEFAULT NULL,
+				step_index TINYINT UNSIGNED DEFAULT NULL,
+				chunk_index INT UNSIGNED NOT NULL,
+				content LONGTEXT NOT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				INDEX idx_job (job_id, chunk_index),
+				INDEX idx_workflow_step (workflow_id, step_index)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 	}
 

@@ -6,7 +6,7 @@ const iconClass = "h-5 w-5 text-fd-primary";
 
 export default defineConfig({
   title: "Queuety",
-  description: "The WordPress job queue and workflow engine.",
+  description: "The WordPress workflow engine.",
   logo: {
     light: "/logo-light.svg",
     dark: "/logo-dark.svg",

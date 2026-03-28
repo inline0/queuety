@@ -9,6 +9,7 @@ namespace Queuety;
 
 use Queuety\Attributes\QueuetyHandler;
 use Queuety\Contracts\Job as JobContract;
+use Queuety\Contracts\StreamingStep;
 
 /**
  * Maps handler names to their class implementations.
@@ -44,10 +45,10 @@ class HandlerRegistry {
 	 * first, then JobSerializer::deserialize() with the payload in the Worker.
 	 *
 	 * @param string $name Handler name or class name.
-	 * @return Handler|Step|JobContract
+	 * @return Handler|Step|StreamingStep|JobContract
 	 * @throws \RuntimeException If the handler cannot be resolved.
 	 */
-	public function resolve( string $name ): Handler|Step|JobContract {
+	public function resolve( string $name ): Handler|Step|StreamingStep|JobContract {
 		$class = $this->handlers[ $name ] ?? $name;
 
 		if ( ! class_exists( $class ) ) {
@@ -72,8 +73,8 @@ class HandlerRegistry {
 
 		$instance = new $class();
 
-		if ( ! ( $instance instanceof Handler ) && ! ( $instance instanceof Step ) ) {
-			throw new \RuntimeException( "Class {$class} must implement Handler, Step, or Contracts\\Job." );
+		if ( ! ( $instance instanceof Handler ) && ! ( $instance instanceof Step ) && ! ( $instance instanceof StreamingStep ) ) {
+			throw new \RuntimeException( "Class {$class} must implement Handler, Step, StreamingStep, or Contracts\\Job." );
 		}
 
 		return $instance;

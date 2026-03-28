@@ -23,7 +23,7 @@ export async function HeroLeft() {
       <h1 className="text-left text-4xl font-medium leading-tight text-fd-foreground sm:text-5xl">
         The WordPress
         <br />
-        job queue and workflow engine
+        workflow engine
       </h1>
       <p className="text-left max-w-xl leading-normal text-fd-muted-foreground sm:text-lg sm:leading-normal text-balance mt-4">
         Fast background jobs and durable multi-step workflows that survive PHP

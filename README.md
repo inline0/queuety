@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  The WordPress job queue and workflow engine
+  The WordPress workflow engine
 </p>
 
 <p align="center">

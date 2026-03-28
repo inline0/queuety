@@ -8,6 +8,7 @@
 namespace Queuety;
 
 use Queuety\Contracts\Job as JobContract;
+use Queuety\Contracts\StreamingStep;
 use Queuety\Enums\BackoffStrategy;
 use Queuety\Enums\LogEvent;
 use Queuety\Exceptions\TimeoutException;
@@ -37,6 +38,7 @@ class Worker {
 	 * @param Scheduler|null       $scheduler         Optional scheduler for recurring jobs.
 	 * @param WebhookNotifier|null $webhook_notifier  Optional webhook notifier.
 	 * @param BatchManager|null    $batch_manager     Optional batch manager.
+	 * @param ChunkStore|null      $chunk_store       Optional chunk store for streaming steps.
 	 */
 	public function __construct(
 		private readonly Connection $conn,
@@ -49,6 +51,7 @@ class Worker {
 		private readonly ?Scheduler $scheduler = null,
 		private readonly ?WebhookNotifier $webhook_notifier = null,
 		private readonly ?BatchManager $batch_manager = null,
+		private readonly ?ChunkStore $chunk_store = null,
 	) {}
 
 	/**
@@ -414,7 +417,10 @@ class Worker {
 					}
 				}
 
-				if ( $job->is_workflow_step() && $handler instanceof Step ) {
+				if ( $job->is_workflow_step() && $handler instanceof StreamingStep ) {
+					// Streaming workflow step: stream chunks with persistence.
+					$this->process_streaming_step( $job, $handler, $start_time );
+				} elseif ( $job->is_workflow_step() && $handler instanceof Step ) {
 					// Workflow step: load accumulated state and pass to handler.
 					$state  = $this->workflow->get_state( $job->workflow_id ) ?? array();
 					$output = $handler->handle( $state );
@@ -710,6 +716,71 @@ class Worker {
 			} catch ( \Throwable ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Failed hook errors are non-fatal.
 			}
 		}
+	}
+
+	/**
+	 * Process a streaming workflow step.
+	 *
+	 * Loads any existing chunks from a previous (failed) attempt, calls the
+	 * handler's stream() generator, persists each yielded chunk immediately,
+	 * sends heartbeats per chunk, and finally calls on_complete() to merge
+	 * results into the workflow state.
+	 *
+	 * @param Job           $job        The claimed job.
+	 * @param StreamingStep $handler    The streaming step handler.
+	 * @param int|float     $start_time High-resolution start time from hrtime(true).
+	 * @throws \RuntimeException If no ChunkStore is configured.
+	 */
+	private function process_streaming_step( Job $job, StreamingStep $handler, int|float $start_time ): void {
+		if ( null === $this->chunk_store ) {
+			throw new \RuntimeException( 'ChunkStore is required for streaming steps. Pass it to the Worker constructor.' );
+		}
+
+		$state = $this->workflow->get_state( $job->workflow_id ) ?? array();
+
+		// Load existing chunks from a previous (possibly failed) attempt.
+		$existing_chunks = $this->chunk_store->get_chunks( $job->id );
+		$chunk_index     = count( $existing_chunks );
+
+		// Call the handler's stream generator.
+		$generator = $handler->stream( $state, $existing_chunks );
+
+		foreach ( $generator as $chunk ) {
+			$content = (string) $chunk;
+
+			// Persist the chunk immediately.
+			$this->chunk_store->append_chunk(
+				job_id: $job->id,
+				chunk_index: $chunk_index,
+				content: $content,
+				workflow_id: $job->workflow_id,
+				step_index: $job->step_index,
+			);
+
+			++$chunk_index;
+
+			// Send heartbeat so the stale detector does not kill us.
+			Heartbeat::beat( array( 'streaming_chunks' => $chunk_index ) );
+		}
+
+		// Gather all chunks (existing + new).
+		$all_chunks = $this->chunk_store->get_chunks( $job->id );
+
+		// Call on_complete to get the data to merge into workflow state.
+		$output = $handler->on_complete( $all_chunks, $state );
+
+		$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
+
+		// Clean up chunks now that on_complete has the data.
+		$this->chunk_store->clear_chunks( $job->id );
+
+		// Advance the workflow with the on_complete result.
+		$this->workflow->advance_step(
+			workflow_id: $job->workflow_id,
+			completed_job_id: $job->id,
+			step_output: $output,
+			duration_ms: $duration_ms,
+		);
 	}
 
 	/**
