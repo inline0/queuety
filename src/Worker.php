@@ -587,7 +587,7 @@ class Worker {
 			// Reset the alarm and restore previous signal handler.
 			if ( $pcntl_available ) {
 				pcntl_alarm( 0 );
-				if ( null !== $previous_handler ) {
+				if ( is_callable( $previous_handler ) || SIG_DFL === $previous_handler || SIG_IGN === $previous_handler ) {
 					pcntl_signal( SIGALRM, $previous_handler );
 				} else {
 					pcntl_signal( SIGALRM, SIG_DFL );

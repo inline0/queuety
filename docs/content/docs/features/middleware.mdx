@@ -132,7 +132,7 @@ public function middleware(): array {
 | `$max_attempts` | `int` | `10` | Maximum exceptions allowed within the decay window |
 | `$decay_minutes` | `int` | `10` | Window duration in minutes |
 
-Exception counts are tracked per handler class in Queuety's locks table and shared across all worker processes. When the threshold is reached, the middleware throws a `RuntimeException` with the message "Too many exceptions for {class} ({count} in {minutes} minutes). Throttled." and the job is retried after a backoff delay.
+Exception counts are tracked per handler class in Queuety's locks table and shared across all worker processes. When the threshold is reached, the middleware throws a `RuntimeException` and the job is retried after a backoff delay.
 
 Example: if an external API is down, the first 10 failures are processed normally (each incrementing the exception counter). The 11th and subsequent attempts within 10 minutes are throttled, preserving retry attempts until the API recovers.
 

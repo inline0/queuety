@@ -20,7 +20,7 @@ use Queuety\RateLimiter;
  * These tests mock the Queuety facade by initializing it with a real connection
  * or skip if no database is available.
  */
-class RateLimitedTest extends TestCase {
+class RateLimitedMiddlewareTest extends TestCase {
 
 	protected function setUp(): void {
 		parent::setUp();
