@@ -84,7 +84,7 @@ class ConcurrentAccessTest extends IntegrationTestCase {
 			WHERE status = 'pending' AND queue = 'default' AND available_at <= NOW()
 			ORDER BY priority DESC, id ASC
 			LIMIT 1
-			FOR UPDATE"
+			FOR UPDATE SKIP LOCKED"
 		);
 		$stmt1->execute();
 		$row1 = $stmt1->fetch();

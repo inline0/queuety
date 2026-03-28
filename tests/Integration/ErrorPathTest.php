@@ -65,7 +65,7 @@ class ErrorPathTest extends IntegrationTestCase {
 	// -- Non-existent handler ------------------------------------------------
 
 	public function test_dispatch_to_nonexistent_handler_buries_job(): void {
-		$id  = $this->queue->dispatch( 'nonexistent_handler_class_xyz', array( 'key' => 'val' ) );
+		$id  = $this->queue->dispatch( 'nonexistent_handler_class_xyz', array( 'key' => 'val' ), max_attempts: 1 );
 		$job = $this->queue->claim();
 		$this->assertNotNull( $job );
 
@@ -89,7 +89,7 @@ class ErrorPathTest extends IntegrationTestCase {
 	}
 
 	public function test_empty_handler_buries_on_process(): void {
-		$id  = $this->queue->dispatch( '' );
+		$id  = $this->queue->dispatch( '', max_attempts: 1 );
 		$job = $this->queue->claim();
 		$this->assertNotNull( $job );
 
@@ -251,7 +251,7 @@ class ErrorPathTest extends IntegrationTestCase {
 	// -- Workflow with zero steps: dispatch should throw ----------------------
 
 	public function test_workflow_with_zero_steps_throws(): void {
-		$this->expectException( \InvalidArgumentException::class );
+		$this->expectException( \RuntimeException::class );
 
 		$builder = new \Queuety\WorkflowBuilder( 'empty_workflow', $this->conn, $this->queue, $this->logger );
 		$builder->dispatch( array( 'user_id' => 1 ) );

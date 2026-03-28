@@ -143,6 +143,10 @@ class ScheduleCommandTest extends TestCase {
 
 		$this->cmd->remove( array( 'removable_handler' ), array() );
 
+		// Verify schedule was removed.
+		$schedule = Queuety::scheduler()->find( 'removable_handler' );
+		$this->assertNull( $schedule );
+
 		$schedules = Queuety::scheduler()->list();
 		foreach ( $schedules as $s ) {
 			$this->assertNotSame( 'removable_handler', $s->handler );
