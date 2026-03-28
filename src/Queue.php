@@ -38,6 +38,7 @@ class Queue {
 	 * @param int|null $step_index   Step index within the workflow.
 	 * @param bool     $unique       When true, prevent duplicate jobs with the same handler and payload.
 	 * @param int|null $depends_on   ID of a job that must complete before this one can be claimed.
+	 * @param int|null $batch_id     Batch ID, if part of a batch.
 	 * @return int The new job ID (or the existing job ID if unique and a duplicate exists).
 	 */
 	public function dispatch(
@@ -51,6 +52,7 @@ class Queue {
 		?int $step_index = null,
 		bool $unique = false,
 		?int $depends_on = null,
+		?int $batch_id = null,
 	): int {
 		$table        = $this->conn->table( Config::table_jobs() );
 		$available_at = gmdate( 'Y-m-d H:i:s', time() + $delay );
@@ -82,9 +84,9 @@ class Queue {
 
 		$stmt = $this->conn->pdo()->prepare(
 			"INSERT INTO {$table}
-				(queue, handler, payload, payload_hash, priority, status, max_attempts, available_at, workflow_id, step_index, depends_on)
+				(queue, handler, payload, payload_hash, priority, status, max_attempts, available_at, workflow_id, step_index, depends_on, batch_id)
 			VALUES
-				(:queue, :handler, :payload, :payload_hash, :priority, :status, :max_attempts, :available_at, :workflow_id, :step_index, :depends_on)"
+				(:queue, :handler, :payload, :payload_hash, :priority, :status, :max_attempts, :available_at, :workflow_id, :step_index, :depends_on, :batch_id)"
 		);
 
 		$stmt->execute(
@@ -100,6 +102,7 @@ class Queue {
 				'workflow_id'  => $workflow_id,
 				'step_index'   => $step_index,
 				'depends_on'   => $depends_on,
+				'batch_id'     => $batch_id,
 			)
 		);
 

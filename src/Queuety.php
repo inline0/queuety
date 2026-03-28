@@ -11,6 +11,7 @@ use Queuety\Contracts\Job as JobContract;
 use Queuety\Enums\ExpressionType;
 use Queuety\Enums\Priority;
 use Queuety\Enums\WorkflowStatus;
+use Queuety\Testing\QueueFake;
 
 /**
  * Public API facade. All static methods delegate to internal singleton instances.
@@ -105,6 +106,20 @@ class Queuety {
 	private static ?WebhookNotifier $webhook_notifier = null;
 
 	/**
+	 * Batch manager instance.
+	 *
+	 * @var BatchManager|null
+	 */
+	private static ?BatchManager $batch_manager = null;
+
+	/**
+	 * Queue fake for testing.
+	 *
+	 * @var QueueFake|null
+	 */
+	private static ?QueueFake $queue_fake = null;
+
+	/**
 	 * Initialize Queuety with a database connection.
 	 *
 	 * @param Connection $conn Database connection.
@@ -120,6 +135,7 @@ class Queuety {
 		self::$workflow_registry = new WorkflowRegistry();
 		self::$metrics           = new Metrics( $conn );
 		self::$webhook_notifier  = new WebhookNotifier( $conn );
+		self::$batch_manager     = new BatchManager( $conn );
 		self::$worker            = new Worker(
 			$conn,
 			self::$queue,
@@ -130,6 +146,7 @@ class Queuety {
 			self::$rate_limiter,
 			self::$scheduler,
 			self::$webhook_notifier,
+			self::$batch_manager,
 		);
 	}
 
@@ -147,6 +164,11 @@ class Queuety {
 	public static function dispatch( string|JobContract $handler, array $payload = array() ): PendingJob {
 		self::ensure_initialized();
 
+		// Record in fake if active.
+		if ( null !== self::$queue_fake ) {
+			self::$queue_fake->push( $handler, $payload );
+		}
+
 		if ( $handler instanceof JobContract ) {
 			$serialized   = JobSerializer::serialize( $handler );
 			$handler_name = $serialized['handler'];
@@ -155,6 +177,71 @@ class Queuety {
 		}
 
 		return new PendingJob( $handler, $payload, self::$queue );
+	}
+
+	/**
+	 * Execute a job synchronously without dispatching to the queue.
+	 *
+	 * @param string|JobContract $handler Handler name/class or Job instance.
+	 * @param array              $payload Job payload (ignored when $handler is a Job instance).
+	 */
+	public static function dispatch_sync( string|JobContract $handler, array $payload = array() ): void {
+		if ( $handler instanceof JobContract ) {
+			$handler->handle();
+			return;
+		}
+
+		// Handler is a class name implementing Contracts\Job.
+		if ( class_exists( $handler ) ) {
+			$reflection = new \ReflectionClass( $handler );
+			if ( $reflection->implementsInterface( JobContract::class ) ) {
+				$instance = JobSerializer::deserialize( $handler, $payload );
+				$instance->handle();
+				return;
+			}
+		}
+
+		// Fallback: resolve from registry.
+		self::ensure_initialized();
+		$resolved = self::$registry->resolve( $handler );
+		if ( $resolved instanceof JobContract ) {
+			$resolved->handle();
+		} elseif ( $resolved instanceof Handler ) {
+			$resolved->handle( $payload );
+		}
+	}
+
+	/**
+	 * Create a batch builder for dispatching a group of jobs with callbacks.
+	 *
+	 * @param array $jobs Array of Contracts\Job instances or handler+payload arrays.
+	 * @return BatchBuilder Fluent builder for batch options.
+	 */
+	public static function create_batch( array $jobs ): BatchBuilder {
+		self::ensure_initialized();
+		return new BatchBuilder( $jobs, self::$queue, self::$batch_manager );
+	}
+
+	/**
+	 * Find a batch by ID.
+	 *
+	 * @param int $id Batch ID.
+	 * @return Batch|null
+	 */
+	public static function find_batch( int $id ): ?Batch {
+		self::ensure_initialized();
+		return self::$batch_manager->find( $id );
+	}
+
+	/**
+	 * Create a chain builder for sequential job execution.
+	 *
+	 * @param array $jobs Array of Contracts\Job instances.
+	 * @return ChainBuilder Fluent builder for chain options.
+	 */
+	public static function chain( array $jobs ): ChainBuilder {
+		self::ensure_initialized();
+		return new ChainBuilder( $jobs, self::$queue );
 	}
 
 	/**
@@ -402,6 +489,16 @@ class Queuety {
 	}
 
 	/**
+	 * Get the batch manager instance.
+	 *
+	 * @return BatchManager
+	 */
+	public static function batch_manager(): BatchManager {
+		self::ensure_initialized();
+		return self::$batch_manager;
+	}
+
+	/**
 	 * Create a new recurring schedule.
 	 *
 	 * @param string $handler Handler name or class.
@@ -528,6 +625,19 @@ class Queuety {
 	}
 
 	/**
+	 * Replace the queue with a fake for testing.
+	 *
+	 * Returns a QueueFake instance that records all dispatched jobs
+	 * and provides assertion methods.
+	 *
+	 * @return QueueFake The fake queue instance.
+	 */
+	public static function fake(): QueueFake {
+		self::$queue_fake = new QueueFake();
+		return self::$queue_fake;
+	}
+
+	/**
 	 * Reset the singleton state (for testing).
 	 */
 	public static function reset(): void {
@@ -542,6 +652,8 @@ class Queuety {
 		self::$workflow_registry = null;
 		self::$metrics           = null;
 		self::$webhook_notifier  = null;
+		self::$batch_manager     = null;
+		self::$queue_fake        = null;
 	}
 
 	/**

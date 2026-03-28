@@ -73,6 +73,13 @@ class PendingJob {
 	private ?int $depends_on = null;
 
 	/**
+	 * Batch ID if this job belongs to a batch.
+	 *
+	 * @var int|null
+	 */
+	private ?int $batch_id = null;
+
+	/**
 	 * Whether the job has been dispatched.
 	 *
 	 * @var bool
@@ -216,6 +223,17 @@ class PendingJob {
 	}
 
 	/**
+	 * Set the batch ID for this job.
+	 *
+	 * @param int $batch_id Batch ID.
+	 * @return self
+	 */
+	public function in_batch( int $batch_id ): self {
+		$this->batch_id = $batch_id;
+		return $this;
+	}
+
+	/**
 	 * Get the dispatched job ID. Forces dispatch if not yet done.
 	 *
 	 * @return int
@@ -240,6 +258,7 @@ class PendingJob {
 			max_attempts: $this->max_attempts,
 			unique: $this->unique,
 			depends_on: $this->depends_on,
+			batch_id: $this->batch_id,
 		);
 		$this->dispatched = true;
 

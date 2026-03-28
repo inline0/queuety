@@ -18,10 +18,26 @@ use Queuety\Contracts\Job;
 class JobSerializer {
 
 	/**
+	 * Property names that are job configuration, not payload data.
+	 *
+	 * These are excluded from serialization because they control
+	 * job behavior (tries, timeout, backoff) rather than job data.
+	 *
+	 * @var string[]
+	 */
+	private const CONFIG_PROPERTIES = array(
+		'tries',
+		'timeout',
+		'max_exceptions',
+		'backoff',
+	);
+
+	/**
 	 * Serialize a Job instance to handler class and payload.
 	 *
-	 * Extracts all public properties as the payload. Backed enums are
-	 * serialized to their underlying value.
+	 * Extracts all public properties as the payload, excluding special
+	 * configuration properties (tries, timeout, max_exceptions, backoff).
+	 * Backed enums are serialized to their underlying value.
 	 *
 	 * @param Job $job The job instance to serialize.
 	 * @return array{handler: string, payload: array} Handler FQCN and payload data.
@@ -31,6 +47,10 @@ class JobSerializer {
 		$payload    = array();
 
 		foreach ( $reflection->getProperties( \ReflectionProperty::IS_PUBLIC ) as $prop ) {
+			if ( in_array( $prop->getName(), self::CONFIG_PROPERTIES, true ) ) {
+				continue;
+			}
+
 			$value                       = $prop->getValue( $job );
 			$payload[ $prop->getName() ] = self::serialize_value( $value );
 		}

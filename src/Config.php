@@ -162,6 +162,15 @@ class Config {
 	}
 
 	/**
+	 * Get the batches table name.
+	 *
+	 * @return string
+	 */
+	public static function table_batches(): string {
+		return defined( 'QUEUETY_TABLE_BATCHES' ) ? QUEUETY_TABLE_BATCHES : 'queuety_batches';
+	}
+
+	/**
 	 * Check if debug mode is enabled.
 	 *
 	 * @return bool

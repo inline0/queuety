@@ -27,6 +27,7 @@ class Schema {
 		$webhooks     = $conn->table( Config::table_webhooks() );
 		$signals      = $conn->table( Config::table_signals() );
 		$locks        = $conn->table( Config::table_locks() );
+		$batches      = $conn->table( Config::table_batches() );
 
 		$pdo->exec(
 			"CREATE TABLE IF NOT EXISTS {$jobs} (
@@ -47,13 +48,15 @@ class Schema {
 				workflow_id BIGINT UNSIGNED DEFAULT NULL,
 				step_index TINYINT UNSIGNED DEFAULT NULL,
 				depends_on BIGINT UNSIGNED DEFAULT NULL,
+				batch_id BIGINT UNSIGNED DEFAULT NULL,
 				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				INDEX idx_queue_status_available (queue, status, available_at, priority),
 				INDEX idx_status (status),
 				INDEX idx_reserved (status, reserved_at),
 				INDEX idx_workflow (workflow_id, step_index),
 				INDEX idx_unique (handler, payload_hash, status),
-				INDEX idx_depends (depends_on)
+				INDEX idx_depends (depends_on),
+				INDEX idx_batch (batch_id)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 
@@ -155,6 +158,21 @@ class Schema {
 				expires_at DATETIME DEFAULT NULL
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$batches} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				name VARCHAR(255) DEFAULT NULL,
+				total_jobs INT UNSIGNED NOT NULL DEFAULT 0,
+				pending_jobs INT UNSIGNED NOT NULL DEFAULT 0,
+				failed_jobs INT UNSIGNED NOT NULL DEFAULT 0,
+				failed_job_ids LONGTEXT NOT NULL,
+				options LONGTEXT NOT NULL,
+				cancelled_at DATETIME DEFAULT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				finished_at DATETIME DEFAULT NULL
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
 	}
 
 	/**
@@ -172,7 +190,9 @@ class Schema {
 		$webhooks     = $conn->table( Config::table_webhooks() );
 		$signals      = $conn->table( Config::table_signals() );
 		$locks        = $conn->table( Config::table_locks() );
+		$batches      = $conn->table( Config::table_batches() );
 
+		$pdo->exec( "DROP TABLE IF EXISTS {$batches}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$locks}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$signals}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$webhooks}" );
@@ -210,6 +230,43 @@ class Schema {
 				payload LONGTEXT NOT NULL,
 				received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				INDEX idx_workflow_signal (workflow_id, signal_name)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
+	}
+
+	/**
+	 * Migrate from v0.6.x to v0.7.0.
+	 *
+	 * Adds the batch_id column to the jobs table and creates the
+	 * queuety_batches table for job batching support.
+	 *
+	 * @param Connection $conn Database connection.
+	 */
+	public static function migrate_070( Connection $conn ): void {
+		$pdo     = $conn->pdo();
+		$jobs    = $conn->table( Config::table_jobs() );
+		$batches = $conn->table( Config::table_batches() );
+
+		$pdo->exec(
+			"ALTER TABLE {$jobs} ADD COLUMN batch_id BIGINT UNSIGNED DEFAULT NULL AFTER depends_on"
+		);
+
+		$pdo->exec(
+			"ALTER TABLE {$jobs} ADD INDEX idx_batch (batch_id)"
+		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$batches} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				name VARCHAR(255) DEFAULT NULL,
+				total_jobs INT UNSIGNED NOT NULL DEFAULT 0,
+				pending_jobs INT UNSIGNED NOT NULL DEFAULT 0,
+				failed_jobs INT UNSIGNED NOT NULL DEFAULT 0,
+				failed_job_ids LONGTEXT NOT NULL,
+				options LONGTEXT NOT NULL,
+				cancelled_at DATETIME DEFAULT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				finished_at DATETIME DEFAULT NULL
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 	}

@@ -36,6 +36,7 @@ class Worker {
 	 * @param RateLimiter|null     $rate_limiter      Optional rate limiter.
 	 * @param Scheduler|null       $scheduler         Optional scheduler for recurring jobs.
 	 * @param WebhookNotifier|null $webhook_notifier  Optional webhook notifier.
+	 * @param BatchManager|null    $batch_manager     Optional batch manager.
 	 */
 	public function __construct(
 		private readonly Connection $conn,
@@ -47,6 +48,7 @@ class Worker {
 		private readonly ?RateLimiter $rate_limiter = null,
 		private readonly ?Scheduler $scheduler = null,
 		private readonly ?WebhookNotifier $webhook_notifier = null,
+		private readonly ?BatchManager $batch_manager = null,
 	) {}
 
 	/**
@@ -214,8 +216,22 @@ class Worker {
 	public function process_job( Job $job ): void {
 		$start_time       = hrtime( true );
 		$timeout_seconds  = Config::max_execution_time();
+		$max_attempts     = $job->max_attempts;
 		$pcntl_available  = function_exists( 'pcntl_alarm' ) && function_exists( 'pcntl_signal' );
 		$previous_handler = null;
+		$job_instance     = null;
+
+		// Read job properties from the job class if it implements Contracts\Job.
+		if ( $this->registry->is_job_class( $job->handler ) ) {
+			$job_props = $this->read_job_properties( $job->handler );
+
+			if ( null !== $job_props['timeout'] ) {
+				$timeout_seconds = $job_props['timeout'];
+			}
+			if ( null !== $job_props['tries'] ) {
+				$max_attempts = $job_props['tries'];
+			}
+		}
 
 		$this->logger->log(
 			LogEvent::Started,
@@ -375,6 +391,9 @@ class Worker {
 						'duration_ms' => $duration_ms,
 					)
 				);
+
+				// Record batch completion if part of a batch.
+				$this->record_batch_completion( $job );
 			} else {
 
 				$this->debug_log( "Resolving handler: {$job->handler}", $job->queue );
@@ -434,6 +453,9 @@ class Worker {
 							'duration_ms' => $duration_ms,
 						)
 					);
+
+					// Record batch completion if part of a batch.
+					$this->record_batch_completion( $job );
 				}
 			} // End of handler/step else block.
 
@@ -444,9 +466,23 @@ class Worker {
 		} catch ( \Throwable $e ) {
 			$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
-			if ( $job->attempts >= $job->max_attempts ) {
+			// Determine effective max_attempts (job property overrides DB value).
+			$effective_max = $max_attempts;
+
+			// Calculate backoff: check job class properties for escalating backoff.
+			$custom_backoff = null;
+			if ( isset( $job_props ) && ! empty( $job_props['backoff'] ) ) {
+				$backoff_array  = $job_props['backoff'];
+				$attempt_index  = min( $job->attempts - 1, count( $backoff_array ) - 1 );
+				$custom_backoff = $backoff_array[ max( 0, $attempt_index ) ];
+			}
+
+			if ( $job->attempts >= $effective_max ) {
 				// Max attempts reached, bury the job.
 				$this->queue->bury( $job->id, $e->getMessage() );
+
+				// Call failed() hook on the job instance if available.
+				$this->call_failed_hook( $job, $job_instance, $e );
 
 				$this->logger->log(
 					LogEvent::Buried,
@@ -488,9 +524,12 @@ class Worker {
 						)
 					);
 				}
+
+				// Record batch failure if part of a batch.
+				$this->record_batch_failure( $job );
 			} else {
 				// Retry with backoff.
-				$backoff = Queue::calculate_backoff( $job->attempts, Config::retry_backoff() );
+				$backoff = $custom_backoff ?? Queue::calculate_backoff( $job->attempts, Config::retry_backoff() );
 				$this->queue->retry( $job->id, $backoff );
 
 				$this->logger->log(
@@ -594,6 +633,103 @@ class Worker {
 		}
 
 		return $count;
+	}
+
+	/**
+	 * Read job properties (tries, timeout, backoff) from a Contracts\Job class via reflection.
+	 *
+	 * @param string $handler_class Fully qualified class name.
+	 * @return array{tries: int|null, timeout: int|null, max_exceptions: int|null, backoff: array|null}
+	 */
+	private function read_job_properties( string $handler_class ): array {
+		$result = array(
+			'tries'          => null,
+			'timeout'        => null,
+			'max_exceptions' => null,
+			'backoff'        => null,
+		);
+
+		try {
+			$reflection = new \ReflectionClass( $handler_class );
+		} catch ( \ReflectionException ) {
+			return $result;
+		}
+
+		foreach ( array( 'tries', 'timeout', 'max_exceptions' ) as $prop_name ) {
+			if ( $reflection->hasProperty( $prop_name ) ) {
+				$prop = $reflection->getProperty( $prop_name );
+				if ( $prop->isPublic() && $prop->hasDefaultValue() ) {
+					$result[ $prop_name ] = $prop->getDefaultValue();
+				}
+			}
+		}
+
+		if ( $reflection->hasProperty( 'backoff' ) ) {
+			$prop = $reflection->getProperty( 'backoff' );
+			if ( $prop->isPublic() && $prop->hasDefaultValue() ) {
+				$value = $prop->getDefaultValue();
+				if ( is_array( $value ) ) {
+					$result['backoff'] = $value;
+				}
+			}
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Call the failed() hook on a job instance if it defines one.
+	 *
+	 * @param Job              $job          The job record.
+	 * @param JobContract|null $job_instance The deserialized job instance, if available.
+	 * @param \Throwable       $exception    The exception that caused the failure.
+	 */
+	private function call_failed_hook( Job $job, ?JobContract $job_instance, \Throwable $exception ): void {
+		// Try to use the already-deserialized instance first.
+		if ( null === $job_instance && $this->registry->is_job_class( $job->handler ) ) {
+			try {
+				$job_instance = JobSerializer::deserialize( $job->handler, $job->payload );
+			} catch ( \Throwable ) {
+				return;
+			}
+		}
+
+		if ( null === $job_instance ) {
+			return;
+		}
+
+		if ( method_exists( $job_instance, 'failed' ) ) {
+			try {
+				$job_instance->failed( $exception );
+			} catch ( \Throwable ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Failed hook errors are non-fatal.
+			}
+		}
+	}
+
+	/**
+	 * Record a batch completion for a job if it belongs to a batch.
+	 *
+	 * @param Job $job The completed job record.
+	 */
+	private function record_batch_completion( Job $job ): void {
+		if ( null === $this->batch_manager || null === $job->batch_id ) {
+			return;
+		}
+
+		$this->batch_manager->record_completion( $job->batch_id );
+	}
+
+	/**
+	 * Record a batch failure for a job if it belongs to a batch.
+	 *
+	 * @param Job $job The failed job record.
+	 */
+	private function record_batch_failure( Job $job ): void {
+		if ( null === $this->batch_manager || null === $job->batch_id ) {
+			return;
+		}
+
+		$this->batch_manager->record_failure( $job->batch_id, $job->id );
 	}
 
 	/**
