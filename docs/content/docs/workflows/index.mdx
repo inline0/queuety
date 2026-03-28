@@ -1,0 +1,85 @@
+---
+title: Workflows
+description: Durable multi-step workflows that survive PHP timeouts and crashes.
+---
+
+# Workflows
+
+A workflow is a sequence of steps that runs across multiple PHP processes. Each step is a normal job that gets claimed and executed by a worker. The workflow orchestration (advancing steps, merging state) happens at the boundary between steps, inside a single database transaction.
+
+## Why workflows?
+
+PHP has hard execution limits. A 30-second timeout kills long-running processes. External API calls can take minutes. If PHP dies mid-execution, all progress is lost.
+
+Workflows solve this by breaking work into small, durable steps. Each step runs within PHP's time limits. The workflow engine persists state between steps so that if any step fails or PHP crashes, the workflow resumes from where it left off.
+
+## State accumulation
+
+Every workflow has a state bag stored as JSON in the `queuety_workflows` table. When a step completes, it returns an array that gets merged into the state. Subsequent steps receive the accumulated state from all previous steps.
+
+```php
+// Step 0 receives: ['user_id' => 42]
+// Step 0 returns:  ['user_name' => 'Alice', 'order_count' => 12]
+// Step 1 receives: ['user_id' => 42, 'user_name' => 'Alice', 'order_count' => 12]
+// Step 1 returns:  ['summary' => '...']
+// Step 2 receives: ['user_id' => 42, 'user_name' => 'Alice', 'order_count' => 12, 'summary' => '...']
+```
+
+The state is the durability guarantee. If Step 1 fails and is retried, it receives the same state that Step 0 produced. No work is repeated.
+
+## Resumability: the transactional boundary
+
+The critical moment is the boundary between steps. When a step completes, the worker performs these operations in a single database transaction:
+
+1. Merge step output into workflow state and advance `current_step`
+2. Mark the current step's job as `completed`
+3. Enqueue the next step as a new pending job
+4. Write a log entry for step completion
+
+All four happen atomically. If PHP dies at any point:
+
+- **During step execution**: the job stays in `processing` status. Stale timeout detects it, resets to `pending`, and the worker retries the step with all prior state intact.
+- **After step execution but before commit**: the transaction rolls back. Same as above.
+- **After commit**: the next step is already enqueued, workflow state is saved, and the log is written. Nothing lost.
+
+There is no window where state can be lost.
+
+## Workflow lifecycle
+
+```
+running -> completed (all steps done)
+       \-> failed (step buried after max attempts)
+       \-> paused (manually paused or waiting)
+```
+
+| Status | Description |
+|---|---|
+| `running` | Steps are being processed |
+| `completed` | All steps finished successfully |
+| `failed` | A step was buried after exhausting retries |
+| `paused` | Manually paused, current step finishes but next step is not enqueued |
+
+## Managing workflows
+
+```php
+// Check status
+$state = Queuety::workflow_status($workflow_id);
+// WorkflowState { workflow_id, name, status, current_step, total_steps, state }
+
+// Retry a failed workflow (resumes from the failed step)
+Queuety::retry_workflow($workflow_id);
+
+// Pause a running workflow
+Queuety::pause_workflow($workflow_id);
+
+// Resume a paused workflow
+Queuety::resume_workflow($workflow_id);
+```
+
+## Next steps
+
+- [Chains](/docs/workflows/chains) for basic sequential workflows
+- [Parallel steps](/docs/workflows/parallel) for concurrent execution
+- [Conditional branching](/docs/workflows/conditional) for skip logic
+- [Sub-workflows](/docs/workflows/sub-workflows) for nested composition
+- [Templates](/docs/workflows/templates) for reusable workflow definitions

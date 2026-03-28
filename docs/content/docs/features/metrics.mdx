@@ -1,0 +1,119 @@
+---
+title: Metrics
+description: Query throughput, latency, and error rates from the Queuety Metrics API.
+---
+
+# Metrics
+
+Queuety provides a Metrics API that calculates throughput, latency percentiles, and error rates from the logs table. Metrics are computed on the fly from log data, so there is no separate metrics storage.
+
+## Throughput
+
+Jobs completed per minute in a given time window:
+
+```php
+$metrics = Queuety::metrics();
+
+// Overall throughput in the last 60 minutes
+$jobs_per_min = $metrics->throughput(minutes: 60);
+
+// Per-handler throughput
+$jobs_per_min = $metrics->throughput(handler: 'SendEmailHandler', minutes: 60);
+```
+
+## Average duration
+
+Average execution time in milliseconds:
+
+```php
+$avg_ms = $metrics->average_duration(minutes: 60);
+$avg_ms = $metrics->average_duration(handler: 'ProcessImageHandler', minutes: 60);
+```
+
+## P95 latency
+
+95th percentile execution time in milliseconds:
+
+```php
+$p95_ms = $metrics->p95_duration(minutes: 60);
+$p95_ms = $metrics->p95_duration(handler: 'CallLLMHandler', minutes: 60);
+```
+
+## Error rate
+
+Ratio of failed/buried jobs to total jobs (0.0 to 1.0):
+
+```php
+$rate = $metrics->error_rate(minutes: 60);
+$rate = $metrics->error_rate(handler: 'ChargePaymentHandler', minutes: 60);
+```
+
+## Per-handler breakdown
+
+Get a complete breakdown of all handlers in a single call:
+
+```php
+$stats = $metrics->handler_stats(minutes: 60);
+
+foreach ($stats as $entry) {
+    echo "{$entry['handler']}: ";
+    echo "{$entry['completed']} completed, ";
+    echo "{$entry['failed']} failed, ";
+    echo "avg {$entry['avg_ms']}ms, ";
+    echo "p95 {$entry['p95_ms']}ms, ";
+    echo "error rate {$entry['error_rate']}\n";
+}
+```
+
+Returns an array of associative arrays with keys:
+
+| Key | Type | Description |
+|---|---|---|
+| `handler` | `string` | Handler name |
+| `completed` | `int` | Number of completed jobs |
+| `failed` | `int` | Number of failed/buried jobs |
+| `avg_ms` | `float` | Average execution time (ms) |
+| `p95_ms` | `float` | 95th percentile execution time (ms) |
+| `error_rate` | `float` | Ratio of failures to total (0.0 to 1.0) |
+
+## CLI metrics
+
+```bash
+# Show per-handler metrics for the last 60 minutes
+wp queuety metrics
+
+# Custom time window
+wp queuety metrics --minutes=1440
+
+# JSON output
+wp queuety metrics --format=json
+```
+
+Example output:
+
+```
+$ wp queuety metrics
+
+Handler               Completed  Failed  Avg (ms)  P95 (ms)  Error Rate
+SendEmailHandler          342       2     23.50     45.00     0.0058
+ProcessImageHandler       156       1     847.20    1200.00   0.0064
+CallLLMHandler             47       5     1847.00   3200.00   0.0962
+```
+
+## Building dashboards
+
+Combine the Metrics API with WordPress hooks to build monitoring dashboards:
+
+```php
+add_action('wp_dashboard_setup', function () {
+    wp_add_dashboard_widget('queuety_metrics', 'Queuety Metrics', function () {
+        $metrics = Queuety::metrics();
+        $stats   = Queuety::stats();
+
+        echo "<p>Throughput: " . round($metrics->throughput(), 1) . " jobs/min</p>";
+        echo "<p>Avg latency: " . round($metrics->average_duration(), 1) . " ms</p>";
+        echo "<p>Pending: {$stats['pending']}</p>";
+        echo "<p>Buried: {$stats['buried']}</p>";
+    });
+});
+```

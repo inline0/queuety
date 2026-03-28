@@ -1,0 +1,121 @@
+---
+title: Queue Management
+description: Pause, resume, and manage named queues.
+---
+
+# Queue Management
+
+Queuety supports named queues for organizing jobs. You can pause and resume queues to control when jobs are processed.
+
+## Named queues
+
+Jobs are dispatched to a queue by name. The default queue is `'default'`. You can use any string as a queue name:
+
+```php
+use Queuety\Queuety;
+
+Queuety::dispatch('process_image', $payload)->on_queue('media');
+Queuety::dispatch('send_email', $payload)->on_queue('emails');
+Queuety::dispatch('sync_data', $payload)->on_queue('sync');
+```
+
+Workers process a specific queue:
+
+```bash
+wp queuety work --queue=emails
+wp queuety work --queue=media
+```
+
+A worker with no `--queue` flag processes the `default` queue.
+
+## Pausing a queue
+
+Pause a queue to stop workers from claiming new jobs from it. Jobs already in `processing` state will finish, but no new jobs will be claimed:
+
+```php
+Queuety::pause('emails');
+```
+
+```bash
+wp queuety pause emails
+```
+
+## Resuming a queue
+
+```php
+Queuety::resume('emails');
+```
+
+```bash
+wp queuety resume emails
+```
+
+## Checking queue state
+
+```php
+if ( Queuety::is_paused('emails') ) {
+    // Queue is paused
+}
+```
+
+## Queue statistics
+
+Get job counts grouped by status for a specific queue or all queues:
+
+```php
+// All queues
+$stats = Queuety::stats();
+// ['pending' => 42, 'processing' => 3, 'completed' => 1200, 'failed' => 5, 'buried' => 1]
+
+// Specific queue
+$stats = Queuety::stats('emails');
+```
+
+```bash
+wp queuety status
+wp queuety status --queue=emails
+```
+
+## Purging completed jobs
+
+Remove completed jobs older than the configured retention period:
+
+```php
+// Use default retention (QUEUETY_RETENTION_DAYS, default 7)
+$count = Queuety::purge();
+
+// Custom threshold
+$count = Queuety::purge(30); // Purge jobs completed more than 30 days ago
+```
+
+```bash
+wp queuety purge
+wp queuety purge --older-than=30
+```
+
+## Use cases for multiple queues
+
+**Priority separation.** Run dedicated workers for high-priority queues to ensure they are always processed quickly:
+
+```bash
+# High-priority worker
+wp queuety work --queue=payments
+
+# Background worker
+wp queuety work --queue=reports
+```
+
+**Resource isolation.** Keep CPU-heavy jobs on a separate queue so they do not block lightweight jobs:
+
+```bash
+wp queuety work --queue=image-processing --workers=2
+wp queuety work --queue=emails --workers=1
+```
+
+**Maintenance windows.** Pause a queue during deployments or maintenance:
+
+```bash
+wp queuety pause emails
+# ... deploy ...
+wp queuety resume emails
+```

@@ -1,0 +1,473 @@
+---
+title: CLI
+description: Complete WP-CLI command reference for Queuety.
+---
+
+# CLI Reference
+
+All Queuety operations are available through WP-CLI under the `wp queuety` namespace.
+
+## Worker commands
+
+### `wp queuety work`
+
+Start a worker that processes jobs.
+
+```bash
+wp queuety work [--queue=<queue>] [--once] [--workers=<n>]
+```
+
+| Option | Description |
+|---|---|
+| `--queue=<queue>` | Queue to process. Default: `default`. |
+| `--once` | Process one batch and exit. |
+| `--workers=<n>` | Fork N worker processes (requires pcntl extension). |
+
+```bash
+# Start a worker on the default queue
+wp queuety work
+
+# Process a specific queue
+wp queuety work --queue=emails
+
+# Process one batch and exit (for cron)
+wp queuety work --once
+
+# Start 4 concurrent workers
+wp queuety work --workers=4
+
+# Specific queue with concurrency
+wp queuety work --queue=media --workers=2
+```
+
+### `wp queuety flush`
+
+Process all pending jobs and exit.
+
+```bash
+wp queuety flush [--queue=<queue>]
+```
+
+| Option | Description |
+|---|---|
+| `--queue=<queue>` | Queue to flush. Default: `default`. |
+
+## Job commands
+
+### `wp queuety dispatch`
+
+Dispatch a job from the command line.
+
+```bash
+wp queuety dispatch <handler> [--payload=<json>] [--queue=<queue>] [--priority=<priority>] [--delay=<seconds>]
+```
+
+| Option | Description |
+|---|---|
+| `<handler>` | Handler name or class (required). |
+| `--payload=<json>` | JSON payload. Default: `{}`. |
+| `--queue=<queue>` | Queue name. Default: `default`. |
+| `--priority=<priority>` | Priority level (0-3). Default: `0`. |
+| `--delay=<seconds>` | Delay in seconds. Default: `0`. |
+
+```bash
+wp queuety dispatch send_email --payload='{"to":"user@example.com","subject":"Hello"}'
+wp queuety dispatch process_image --payload='{"id":42}' --queue=media --priority=2
+```
+
+### `wp queuety status`
+
+Show queue statistics.
+
+```bash
+wp queuety status [--queue=<queue>]
+```
+
+| Option | Description |
+|---|---|
+| `--queue=<queue>` | Filter by queue name. Shows all queues if omitted. |
+
+```
+$ wp queuety status
+
+Queue     Pending  Processing  Completed  Failed  Buried
+all            16           2       1847       3       1
+```
+
+### `wp queuety list`
+
+List jobs.
+
+```bash
+wp queuety list [--queue=<queue>] [--status=<status>] [--format=<format>]
+```
+
+| Option | Description |
+|---|---|
+| `--queue=<queue>` | Filter by queue. |
+| `--status=<status>` | Filter by status: `pending`, `processing`, `completed`, `failed`, `buried`. |
+| `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml`. |
+
+### `wp queuety inspect`
+
+Show full details of a job, including payload and log history.
+
+```bash
+wp queuety inspect <id>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Job ID (required). |
+
+```
+$ wp queuety inspect 123
+
+Job #123
+Handler:      SendEmailHandler
+Queue:        emails
+Status:       completed
+Priority:     2
+Attempts:     1/3
+Created:      2025-03-28 14:23:00
+Available at: 2025-03-28 14:23:00
+Completed at: 2025-03-28 14:23:01
+
+Payload:
+{
+  "to": "user@example.com",
+  "subject": "Welcome"
+}
+
+Log history:
+id    event      attempt  duration_ms  error_message  created_at
+1201  started    1        -            -              2025-03-28 14:23:00
+1202  completed  1        230          -              2025-03-28 14:23:01
+```
+
+### `wp queuety retry`
+
+Retry a specific job.
+
+```bash
+wp queuety retry <id>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Job ID to retry (required). |
+
+### `wp queuety retry-buried`
+
+Retry all buried jobs.
+
+```bash
+wp queuety retry-buried
+```
+
+### `wp queuety bury`
+
+Manually bury a job.
+
+```bash
+wp queuety bury <id>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Job ID to bury (required). |
+
+### `wp queuety delete`
+
+Delete a job permanently.
+
+```bash
+wp queuety delete <id>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Job ID to delete (required). |
+
+### `wp queuety recover`
+
+Recover stale jobs (stuck in `processing` past the timeout).
+
+```bash
+wp queuety recover
+```
+
+### `wp queuety purge`
+
+Purge completed jobs.
+
+```bash
+wp queuety purge [--older-than=<days>]
+```
+
+| Option | Description |
+|---|---|
+| `--older-than=<days>` | Delete jobs older than N days. Default: config value (`QUEUETY_RETENTION_DAYS`). |
+
+## Queue management commands
+
+### `wp queuety pause`
+
+Pause a queue so workers skip it.
+
+```bash
+wp queuety pause <queue>
+```
+
+| Option | Description |
+|---|---|
+| `<queue>` | Queue name to pause (required). |
+
+### `wp queuety resume`
+
+Resume a paused queue.
+
+```bash
+wp queuety resume <queue>
+```
+
+| Option | Description |
+|---|---|
+| `<queue>` | Queue name to resume (required). |
+
+## Workflow commands
+
+### `wp queuety workflow status`
+
+Show workflow status and progress.
+
+```bash
+wp queuety workflow status <id>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID (required). |
+
+```
+$ wp queuety workflow status 42
+
+Workflow: generate_report (#42)
+Status:   running
+Step:     1/3
+State:
+{
+  "user_id": 42,
+  "user_name": "Alice",
+  "order_count": 12
+}
+```
+
+### `wp queuety workflow retry`
+
+Retry a failed workflow from its failed step.
+
+```bash
+wp queuety workflow retry <id>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID (required). |
+
+### `wp queuety workflow pause`
+
+Pause a running workflow. The current step finishes, but the next step is not enqueued.
+
+```bash
+wp queuety workflow pause <id>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID (required). |
+
+### `wp queuety workflow resume`
+
+Resume a paused workflow.
+
+```bash
+wp queuety workflow resume <id>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID (required). |
+
+### `wp queuety workflow list`
+
+List workflows.
+
+```bash
+wp queuety workflow list [--status=<status>] [--format=<format>]
+```
+
+| Option | Description |
+|---|---|
+| `--status=<status>` | Filter by status: `running`, `completed`, `failed`, `paused`. |
+| `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml`. |
+
+## Log commands
+
+### `wp queuety log`
+
+Query log entries.
+
+```bash
+wp queuety log [--job=<id>] [--workflow=<id>] [--handler=<name>] [--event=<event>] [--since=<datetime>] [--limit=<n>] [--format=<format>]
+```
+
+| Option | Description |
+|---|---|
+| `--job=<id>` | Filter by job ID. |
+| `--workflow=<id>` | Filter by workflow ID. |
+| `--handler=<name>` | Filter by handler name. |
+| `--event=<event>` | Filter by event type: `started`, `completed`, `failed`, `buried`, `retried`, `workflow_started`, `workflow_completed`, `workflow_failed`, `workflow_paused`, `workflow_resumed`. |
+| `--since=<datetime>` | Show entries since this datetime. |
+| `--limit=<n>` | Maximum entries to show. Default: `50`. |
+| `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml`. |
+
+### `wp queuety log purge`
+
+Delete old log entries.
+
+```bash
+wp queuety log purge --older-than=<days>
+```
+
+| Option | Description |
+|---|---|
+| `--older-than=<days>` | Delete entries older than N days (required). |
+
+## Schedule commands
+
+### `wp queuety schedule list`
+
+List all recurring schedules.
+
+```bash
+wp queuety schedule list [--format=<format>]
+```
+
+| Option | Description |
+|---|---|
+| `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml`. |
+
+### `wp queuety schedule add`
+
+Add a recurring schedule.
+
+```bash
+wp queuety schedule add <handler> [--every=<interval>] [--cron=<expression>] [--payload=<json>] [--queue=<queue>]
+```
+
+| Option | Description |
+|---|---|
+| `<handler>` | Handler name or class (required). |
+| `--every=<interval>` | Interval expression (e.g. `1 hour`, `30 minutes`). |
+| `--cron=<expression>` | Cron expression (e.g. `0 3 * * *`). |
+| `--payload=<json>` | JSON payload. Default: `{}`. |
+| `--queue=<queue>` | Queue name. Default: `default`. |
+
+One of `--every` or `--cron` is required.
+
+```bash
+wp queuety schedule add cleanup_handler --every="1 hour"
+wp queuety schedule add nightly_backup --cron="0 3 * * *"
+wp queuety schedule add sync_inventory --every="30 minutes" --queue=sync
+```
+
+### `wp queuety schedule remove`
+
+Remove a schedule by handler name.
+
+```bash
+wp queuety schedule remove <handler>
+```
+
+| Option | Description |
+|---|---|
+| `<handler>` | Handler name to remove (required). |
+
+### `wp queuety schedule run`
+
+Manually trigger a scheduler tick. Enqueues jobs for all due schedules.
+
+```bash
+wp queuety schedule run
+```
+
+## Webhook commands
+
+### `wp queuety webhook add`
+
+Register a webhook URL for an event.
+
+```bash
+wp queuety webhook add <event> <url>
+```
+
+| Option | Description |
+|---|---|
+| `<event>` | Event name: `job.completed`, `job.failed`, `job.buried`, `workflow.completed`, `workflow.failed` (required). |
+| `<url>` | URL to POST notifications to (required). |
+
+### `wp queuety webhook list`
+
+List all registered webhooks.
+
+```bash
+wp queuety webhook list [--format=<format>]
+```
+
+| Option | Description |
+|---|---|
+| `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml`. |
+
+### `wp queuety webhook remove`
+
+Remove a webhook by ID.
+
+```bash
+wp queuety webhook remove <id>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Webhook ID to remove (required). |
+
+## Metrics commands
+
+### `wp queuety metrics`
+
+Show per-handler metrics.
+
+```bash
+wp queuety metrics [--minutes=<minutes>] [--format=<format>]
+```
+
+| Option | Description |
+|---|---|
+| `--minutes=<minutes>` | Time window in minutes. Default: `60`. |
+| `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml`. |
+
+## Discovery commands
+
+### `wp queuety discover`
+
+Discover handler classes in a directory.
+
+```bash
+wp queuety discover <directory> <namespace> [--register]
+```
+
+| Option | Description |
+|---|---|
+| `<directory>` | Directory to scan for handler classes (required). |
+| `<namespace>` | PSR-4 namespace prefix for the directory (required). |
+| `--register` | Actually register discovered handlers. Without this flag, only lists them. |

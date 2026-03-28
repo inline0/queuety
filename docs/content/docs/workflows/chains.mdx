@@ -1,0 +1,159 @@
+---
+title: Chains
+description: Define sequential workflow steps with state flow between them.
+---
+
+# Chains
+
+The simplest workflow is a chain: a sequence of steps that run one after another. Each step receives the accumulated state from all previous steps and returns data that gets merged in.
+
+## Defining steps with ->then()
+
+Use `Queuety::workflow()` to start a builder, then chain steps with `->then()`:
+
+```php
+use Queuety\Queuety;
+
+$workflow_id = Queuety::workflow('generate_report')
+    ->then(FetchDataHandler::class)
+    ->then(CallLLMHandler::class)
+    ->then(FormatOutputHandler::class)
+    ->dispatch(['user_id' => 42]);
+```
+
+When dispatched, only the first step is enqueued as a job. When it completes, the next step is enqueued, and so on. The workflow is complete when the last step finishes.
+
+## Step handlers
+
+Step handlers implement the `Queuety\Step` interface. They receive the accumulated state and return an array of data to merge:
+
+```php
+use Queuety\Step;
+
+class FetchDataHandler implements Step {
+    public function handle( array $state ): array {
+        // $state starts with the dispatch payload: ['user_id' => 42]
+        $user   = get_user_by( 'ID', $state['user_id'] );
+        $orders = wc_get_orders( ['customer_id' => $user->ID, 'limit' => 50] );
+
+        return [
+            'user_name'   => $user->display_name,
+            'order_count' => count( $orders ),
+            'order_data'  => array_map( fn( $o ) => $o->get_data(), $orders ),
+        ];
+    }
+
+    public function config(): array {
+        return ['needs_wordpress' => true];
+    }
+}
+```
+
+### The Step interface
+
+```php
+interface Step {
+    /**
+     * Execute the step.
+     *
+     * @param array $state Accumulated workflow state from all previous steps.
+     * @return array Data to merge into the workflow state.
+     */
+    public function handle( array $state ): array;
+
+    /**
+     * Optional step configuration.
+     *
+     * Supported keys: needs_wordpress, max_attempts, backoff.
+     *
+     * @return array Configuration array.
+     */
+    public function config(): array;
+}
+```
+
+### Step config options
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `needs_wordpress` | `bool` | `false` | Boot WordPress before executing this step |
+| `max_attempts` | `int` | `3` | Per-step retry limit (overrides workflow setting) |
+| `backoff` | `string` | `'exponential'` | Retry backoff strategy |
+
+## State flow between steps
+
+State accumulates across the chain. Each step's return value is merged (with `array_merge`) into the workflow state before the next step runs:
+
+```php
+class CallLLMHandler implements Step {
+    public function handle( array $state ): array {
+        // $state now includes everything FetchDataHandler returned:
+        // user_name, order_count, order_data
+        $prompt   = "Summarize {$state['order_count']} orders for {$state['user_name']}";
+        $response = $this->callOpenAI( $prompt, $state['order_data'] );
+
+        return ['llm_response' => $response];
+    }
+
+    public function config(): array {
+        return [
+            'needs_wordpress' => false,
+            'max_attempts'    => 5,
+        ];
+    }
+}
+
+class FormatOutputHandler implements Step {
+    public function handle( array $state ): array {
+        // $state includes user_name, order_count, order_data, llm_response
+        $pdf_path = $this->generatePDF( $state );
+        return ['report_url' => $pdf_path];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+```
+
+## Workflow options
+
+The builder supports queue, priority, and max attempts settings that apply to all steps:
+
+```php
+Queuety::workflow('process_order')
+    ->then(ValidateOrderHandler::class)
+    ->then(ChargePaymentHandler::class)
+    ->then(FulfillOrderHandler::class)
+    ->on_queue('orders')
+    ->with_priority(Priority::High)
+    ->max_attempts(5)
+    ->dispatch(['order_id' => 123]);
+```
+
+## Full example: LLM pipeline
+
+A real-world workflow that fetches data from WordPress, calls an LLM API, and generates a report:
+
+```php
+use Queuety\Queuety;
+use Queuety\Enums\Priority;
+
+// Dispatch
+$workflow_id = Queuety::workflow('weekly_report')
+    ->then(FetchDataHandler::class)        // Needs WP, fast
+    ->then(CallLLMHandler::class)          // No WP, slow (but durable)
+    ->then(FormatOutputHandler::class)     // No WP, fast
+    ->then(SendReportEmailHandler::class)  // Needs WP, fast
+    ->on_queue('reports')
+    ->with_priority(Priority::Normal)
+    ->max_attempts(5)
+    ->dispatch(['user_id' => 42]);
+
+// Check progress later
+$status = Queuety::workflow_status($workflow_id);
+echo "{$status->name}: step {$status->current_step}/{$status->total_steps}";
+echo " ({$status->status->value})";
+```
+
+If `CallLLMHandler` fails on attempt 1 due to a timeout, the worker retries it. The state from `FetchDataHandler` is preserved. No work is repeated. If the LLM call eventually succeeds on attempt 3, the workflow continues to `FormatOutputHandler` with the complete state.

@@ -1,0 +1,118 @@
+---
+title: Scheduling
+description: Recurring jobs with cron expressions and interval-based scheduling.
+---
+
+# Scheduling
+
+Queuety has a built-in scheduler for recurring jobs. Schedules are stored in the `queuety_schedules` table and checked by the worker on each tick. When a schedule is due, the scheduler automatically dispatches a job.
+
+## Interval-based scheduling
+
+Use `->every()` with a duration string compatible with `DateTimeImmutable::modify()`:
+
+```php
+use Queuety\Queuety;
+
+Queuety::schedule('cleanup_handler', ['type' => 'expired'])
+    ->every('1 hour');
+
+Queuety::schedule('sync_inventory')
+    ->every('30 minutes');
+
+Queuety::schedule('daily_report', ['type' => 'sales'])
+    ->every('24 hours');
+```
+
+## Cron-based scheduling
+
+Use `->cron()` with a standard 5-field cron expression:
+
+```php
+Queuety::schedule('nightly_backup')
+    ->cron('0 3 * * *'); // 3:00 AM daily
+
+Queuety::schedule('weekly_digest', ['day' => 'monday'])
+    ->cron('0 9 * * 1'); // Monday at 9:00 AM
+
+Queuety::schedule('monthly_cleanup')
+    ->cron('0 0 1 * *'); // First day of month at midnight
+```
+
+## Queue targeting
+
+Schedules can target a specific queue:
+
+```php
+Queuety::schedule('send_newsletter')
+    ->every('7 days')
+    ->on_queue('emails');
+```
+
+## Managing schedules via CLI
+
+```bash
+# List all schedules
+wp queuety schedule list
+
+# Add a recurring schedule with an interval
+wp queuety schedule add cleanup_handler --every="1 hour"
+
+# Add a recurring schedule with a cron expression
+wp queuety schedule add nightly_backup --cron="0 3 * * *"
+
+# Add with a payload and queue
+wp queuety schedule add sync_inventory --every="30 minutes" --payload='{"warehouse":"us-east"}' --queue=sync
+
+# Remove a schedule by handler name
+wp queuety schedule remove cleanup_handler
+
+# Manually trigger the scheduler (useful for testing)
+wp queuety schedule run
+```
+
+## Schedule list output
+
+```
+$ wp queuety schedule list
+
+ID  Handler           Expression   Type      Queue    Enabled  Last Run             Next Run
+1   cleanup_handler   1 hour       interval  default  yes      2025-03-28 14:00:00  2025-03-28 15:00:00
+2   nightly_backup    0 3 * * *    cron      default  yes      2025-03-28 03:00:00  2025-03-29 03:00:00
+3   send_newsletter   7 days       interval  emails   yes      2025-03-21 09:00:00  2025-03-28 09:00:00
+```
+
+## How it works
+
+The scheduler runs inside the worker loop. On each tick, the worker calls `Scheduler::tick()`, which:
+
+1. Queries all enabled schedules where `next_run <= NOW()`.
+2. Dispatches a job for each due schedule.
+3. Updates `last_run` and calculates the next `next_run` based on the expression type.
+
+For interval-based schedules, `next_run = last_run + interval`. For cron-based schedules, `next_run` is calculated from the cron expression.
+
+## PHP API
+
+```php
+// Get the scheduler instance
+$scheduler = Queuety::scheduler();
+
+// List all schedules
+$schedules = $scheduler->list();
+
+// Add a schedule programmatically
+$id = $scheduler->add(
+    handler: 'cleanup_handler',
+    payload: [],
+    queue: 'default',
+    expression: '1 hour',
+    type: ExpressionType::Interval,
+);
+
+// Remove a schedule by handler name
+$scheduler->remove('cleanup_handler');
+
+// Manually trigger a scheduler tick
+$count = $scheduler->tick();
+```

@@ -1,0 +1,124 @@
+---
+title: Templates
+description: Define reusable workflow templates and dispatch them by name.
+---
+
+# Workflow Templates
+
+Templates let you define a workflow's structure once and dispatch it by name from anywhere in your application. This is useful for workflows that are used repeatedly with different payloads.
+
+## Defining a template
+
+Use `Queuety::define_workflow()` to start a builder, define the steps, and call `register()` on the facade:
+
+```php
+use Queuety\Queuety;
+use Queuety\Enums\Priority;
+
+// Define the template (typically in a plugin bootstrap or init hook)
+$builder = Queuety::define_workflow('weekly_report')
+    ->then(FetchDataHandler::class)
+    ->then(CallLLMHandler::class)
+    ->then(FormatOutputHandler::class)
+    ->then(SendReportEmailHandler::class)
+    ->on_queue('reports')
+    ->with_priority(Priority::Normal)
+    ->max_attempts(5);
+
+// Register it
+Queuety::register_workflow_template($builder);
+```
+
+The template is stored in the in-memory `WorkflowRegistry`. Registration should happen early in the application lifecycle, typically in a plugin's main file or an `init` hook.
+
+## Running a template
+
+Dispatch a registered template by name with `Queuety::run_workflow()`:
+
+```php
+// Dispatch with a payload
+$workflow_id = Queuety::run_workflow('weekly_report', ['user_id' => 42]);
+
+// Different payload, same workflow definition
+$workflow_id = Queuety::run_workflow('weekly_report', ['user_id' => 99]);
+```
+
+If the template name is not registered, a `RuntimeException` is thrown.
+
+## Listing templates
+
+Access the template registry to list registered templates:
+
+```php
+$registry = Queuety::workflow_templates();
+
+// Check if a template exists
+$template = $registry->get('weekly_report'); // WorkflowTemplate or null
+```
+
+## Practical pattern
+
+A common pattern is to register all workflow templates in your plugin's entry point:
+
+```php
+// In your plugin's main file or a mu-plugin
+
+add_action('plugins_loaded', function () {
+    // Order processing pipeline
+    $order = Queuety::define_workflow('process_order')
+        ->then(ValidateOrderHandler::class)
+        ->then(ChargePaymentHandler::class)
+        ->then(FulfillOrderHandler::class)
+        ->then(SendConfirmationHandler::class)
+        ->on_queue('orders')
+        ->with_priority(Priority::High)
+        ->max_attempts(5);
+
+    Queuety::register_workflow_template($order);
+
+    // Content moderation pipeline
+    $moderation = Queuety::define_workflow('moderate_content')
+        ->then(AnalyzeContentHandler::class)
+        ->then(ClassifyContentHandler::class)
+        ->then(ApplyPolicyHandler::class)
+        ->on_queue('moderation');
+
+    Queuety::register_workflow_template($moderation);
+});
+```
+
+Then dispatch from anywhere:
+
+```php
+// In a WooCommerce hook
+add_action('woocommerce_order_status_completed', function ($order_id) {
+    Queuety::run_workflow('process_order', ['order_id' => $order_id]);
+});
+
+// In a content submission handler
+add_action('wp_insert_post', function ($post_id) {
+    Queuety::run_workflow('moderate_content', ['post_id' => $post_id]);
+});
+```
+
+## Templates with parallel and sub-workflow steps
+
+Templates support all workflow features, including parallel groups and sub-workflows:
+
+```php
+$enrichment = Queuety::define_workflow('user_enrichment')
+    ->then(FetchProfileHandler::class)
+    ->parallel([
+        FetchSocialHandler::class,
+        FetchCreditScoreHandler::class,
+    ]);
+
+Queuety::register_workflow_template($enrichment);
+
+$onboarding = Queuety::define_workflow('onboarding')
+    ->then(CreateAccountHandler::class)
+    ->sub_workflow('enrich', $enrichment)
+    ->then(SendWelcomeHandler::class);
+
+Queuety::register_workflow_template($onboarding);
+```

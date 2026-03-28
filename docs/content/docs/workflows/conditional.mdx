@@ -1,0 +1,103 @@
+---
+title: Conditional Branching
+description: Skip steps or branch workflow execution based on step output.
+---
+
+# Conditional Branching
+
+Workflows support conditional logic through named steps and the `_goto` mechanism. A step can control which step runs next by including a `_goto` key in its return data.
+
+## Named steps
+
+Give steps a name by passing a second argument to `->then()`:
+
+```php
+Queuety::workflow('process_payment')
+    ->then(ValidateOrderHandler::class, 'validate')
+    ->then(CheckInventoryHandler::class, 'inventory')
+    ->then(ChargePaymentHandler::class, 'charge')
+    ->then(FulfillOrderHandler::class, 'fulfill')
+    ->then(SendReceiptHandler::class, 'receipt')
+    ->dispatch(['order_id' => 123]);
+```
+
+Without branching, these steps run in order: validate, inventory, charge, fulfill, receipt.
+
+## Skipping steps with _goto
+
+A step can skip ahead by returning `_goto` with the name of the target step:
+
+```php
+class CheckInventoryHandler implements Step {
+    public function handle( array $state ): array {
+        $in_stock = $this->checkStock( $state['order_id'] );
+
+        if ( ! $in_stock ) {
+            return [
+                'inventory_status' => 'out_of_stock',
+                '_goto' => 'receipt', // Skip charge and fulfill
+            ];
+        }
+
+        return ['inventory_status' => 'in_stock'];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+```
+
+When `_goto` is present in the step output:
+
+1. The `_goto` value is removed from the state (it is not persisted).
+2. The workflow skips ahead to the named step.
+3. Steps between the current step and the target are not executed.
+4. The target step receives the accumulated state from all steps that did run.
+
+## Example: conditional approval workflow
+
+```php
+Queuety::workflow('content_review')
+    ->then(AnalyzeContentHandler::class, 'analyze')
+    ->then(ManualReviewHandler::class, 'review')
+    ->then(PublishContentHandler::class, 'publish')
+    ->then(NotifyAuthorHandler::class, 'notify')
+    ->dispatch(['post_id' => 456]);
+```
+
+```php
+class AnalyzeContentHandler implements Step {
+    public function handle( array $state ): array {
+        $score = $this->runContentAnalysis( $state['post_id'] );
+
+        if ( $score > 0.9 ) {
+            // High confidence: skip manual review, go straight to publish
+            return [
+                'analysis_score' => $score,
+                'auto_approved'  => true,
+                '_goto'          => 'publish',
+            ];
+        }
+
+        return [
+            'analysis_score' => $score,
+            'auto_approved'  => false,
+        ];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+```
+
+If the content scores above 0.9, the workflow skips `ManualReviewHandler` and goes directly to `PublishContentHandler`. The `publish` step sees `analysis_score` and `auto_approved` in its state but no output from `review`.
+
+## Branching to earlier steps
+
+The `_goto` mechanism supports forward jumps only. It cannot loop back to earlier steps. This is by design: workflows are acyclic to guarantee termination.
+
+## Combining with parallel steps
+
+Named steps work with parallel groups too. A parallel group itself can have a name, and steps can skip over a parallel group by targeting the step after it.

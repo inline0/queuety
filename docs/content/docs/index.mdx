@@ -1,0 +1,56 @@
+---
+title: Introduction
+description: Welcome to the Queuety documentation.
+---
+
+# Introduction
+
+Queuety is a job queue and durable workflow engine for WordPress. Workers process jobs from a minimal PHP bootstrap that connects directly to the database via PDO. WordPress is not booted unless a specific handler needs it.
+
+## The problem
+
+WordPress has no real background job system. `wp_cron` only fires when someone visits the site. Action Scheduler (used by WooCommerce) fills the gap but boots the entire WordPress stack to process every batch. That means loading hundreds of PHP files, initializing plugins, parsing themes, and connecting through `$wpdb` for a job that might just send an email or update a row.
+
+There is a deeper problem: WordPress has no way to run workflows. Multi-step processes that survive PHP timeouts, retries, and crashes. An LLM API call that takes 60 seconds gets killed by PHP's 30-second timeout. There is no built-in way to break long-running work into durable steps that persist state and resume where they left off.
+
+## What Queuety provides
+
+Queuety is two things in one:
+
+**A fast job queue** that processes jobs from a minimal PHP bootstrap. It connects to the database directly, claims jobs atomically with `FOR UPDATE SKIP LOCKED`, executes them, and moves on. A typical WordPress page load adds 50-200ms of overhead. Queuety adds 1-5ms.
+
+**A durable workflow engine** that breaks long-running processes into steps. Each step persists its output to a shared state bag. If PHP dies, the worker resumes at the failed step with all prior state intact. The step boundary is a single database transaction: state advancement, job completion, next step enqueue, and log write all happen atomically.
+
+```php
+use Queuety\Queuety;
+use Queuety\Enums\Priority;
+
+// Simple job
+Queuety::dispatch('send_email', ['to' => 'user@example.com'])
+    ->on_queue('emails')
+    ->with_priority(Priority::High);
+
+// Durable workflow
+Queuety::workflow('generate_report')
+    ->then(FetchDataHandler::class)
+    ->then(CallLLMHandler::class)
+    ->then(FormatOutputHandler::class)
+    ->dispatch(['user_id' => 42]);
+```
+
+## Key differentiators
+
+**No WordPress boot.** Workers parse `wp-config.php` via regex for database credentials and connect directly via PDO. Handlers that need WordPress context opt in with `'needs_wordpress' => true` in their config.
+
+**Durable workflows.** Each step is a normal job. When a step completes, its return data is merged into the workflow state, and the next step is enqueued. All of this happens in a single database transaction. There is no window where state can be lost.
+
+**PHP 8.2 enums for domain modeling.** Priority levels, job statuses, workflow statuses, and backoff strategies are all backed enums. No magic strings, no integer constants. Type-safe, IDE-autocompleted, and exhaustive with `match()`.
+
+**Permanent database logging.** All state changes are logged to the `queuety_logs` table. Queryable by job, workflow, handler, event type, and time range. Log writes are part of the same transaction as state changes.
+
+## Requirements
+
+- PHP 8.2+
+- WordPress 6.4+
+- MySQL 5.7+ or MariaDB 10.3+ (for `SKIP LOCKED`)
+- WP-CLI (for workers)

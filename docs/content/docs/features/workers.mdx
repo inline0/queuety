@@ -1,0 +1,159 @@
+---
+title: Workers
+description: Worker processes, concurrency, and memory management.
+---
+
+# Workers
+
+Workers are long-running PHP processes started via WP-CLI. They poll the queue for pending jobs, claim them atomically, and execute their handlers.
+
+## Starting a worker
+
+```bash
+# Process the default queue
+wp queuety work
+
+# Process a specific queue
+wp queuety work --queue=emails
+
+# Process one batch and exit (useful for cron)
+wp queuety work --once
+```
+
+## Concurrency with --workers=N
+
+Run multiple worker processes with a single command:
+
+```bash
+wp queuety work --workers=4
+```
+
+This forks N child processes using `pcntl_fork()`. Each child creates its own database connection and processes jobs independently. The parent process monitors children and restarts any that crash.
+
+The `pcntl` PHP extension is required for multi-worker mode. If it is not available, the command will fail with an error.
+
+### How concurrent workers avoid conflicts
+
+Workers claim jobs atomically using `FOR UPDATE SKIP LOCKED`:
+
+```sql
+UPDATE queuety_jobs
+SET status = 'processing', reserved_at = NOW()
+WHERE status = 'pending'
+  AND queue = 'default'
+  AND available_at <= NOW()
+ORDER BY priority DESC, id ASC
+LIMIT 1
+FOR UPDATE SKIP LOCKED;
+```
+
+`SKIP LOCKED` ensures that if another worker has already locked a row, the current worker moves to the next available job instead of waiting. No two workers can claim the same job.
+
+## Flush mode
+
+Process all pending jobs and exit:
+
+```bash
+wp queuety flush
+wp queuety flush --queue=emails
+```
+
+This is useful for testing or for running as a one-shot process in a CI/CD pipeline.
+
+## Worker lifecycle
+
+The worker loop:
+
+1. Check for stale jobs (jobs stuck in `processing` past the timeout) and recover them.
+2. Run the scheduler tick to enqueue due recurring jobs.
+3. Claim the next pending job from the queue.
+4. If no job is available, sleep for `QUEUETY_WORKER_SLEEP` seconds and go to step 1.
+5. Resolve the handler class and instantiate it.
+6. If the handler needs WordPress, boot WordPress.
+7. Execute the handler.
+8. On success: mark job as completed, advance workflow if applicable.
+9. On failure: mark job as failed, schedule retry with backoff, or bury if max attempts reached.
+10. Check memory and job count limits. If exceeded, exit (the process manager or cron will restart).
+11. Go to step 1.
+
+## Memory and job limits
+
+Workers automatically restart when they exceed configured thresholds:
+
+| Constant | Default | Description |
+|---|---|---|
+| `QUEUETY_WORKER_MAX_JOBS` | `1000` | Exit after processing this many jobs |
+| `QUEUETY_WORKER_MAX_MEMORY` | `128` | Exit if memory usage exceeds this many MB |
+| `QUEUETY_WORKER_SLEEP` | `1` | Seconds to sleep when the queue is empty |
+
+These limits prevent memory leaks from accumulating over long-running processes. Use a process manager like `supervisord` or a systemd service to automatically restart workers.
+
+## Stale job recovery
+
+A job stuck in `processing` state longer than `QUEUETY_STALE_TIMEOUT` (default: 600 seconds) is considered stale. This means the worker that claimed it died without completing it.
+
+The recovery process runs inside the worker loop on each tick:
+
+1. Find jobs where `status = 'processing'` and `reserved_at < NOW() - STALE_TIMEOUT`.
+2. If `attempts < max_attempts`: reset to `pending`, increment `attempts`, apply backoff.
+3. If `attempts >= max_attempts`: set to `buried`, mark parent workflow as `failed` if applicable.
+
+You can also trigger recovery manually:
+
+```bash
+wp queuety recover
+```
+
+## The minimal bootstrap
+
+Workers do NOT boot WordPress by default. The bootstrap process:
+
+1. Parse `wp-config.php` for database credentials (regex, not `require`).
+2. Connect to MySQL directly via PDO.
+3. Load the Queuety autoloader and handler classes.
+4. Start processing.
+
+WordPress is only booted when a specific handler declares `'needs_wordpress' => true` in its `config()` method. This is what makes Queuety fast: the overhead per job is 1-5ms instead of the 50-200ms that a full WordPress boot costs.
+
+## Running workers in production
+
+For production deployments, use a process manager to keep workers running:
+
+### supervisord
+
+```ini
+[program:queuety-default]
+command=wp queuety work --path=/var/www/html
+directory=/var/www/html
+numprocs=2
+process_name=%(program_name)s_%(process_num)02d
+autostart=true
+autorestart=true
+user=www-data
+```
+
+### systemd
+
+```ini
+[Unit]
+Description=Queuety Worker
+After=mysql.service
+
+[Service]
+User=www-data
+WorkingDirectory=/var/www/html
+ExecStart=/usr/local/bin/wp queuety work
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### cron (simple alternative)
+
+```bash
+* * * * * cd /var/www/html && wp queuety work --once >> /var/log/queuety.log 2>&1
+```
+
+This processes one batch per minute. Less efficient than a long-running worker but simpler to set up.

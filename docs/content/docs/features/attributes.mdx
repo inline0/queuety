@@ -1,0 +1,122 @@
+---
+title: PHP Attributes
+description: Auto-register handlers using PHP 8.2 attributes and directory scanning.
+---
+
+# PHP Attributes
+
+Queuety supports PHP 8.2 attributes for handler registration metadata. The `#[QueuetyHandler]` attribute marks a class as a handler and provides its registration name, queue, and other defaults. Combined with auto-discovery, you can skip manual `Queuety::register()` calls entirely.
+
+## The QueuetyHandler attribute
+
+```php
+use Queuety\Attributes\QueuetyHandler;
+use Queuety\Handler;
+
+#[QueuetyHandler(name: 'send_email', queue: 'emails', needs_wordpress: true)]
+class SendEmailHandler implements Handler {
+    public function handle( array $payload ): void {
+        wp_mail( $payload['to'], $payload['subject'], $payload['body'] );
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+```
+
+### Attribute parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `name` | `string` | (required) | Handler name used for dispatch |
+| `queue` | `string` | `'default'` | Default queue for this handler |
+| `max_attempts` | `int` | `3` | Maximum retry attempts |
+| `needs_wordpress` | `bool` | `false` | Whether the handler requires WordPress |
+
+When the attribute is present, its values serve as defaults. Values set in the handler's `config()` method or at dispatch time take precedence.
+
+## Auto-discovery
+
+Scan a directory to find and register all classes with the `#[QueuetyHandler]` attribute:
+
+```php
+use Queuety\Queuety;
+
+$count = Queuety::discover_handlers(
+    directory: __DIR__ . '/handlers',
+    namespace: 'MyPlugin\\Handlers',
+);
+// Returns the number of handlers registered
+```
+
+This scans all PHP files in the directory, checks for classes implementing `Handler` or `Step` that have the `#[QueuetyHandler]` attribute, and registers them automatically.
+
+## CLI discovery
+
+List discovered handlers without registering them:
+
+```bash
+wp queuety discover /path/to/handlers "MyPlugin\\Handlers"
+```
+
+Output:
+
+```
+Class                              Type     Name
+MyPlugin\Handlers\SendEmail        handler  send_email
+MyPlugin\Handlers\ProcessImage     handler  process_image
+MyPlugin\Handlers\FetchData        step     fetch_data
+```
+
+Register discovered handlers:
+
+```bash
+wp queuety discover /path/to/handlers "MyPlugin\\Handlers" --register
+```
+
+## Practical pattern
+
+Set up auto-discovery in your plugin's entry point:
+
+```php
+add_action('plugins_loaded', function () {
+    Queuety::discover_handlers(
+        directory: __DIR__ . '/src/Handlers',
+        namespace: 'MyPlugin\\Handlers',
+    );
+});
+```
+
+Then create handler files with the attribute. They are automatically registered on every request:
+
+```php
+// src/Handlers/ProcessImageHandler.php
+namespace MyPlugin\Handlers;
+
+use Queuety\Attributes\QueuetyHandler;
+use Queuety\Handler;
+
+#[QueuetyHandler(name: 'process_image', queue: 'media')]
+class ProcessImageHandler implements Handler {
+    public function handle( array $payload ): void {
+        // ...
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+```
+
+## Combining with manual registration
+
+Auto-discovery and manual registration can coexist. Manually registered handlers take precedence if there is a name conflict:
+
+```php
+// Auto-discover most handlers
+Queuety::discover_handlers(__DIR__ . '/src/Handlers', 'MyPlugin\\Handlers');
+
+// Override a specific handler with a custom implementation
+Queuety::register('send_email', CustomSendEmailHandler::class);
+```

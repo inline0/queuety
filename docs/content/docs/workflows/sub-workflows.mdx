@@ -1,0 +1,101 @@
+---
+title: Sub-Workflows
+description: Compose workflows by spawning child workflows from within a parent.
+---
+
+# Sub-Workflows
+
+A workflow step can spawn a child workflow. The parent workflow pauses at that step and resumes when the child completes. The child's final state is merged into the parent's state.
+
+## Spawning a child workflow
+
+Use `->sub_workflow()` on the workflow builder to define a sub-workflow step. Pass a name and another `WorkflowBuilder`:
+
+```php
+use Queuety\Queuety;
+
+// Define the sub-workflow inline
+$enrichment = Queuety::workflow('user_enrichment')
+    ->then(FetchSocialHandler::class)
+    ->then(FetchCreditScoreHandler::class);
+
+// Use it in the parent workflow
+$workflow_id = Queuety::workflow('onboarding')
+    ->then(CreateAccountHandler::class)
+    ->sub_workflow('enrich_user', $enrichment)
+    ->then(SendWelcomeEmailHandler::class)
+    ->dispatch(['email' => 'new@user.com']);
+```
+
+## How it works
+
+When the parent workflow reaches a sub-workflow step:
+
+1. The sub-workflow is dispatched as an independent workflow with its own ID.
+2. The parent workflow pauses at the current step.
+3. The sub-workflow runs its steps normally.
+4. When the sub-workflow completes, the parent workflow resumes.
+5. The sub-workflow's final state is merged into the parent's state.
+
+The sub-workflow runs in its own context with its own step tracking, retries, and logging. It appears as a separate entry in `wp queuety workflow list`.
+
+## State merging
+
+The sub-workflow receives the parent's current state as its initial payload. When it completes, its accumulated state (minus internal keys) is merged back:
+
+```php
+class FetchSocialHandler implements Step {
+    public function handle( array $state ): array {
+        // $state includes everything from CreateAccountHandler
+        return ['social_profile' => ['twitter' => '@newuser']];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+
+class FetchCreditScoreHandler implements Step {
+    public function handle( array $state ): array {
+        return ['credit_score' => 720];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+```
+
+After the sub-workflow completes, `SendWelcomeEmailHandler` receives:
+
+```php
+[
+    'email'          => 'new@user.com',
+    // from CreateAccountHandler:
+    'user_id'        => 99,
+    // from sub-workflow:
+    'social_profile' => ['twitter' => '@newuser'],
+    'credit_score'   => 720,
+]
+```
+
+## Sub-workflow options
+
+The sub-workflow builder supports its own queue, priority, and max attempts settings:
+
+```php
+$enrichment = Queuety::workflow('user_enrichment')
+    ->then(FetchSocialHandler::class)
+    ->then(FetchCreditScoreHandler::class)
+    ->on_queue('enrichment')
+    ->with_priority(Priority::Normal)
+    ->max_attempts(5);
+```
+
+## Failure handling
+
+If the sub-workflow fails (a step is buried), the parent workflow is also marked as failed. You can retry the parent workflow, which will retry the sub-workflow from its failed step.
+
+## Nesting depth
+
+Sub-workflows can contain their own sub-workflows. There is no hard limit on nesting depth, but deeply nested workflows become harder to debug. Keep composition shallow when possible.

@@ -1,0 +1,451 @@
+---
+title: API
+description: Complete PHP API reference for Queuety.
+---
+
+# PHP API
+
+Everything in Queuety is accessible through the `Queuety\Queuety` static class. It is the single entry point for dispatching jobs, defining workflows, managing queues, and querying metrics.
+
+```php
+use Queuety\Queuety;
+```
+
+## Initialization
+
+### `Queuety::init( Connection $conn )`
+
+Initialize Queuety with a database connection. Called automatically by the plugin bootstrap. You only need this for testing or custom bootstrap scenarios.
+
+```php
+use Queuety\Connection;
+
+$conn = new Connection($host, $dbname, $user, $password, $prefix);
+Queuety::init($conn);
+```
+
+## Job dispatch
+
+### `Queuety::dispatch( string $handler, array $payload = [] )`
+
+Dispatch a simple job. Returns a `PendingJob` builder for fluent configuration.
+
+```php
+Queuety::dispatch('send_email', ['to' => 'user@example.com']);
+```
+
+The `PendingJob` auto-dispatches when it goes out of scope. Call `->id()` to force immediate dispatch:
+
+```php
+$job_id = Queuety::dispatch('send_email', $payload)->id();
+```
+
+### PendingJob methods
+
+| Method | Returns | Description |
+|---|---|---|
+| `->on_queue(string $queue)` | `self` | Set the target queue |
+| `->with_priority(Priority $priority)` | `self` | Set the priority level |
+| `->delay(int $seconds)` | `self` | Delay before job becomes available |
+| `->max_attempts(int $max)` | `self` | Maximum retry attempts |
+| `->rate_limit(int $max, int $window)` | `self` | Rate limit: max executions per window seconds |
+| `->unique()` | `self` | Prevent duplicate dispatch |
+| `->after(int $job_id)` | `self` | Wait for another job to complete first |
+| `->id()` | `int` | Force dispatch and return the job ID |
+
+```php
+$job_id = Queuety::dispatch('send_email', ['to' => $email])
+    ->on_queue('emails')
+    ->with_priority(Priority::High)
+    ->delay(60)
+    ->max_attempts(5)
+    ->rate_limit(10, 60)
+    ->unique()
+    ->id();
+```
+
+### `Queuety::batch( array $jobs )`
+
+Dispatch multiple jobs in a single multi-row INSERT. Returns an array of job IDs.
+
+```php
+$ids = Queuety::batch([
+    ['handler' => 'process_image', 'payload' => ['id' => 1]],
+    ['handler' => 'process_image', 'payload' => ['id' => 2]],
+    ['handler' => 'process_image', 'payload' => ['id' => 3]],
+]);
+```
+
+Each item supports optional keys: `queue`, `priority`, `delay`, `max_attempts`.
+
+## Handler registration
+
+### `Queuety::register( string $name, string $class )`
+
+Register a handler class under a name.
+
+```php
+Queuety::register('send_email', SendEmailHandler::class);
+```
+
+### `Queuety::discover_handlers( string $directory, string $namespace )`
+
+Auto-discover and register handler classes with `#[QueuetyHandler]` attributes. Returns the number of handlers registered.
+
+```php
+$count = Queuety::discover_handlers(__DIR__ . '/handlers', 'MyPlugin\\Handlers');
+```
+
+### `Queuety::registry()`
+
+Returns the `HandlerRegistry` instance.
+
+## Workflow dispatch
+
+### `Queuety::workflow( string $name )`
+
+Start building a workflow. Returns a `WorkflowBuilder`.
+
+```php
+$workflow_id = Queuety::workflow('generate_report')
+    ->then(FetchDataHandler::class)
+    ->then(CallLLMHandler::class)
+    ->dispatch(['user_id' => 42]);
+```
+
+### WorkflowBuilder methods
+
+| Method | Returns | Description |
+|---|---|---|
+| `->then(string $class, ?string $name = null)` | `self` | Add a sequential step. Optional name for conditional branching. |
+| `->parallel(array $classes)` | `self` | Add a parallel step group |
+| `->sub_workflow(string $name, WorkflowBuilder $builder)` | `self` | Add a sub-workflow step |
+| `->on_queue(string $queue)` | `self` | Set the queue for all steps |
+| `->with_priority(Priority $priority)` | `self` | Set the priority for all steps |
+| `->max_attempts(int $max)` | `self` | Set per-step retry limit |
+| `->dispatch(array $payload = [])` | `int` | Dispatch and return the workflow ID |
+
+## Workflow management
+
+### `Queuety::workflow_status( int $workflow_id )`
+
+Returns a `WorkflowState` object or `null` if not found.
+
+```php
+$state = Queuety::workflow_status($workflow_id);
+echo $state->name;          // 'generate_report'
+echo $state->status->value; // 'running'
+echo $state->current_step;  // 1
+echo $state->total_steps;   // 3
+print_r($state->state);     // Accumulated state array
+```
+
+### `Queuety::retry_workflow( int $workflow_id )`
+
+Retry a failed workflow from its failed step.
+
+```php
+Queuety::retry_workflow($workflow_id);
+```
+
+### `Queuety::pause_workflow( int $workflow_id )`
+
+Pause a running workflow. The current step finishes, but the next step is not enqueued.
+
+```php
+Queuety::pause_workflow($workflow_id);
+```
+
+### `Queuety::resume_workflow( int $workflow_id )`
+
+Resume a paused workflow.
+
+```php
+Queuety::resume_workflow($workflow_id);
+```
+
+## Workflow templates
+
+### `Queuety::define_workflow( string $name )`
+
+Start a workflow builder for use as a template. Returns a `WorkflowBuilder`.
+
+```php
+$builder = Queuety::define_workflow('weekly_report')
+    ->then(FetchDataHandler::class)
+    ->then(FormatOutputHandler::class);
+```
+
+### `Queuety::register_workflow_template( WorkflowBuilder $builder )`
+
+Register a workflow template from a builder.
+
+```php
+Queuety::register_workflow_template($builder);
+```
+
+### `Queuety::run_workflow( string $name, array $payload = [] )`
+
+Dispatch a registered workflow template by name. Returns the workflow ID. Throws `RuntimeException` if the template is not registered.
+
+```php
+$workflow_id = Queuety::run_workflow('weekly_report', ['user_id' => 42]);
+```
+
+### `Queuety::workflow_templates()`
+
+Returns the `WorkflowRegistry` instance.
+
+## Queue management
+
+### `Queuety::pause( string $queue )`
+
+Pause a queue. Workers will skip it.
+
+```php
+Queuety::pause('emails');
+```
+
+### `Queuety::resume( string $queue )`
+
+Resume a paused queue.
+
+```php
+Queuety::resume('emails');
+```
+
+### `Queuety::is_paused( string $queue )`
+
+Returns `true` if the queue is paused.
+
+```php
+if ( Queuety::is_paused('emails') ) {
+    // Queue is paused
+}
+```
+
+### `Queuety::stats( ?string $queue = null )`
+
+Returns job counts grouped by status.
+
+```php
+$stats = Queuety::stats();
+// ['pending' => 42, 'processing' => 3, 'completed' => 1200, 'failed' => 5, 'buried' => 1]
+
+$stats = Queuety::stats('emails');
+```
+
+### `Queuety::buried( ?string $queue = null )`
+
+Returns an array of `Job` objects in the `buried` state.
+
+```php
+$buried = Queuety::buried();
+$buried = Queuety::buried('emails');
+```
+
+### `Queuety::retry( int $job_id )`
+
+Retry a specific job (resets to `pending`).
+
+```php
+Queuety::retry(123);
+```
+
+### `Queuety::retry_buried()`
+
+Retry all buried jobs. Returns the number of jobs retried.
+
+```php
+$count = Queuety::retry_buried();
+```
+
+### `Queuety::purge( ?int $older_than_days = null )`
+
+Purge completed jobs. Returns the number of jobs purged.
+
+```php
+$count = Queuety::purge();     // Use default retention
+$count = Queuety::purge(30);   // Purge older than 30 days
+```
+
+## Scheduling
+
+### `Queuety::schedule( string $handler, array $payload = [] )`
+
+Create a recurring schedule. Returns a `PendingSchedule` builder.
+
+```php
+Queuety::schedule('cleanup_handler')
+    ->every('1 hour');
+
+Queuety::schedule('nightly_backup')
+    ->cron('0 3 * * *')
+    ->on_queue('maintenance');
+```
+
+### PendingSchedule methods
+
+| Method | Returns | Description |
+|---|---|---|
+| `->every(string $interval)` | `self` | Set interval expression (e.g. `'1 hour'`) |
+| `->cron(string $expression)` | `self` | Set cron expression (e.g. `'0 3 * * *'`) |
+| `->on_queue(string $queue)` | `self` | Set the target queue |
+| `->id()` | `int` | Force dispatch and return the schedule ID |
+
+### `Queuety::scheduler()`
+
+Returns the `Scheduler` instance for direct access.
+
+## Metrics
+
+### `Queuety::metrics()`
+
+Returns the `Metrics` instance.
+
+```php
+$metrics = Queuety::metrics();
+$metrics->throughput(minutes: 60);
+$metrics->average_duration(handler: 'SendEmailHandler', minutes: 60);
+$metrics->p95_duration(minutes: 60);
+$metrics->error_rate(handler: 'CallApiHandler', minutes: 60);
+$metrics->handler_stats(minutes: 60);
+```
+
+See [Metrics](/docs/features/metrics) for full details.
+
+## Webhooks
+
+### `Queuety::webhook_notifier()`
+
+Returns the `WebhookNotifier` instance.
+
+```php
+$notifier = Queuety::webhook_notifier();
+$id = $notifier->register('job.failed', 'https://hooks.slack.com/...');
+$notifier->list();
+$notifier->remove($id);
+```
+
+See [Webhooks](/docs/features/webhooks) for full details.
+
+## Rate limiting
+
+### `Queuety::rate_limiter()`
+
+Returns the `RateLimiter` instance.
+
+```php
+$limiter = Queuety::rate_limiter();
+$limiter->register('send_email', 50, 60);
+$allowed = $limiter->is_allowed('send_email');
+```
+
+## Internal instances
+
+These methods return internal singleton instances for advanced use cases:
+
+| Method | Returns |
+|---|---|
+| `Queuety::queue()` | `Queue` |
+| `Queuety::logger()` | `Logger` |
+| `Queuety::worker()` | `Worker` |
+| `Queuety::workflow_manager()` | `Workflow` |
+| `Queuety::connection()` | `Connection` |
+
+## Handler interface
+
+```php
+interface Handler {
+    public function handle( array $payload ): void;
+    public function config(): array;
+}
+```
+
+The `handle()` method receives the job payload and performs the work. It returns nothing. Throw an exception to signal failure.
+
+The `config()` method returns an associative array with optional keys: `queue`, `max_attempts`, `needs_wordpress`, `backoff`, `rate_limit`.
+
+## Step interface
+
+```php
+interface Step {
+    public function handle( array $state ): array;
+    public function config(): array;
+}
+```
+
+The `handle()` method receives the accumulated workflow state and returns an array of data to merge into the state. The return value is merged with `array_merge`.
+
+The `config()` method returns an associative array with optional keys: `needs_wordpress`, `max_attempts`, `backoff`.
+
+## Enums
+
+### `Queuety\Enums\Priority`
+
+```php
+enum Priority: int {
+    case Low    = 0;
+    case Normal = 1;
+    case High   = 2;
+    case Urgent = 3;
+}
+```
+
+### `Queuety\Enums\JobStatus`
+
+```php
+enum JobStatus: string {
+    case Pending    = 'pending';
+    case Processing = 'processing';
+    case Completed  = 'completed';
+    case Failed     = 'failed';
+    case Buried     = 'buried';
+}
+```
+
+### `Queuety\Enums\WorkflowStatus`
+
+```php
+enum WorkflowStatus: string {
+    case Running   = 'running';
+    case Completed = 'completed';
+    case Failed    = 'failed';
+    case Paused    = 'paused';
+}
+```
+
+### `Queuety\Enums\BackoffStrategy`
+
+```php
+enum BackoffStrategy: string {
+    case Fixed       = 'fixed';
+    case Linear      = 'linear';
+    case Exponential = 'exponential';
+}
+```
+
+### `Queuety\Enums\ExpressionType`
+
+```php
+enum ExpressionType: string {
+    case Interval = 'interval';
+    case Cron     = 'cron';
+}
+```
+
+## QueuetyHandler attribute
+
+```php
+use Queuety\Attributes\QueuetyHandler;
+
+#[QueuetyHandler(
+    name: 'send_email',
+    queue: 'emails',
+    max_attempts: 5,
+    needs_wordpress: true,
+)]
+class SendEmailHandler implements Handler { ... }
+```
+
+See [PHP Attributes](/docs/features/attributes) for auto-discovery details.

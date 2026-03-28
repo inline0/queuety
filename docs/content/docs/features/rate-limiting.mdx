@@ -1,0 +1,87 @@
+---
+title: Rate Limiting
+description: Control job throughput with per-handler rate limits.
+---
+
+# Rate Limiting
+
+Queuety supports per-handler rate limiting to control how many jobs of a given type can execute within a time window. This is useful for protecting external APIs, throttling email sends, or preventing resource exhaustion.
+
+## Setting a rate limit
+
+### At dispatch time
+
+```php
+use Queuety\Queuety;
+
+Queuety::dispatch('call_api', ['endpoint' => '/users'])
+    ->rate_limit(10, 60); // Max 10 executions per 60 seconds
+```
+
+The first argument is the maximum number of executions allowed. The second is the window duration in seconds.
+
+### In handler config
+
+```php
+use Queuety\Handler;
+
+class CallApiHandler implements Handler {
+    public function handle( array $payload ): void {
+        // Make API call...
+    }
+
+    public function config(): array {
+        return [
+            'rate_limit' => [10, 60], // Max 10 per 60 seconds
+        ];
+    }
+}
+```
+
+When the rate limit is defined in handler config, it applies to all jobs using that handler, regardless of how they were dispatched.
+
+## How rate limiting works
+
+Rate limits are enforced by the worker at claim time. When a worker picks up a job:
+
+1. It checks whether the handler has a registered rate limit.
+2. If yes, it queries the logs table to count recent completions for that handler within the window.
+3. If the count equals or exceeds the limit, the worker skips the job (leaves it as `pending`) and moves to the next job.
+4. The skipped job will be picked up on a future worker tick when the rate limit window has elapsed.
+
+This approach is non-blocking. Other handlers in the same queue continue to process while the rate-limited handler waits.
+
+## Rate limiter PHP API
+
+```php
+// Register a rate limit directly
+Queuety::rate_limiter()->register('send_email', 50, 60);
+
+// Check if a handler is currently rate-limited
+$allowed = Queuety::rate_limiter()->is_allowed('send_email');
+```
+
+## Practical examples
+
+### Email throttling
+
+```php
+Queuety::dispatch('send_email', ['to' => $email])
+    ->rate_limit(50, 60); // 50 emails per minute
+```
+
+### API rate limits
+
+```php
+// Match your API provider's rate limit
+Queuety::dispatch('openai_completion', ['prompt' => $prompt])
+    ->rate_limit(60, 60); // 60 requests per minute
+```
+
+### Payment processing
+
+```php
+Queuety::dispatch('charge_card', ['order_id' => $id])
+    ->rate_limit(100, 60)
+    ->on_queue('payments');
+```
