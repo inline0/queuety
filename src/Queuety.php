@@ -399,6 +399,16 @@ class Queuety {
 	}
 
 	/**
+	 * Cancel a workflow and run any cleanup handlers.
+	 *
+	 * @param int $workflow_id Workflow ID.
+	 */
+	public static function cancel_workflow( int $workflow_id ): void {
+		self::ensure_initialized();
+		self::$workflow->cancel( $workflow_id );
+	}
+
+	/**
 	 * Retry a failed workflow from its failed step.
 	 *
 	 * @param int $workflow_id Workflow ID.

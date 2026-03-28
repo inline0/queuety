@@ -489,9 +489,32 @@ class Workflow {
 			$steps        = $state['_steps'] ?? array();
 
 			// Merge step output into state (user data only, preserve reserved keys).
+			$output_keys = array();
 			foreach ( $step_output as $key => $value ) {
 				if ( ! str_starts_with( $key, '_' ) ) {
 					$state[ $key ] = $value;
+					$output_keys[] = $key;
+				}
+			}
+
+			// Track step output keys for pruning.
+			if ( isset( $state['_prune_state_after'] ) && is_array( $state['_step_outputs'] ?? null ) ) {
+				$state['_step_outputs'][ $current_step ] = $output_keys;
+
+				// Prune old step data if configured.
+				$prune_after = (int) $state['_prune_state_after'];
+				if ( $current_step >= $prune_after ) {
+					$cutoff = $current_step - $prune_after;
+					foreach ( $state['_step_outputs'] as $step_idx => $keys ) {
+						if ( (int) $step_idx <= $cutoff ) {
+							foreach ( $keys as $key ) {
+								if ( ! str_starts_with( $key, '_' ) && isset( $state[ $key ] ) ) {
+									unset( $state[ $key ] );
+								}
+							}
+							unset( $state['_step_outputs'][ $step_idx ] );
+						}
+					}
 				}
 			}
 
@@ -972,6 +995,107 @@ class Workflow {
 
 		// Do NOT advance the parent workflow. The parent stays at current_step
 		// and will be advanced when the sub-workflow completes (via on_workflow_completed).
+	}
+
+	/**
+	 * Cancel a workflow with optional cleanup handler execution.
+	 *
+	 * Loads the workflow state, runs the cleanup handler if defined,
+	 * sets the status to cancelled, and buries any pending jobs.
+	 *
+	 * @param int $workflow_id The workflow ID.
+	 * @throws \RuntimeException If the workflow is not found or already completed/cancelled.
+	 * @throws \Throwable If the database transaction fails.
+	 */
+	public function cancel( int $workflow_id ): void {
+		$pdo    = $this->conn->pdo();
+		$wf_tbl = $this->conn->table( Config::table_workflows() );
+		$jb_tbl = $this->conn->table( Config::table_jobs() );
+
+		$pdo->beginTransaction();
+		try {
+			// Lock and fetch the workflow row.
+			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+			$stmt->execute( array( 'id' => $workflow_id ) );
+			$wf_row = $stmt->fetch();
+
+			if ( ! $wf_row ) {
+				$pdo->rollBack();
+				throw new \RuntimeException( "Workflow {$workflow_id} not found." );
+			}
+
+			$current_status = $wf_row['status'];
+
+			// Cannot cancel already completed or cancelled workflows.
+			if ( in_array( $current_status, array( 'completed', 'cancelled' ), true ) ) {
+				$pdo->rollBack();
+				throw new \RuntimeException(
+					"Workflow {$workflow_id} is already {$current_status}."
+				);
+			}
+
+			$state = json_decode( $wf_row['state'], true ) ?: array();
+
+			// Run the cleanup handler if defined.
+			$cancel_handler = $state['_on_cancel'] ?? null;
+			if ( null !== $cancel_handler && class_exists( $cancel_handler ) ) {
+				// Build public state (strip reserved keys).
+				$public_state = array_filter(
+					$state,
+					fn( string $key ) => ! str_starts_with( $key, '_' ),
+					ARRAY_FILTER_USE_KEY
+				);
+
+				$handler_instance = new $cancel_handler();
+				$handler_instance->handle( $public_state );
+			}
+
+			// Set workflow status to cancelled.
+			$upd = $pdo->prepare(
+				"UPDATE {$wf_tbl}
+				SET status = :status, completed_at = NOW()
+				WHERE id = :id"
+			);
+			$upd->execute(
+				array(
+					'status' => WorkflowStatus::Cancelled->value,
+					'id'     => $workflow_id,
+				)
+			);
+
+			// Bury any pending or processing jobs for this workflow.
+			$bury = $pdo->prepare(
+				"UPDATE {$jb_tbl}
+				SET status = :buried, failed_at = NOW(), error_message = :error
+				WHERE workflow_id = :workflow_id
+					AND status IN (:pending, :processing)"
+			);
+			$bury->execute(
+				array(
+					'buried'      => JobStatus::Buried->value,
+					'error'       => 'Workflow cancelled',
+					'workflow_id' => $workflow_id,
+					'pending'     => JobStatus::Pending->value,
+					'processing'  => JobStatus::Processing->value,
+				)
+			);
+
+			$this->logger->log(
+				LogEvent::WorkflowCancelled,
+				array(
+					'workflow_id' => $workflow_id,
+					'handler'     => $wf_row['name'],
+					'queue'       => $state['_queue'] ?? 'default',
+				)
+			);
+
+			$pdo->commit();
+		} catch ( \Throwable $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+			throw $e;
+		}
 	}
 
 	/**

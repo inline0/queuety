@@ -36,7 +36,8 @@ readonly class Job {
 	 * @param \DateTimeImmutable      $created_at    When the job was created.
 	 * @param string|null             $payload_hash  SHA-256 hash of the payload for unique job detection.
 	 * @param int|null                $depends_on    ID of the job this job depends on.
-	 * @param int|null                $batch_id      Batch ID if part of a batch.
+	 * @param int|null                $batch_id       Batch ID if part of a batch.
+	 * @param array|null              $heartbeat_data Progress data from heartbeats.
 	 */
 	public function __construct(
 		public int $id,
@@ -58,6 +59,7 @@ readonly class Job {
 		public ?string $payload_hash = null,
 		public ?int $depends_on = null,
 		public ?int $batch_id = null,
+		public ?array $heartbeat_data = null,
 	) {}
 
 	/**
@@ -87,6 +89,9 @@ readonly class Job {
 			payload_hash: $row['payload_hash'] ?? null,
 			depends_on: isset( $row['depends_on'] ) && null !== $row['depends_on'] ? (int) $row['depends_on'] : null,
 			batch_id: isset( $row['batch_id'] ) && null !== $row['batch_id'] ? (int) $row['batch_id'] : null,
+			heartbeat_data: isset( $row['heartbeat_data'] ) && null !== $row['heartbeat_data']
+				? ( json_decode( $row['heartbeat_data'], true ) ?: null )
+				: null,
 		);
 	}
 

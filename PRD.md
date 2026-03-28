@@ -782,6 +782,37 @@ This means WooCommerce and any plugin using Action Scheduler can switch to Queue
 - Auto-discovery of handler classes from a configured directory
 - Debug mode with verbose worker logging
 
+### v0.6.0 - Modern API
+
+- Dispatchable job classes (`Contracts\Job` interface, `Dispatchable` trait)
+- Middleware pipeline (RateLimited, Timeout, UniqueJob, WithoutOverlapping)
+- Durable timers (`->sleep(hours: 24)` in workflows)
+- Workflow signals (`->wait_for_signal()` + `Queuety::signal()`)
+
+### v0.7.0 - Laravel API parity
+
+- Job batching with callbacks (`Queuety::batch()->then()->catch()->finally()`)
+- Job chaining (`Queuety::chain([...])`)
+- Job properties (`$tries`, `$timeout`, `$backoff` on class)
+- Failed hook (`failed()` method on job classes)
+- Conditional dispatch (`dispatch_if()`, `dispatch_unless()`, `dispatch_sync()`)
+- ThrottlesExceptions middleware
+- Testing utilities (`Queuety::fake()`, assertions)
+
+### v0.8.0 - Workflow resilience
+
+- Workflow cancellation with cleanup handlers
+- Activity heartbeats (long-running steps prove they're alive)
+- Schedule overlap policies (skip, buffer, allow)
+- Workflow state pruning (strip completed step data)
+
+### v0.9.0 - LLM streaming
+
+- SSE streaming step type for LLM responses
+- Chunk persistence (save chunks as they arrive)
+- Resumable streaming (pick up from last chunk on retry)
+- Continuation with existing state into next call
+
 ## Distribution
 
 - Composer: `composer require queuety/queuety`

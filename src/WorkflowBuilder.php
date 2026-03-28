@@ -54,6 +54,20 @@ class WorkflowBuilder {
 	private int $max_attempts = 3;
 
 	/**
+	 * Cancellation cleanup handler class.
+	 *
+	 * @var string|null
+	 */
+	private ?string $cancel_handler = null;
+
+	/**
+	 * Number of steps after which old state data is pruned.
+	 *
+	 * @var int|null
+	 */
+	private ?int $prune_after = null;
+
+	/**
 	 * Constructor.
 	 *
 	 * @param string     $name      Workflow name.
@@ -170,6 +184,34 @@ class WorkflowBuilder {
 			'signal_name' => $name,
 			'name'        => 'wait_for_' . $name,
 		);
+		return $this;
+	}
+
+	/**
+	 * Register a cleanup handler class that runs when the workflow is cancelled.
+	 *
+	 * The handler class must implement a handle(array $state): void method.
+	 *
+	 * @param string $handler_class Fully qualified class name.
+	 * @return self
+	 */
+	public function on_cancel( string $handler_class ): self {
+		$this->cancel_handler = $handler_class;
+		return $this;
+	}
+
+	/**
+	 * Enable state pruning after a given number of steps.
+	 *
+	 * When enabled, step output keys from steps older than the given number
+	 * are removed from the workflow state to keep it bounded.
+	 * Reserved keys (starting with _) are never pruned.
+	 *
+	 * @param int $steps Number of steps to keep (default 2).
+	 * @return self
+	 */
+	public function prune_state_after( int $steps = 2 ): self {
+		$this->prune_after = $steps;
 		return $this;
 	}
 
@@ -317,6 +359,15 @@ class WorkflowBuilder {
 		$state['_queue']        = $this->queue;
 		$state['_priority']     = $this->priority->value;
 		$state['_max_attempts'] = $this->max_attempts;
+
+		if ( null !== $this->cancel_handler ) {
+			$state['_on_cancel'] = $this->cancel_handler;
+		}
+
+		if ( null !== $this->prune_after ) {
+			$state['_prune_state_after'] = $this->prune_after;
+			$state['_step_outputs']      = array();
+		}
 
 		$pdo->beginTransaction();
 		try {

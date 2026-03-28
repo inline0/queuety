@@ -8,6 +8,8 @@
 namespace Queuety;
 
 use Queuety\Enums\ExpressionType;
+use Queuety\Enums\JobStatus;
+use Queuety\Enums\OverlapPolicy;
 
 /**
  * Core scheduler: manages recurring job schedules and enqueues due jobs.
@@ -28,11 +30,12 @@ class Scheduler {
 	/**
 	 * Add a new schedule.
 	 *
-	 * @param string         $handler    Handler name or class.
-	 * @param array          $payload    Job payload.
-	 * @param string         $queue      Queue name.
-	 * @param string         $expression Cron or interval expression.
-	 * @param ExpressionType $type       Type of expression.
+	 * @param string         $handler        Handler name or class.
+	 * @param array          $payload        Job payload.
+	 * @param string         $queue          Queue name.
+	 * @param string         $expression     Cron or interval expression.
+	 * @param ExpressionType $type           Type of expression.
+	 * @param OverlapPolicy  $overlap_policy Overlap policy for concurrent runs.
 	 * @return int The new schedule ID.
 	 */
 	public function add(
@@ -41,15 +44,16 @@ class Scheduler {
 		string $queue,
 		string $expression,
 		ExpressionType $type,
+		OverlapPolicy $overlap_policy = OverlapPolicy::Allow,
 	): int {
 		$table    = $this->conn->table( Config::table_schedules() );
 		$next_run = $this->calculate_next_run( $expression, $type );
 
 		$stmt = $this->conn->pdo()->prepare(
 			"INSERT INTO {$table}
-				(handler, payload, queue, expression, expression_type, next_run)
+				(handler, payload, queue, expression, expression_type, next_run, overlap_policy)
 			VALUES
-				(:handler, :payload, :queue, :expression, :expression_type, :next_run)"
+				(:handler, :payload, :queue, :expression, :expression_type, :next_run, :overlap_policy)"
 		);
 
 		$stmt->execute(
@@ -60,6 +64,7 @@ class Scheduler {
 				'expression'      => $expression,
 				'expression_type' => $type->value,
 				'next_run'        => $next_run->format( 'Y-m-d H:i:s' ),
+				'overlap_policy'  => $overlap_policy->value,
 			)
 		);
 
@@ -163,17 +168,71 @@ class Scheduler {
 			$stmt->execute();
 			$rows = $stmt->fetchAll();
 
+			$jobs_table = $this->conn->table( Config::table_jobs() );
+
 			foreach ( $rows as $row ) {
 				$schedule = Schedule::from_row( $row );
+				$now      = new \DateTimeImmutable( 'now' );
+				$next_run = $this->calculate_next_run( $schedule->expression, $schedule->expression_type, $now );
+				$policy   = $schedule->overlap_policy;
+
+				// Check overlap policy before enqueueing.
+				if ( OverlapPolicy::Allow !== $policy ) {
+					$check_stmt = $pdo->prepare(
+						"SELECT COUNT(*) AS cnt FROM {$jobs_table}
+						WHERE handler = :handler
+							AND status IN (:pending, :processing)"
+					);
+					$check_stmt->execute(
+						array(
+							'handler'    => $schedule->handler,
+							'pending'    => JobStatus::Pending->value,
+							'processing' => JobStatus::Processing->value,
+						)
+					);
+					$has_running = (int) $check_stmt->fetch()['cnt'] > 0;
+
+					if ( $has_running ) {
+						if ( OverlapPolicy::Skip === $policy ) {
+							// Skip: just update next_run without enqueueing.
+							$update = $pdo->prepare(
+								"UPDATE {$table}
+								SET last_run = :last_run, next_run = :next_run
+								WHERE id = :id"
+							);
+							$update->execute(
+								array(
+									'last_run' => $now->format( 'Y-m-d H:i:s' ),
+									'next_run' => $next_run->format( 'Y-m-d H:i:s' ),
+									'id'       => $schedule->id,
+								)
+							);
+							continue;
+						}
+
+						if ( OverlapPolicy::Buffer === $policy ) {
+							// Buffer: push next_run to try again next tick.
+							$update = $pdo->prepare(
+								"UPDATE {$table}
+								SET next_run = :next_run
+								WHERE id = :id"
+							);
+							$update->execute(
+								array(
+									'next_run' => $next_run->format( 'Y-m-d H:i:s' ),
+									'id'       => $schedule->id,
+								)
+							);
+							continue;
+						}
+					}
+				}
 
 				$this->queue->dispatch(
 					handler: $schedule->handler,
 					payload: $schedule->payload,
 					queue: $schedule->queue,
 				);
-
-				$now      = new \DateTimeImmutable( 'now' );
-				$next_run = $this->calculate_next_run( $schedule->expression, $schedule->expression_type, $now );
 
 				$update = $pdo->prepare(
 					"UPDATE {$table}

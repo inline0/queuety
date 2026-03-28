@@ -8,6 +8,7 @@
 namespace Queuety;
 
 use Queuety\Enums\ExpressionType;
+use Queuety\Enums\OverlapPolicy;
 
 /**
  * Immutable value object representing a scheduled recurring job.
@@ -27,6 +28,7 @@ readonly class Schedule {
 	 * @param \DateTimeImmutable      $next_run        When the schedule should next run.
 	 * @param bool                    $enabled         Whether the schedule is active.
 	 * @param \DateTimeImmutable      $created_at      When the schedule was created.
+	 * @param OverlapPolicy           $overlap_policy  Overlap policy for concurrent runs.
 	 */
 	public function __construct(
 		public int $id,
@@ -39,6 +41,7 @@ readonly class Schedule {
 		public \DateTimeImmutable $next_run,
 		public bool $enabled,
 		public \DateTimeImmutable $created_at,
+		public OverlapPolicy $overlap_policy = OverlapPolicy::Allow,
 	) {}
 
 	/**
@@ -59,6 +62,7 @@ readonly class Schedule {
 			next_run: new \DateTimeImmutable( $row['next_run'] ),
 			enabled: (bool) $row['enabled'],
 			created_at: new \DateTimeImmutable( $row['created_at'] ),
+			overlap_policy: OverlapPolicy::tryFrom( $row['overlap_policy'] ?? 'allow' ) ?? OverlapPolicy::Allow,
 		);
 	}
 }

@@ -49,6 +49,7 @@ class Schema {
 				step_index TINYINT UNSIGNED DEFAULT NULL,
 				depends_on BIGINT UNSIGNED DEFAULT NULL,
 				batch_id BIGINT UNSIGNED DEFAULT NULL,
+				heartbeat_data JSON DEFAULT NULL,
 				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				INDEX idx_queue_status_available (queue, status, available_at, priority),
 				INDEX idx_status (status),
@@ -64,7 +65,7 @@ class Schema {
 			"CREATE TABLE IF NOT EXISTS {$wf} (
 				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 				name VARCHAR(255) NOT NULL,
-				status ENUM('running', 'completed', 'failed', 'paused', 'waiting_signal') NOT NULL DEFAULT 'running',
+				status ENUM('running', 'completed', 'failed', 'paused', 'waiting_signal', 'cancelled') NOT NULL DEFAULT 'running',
 				state LONGTEXT NOT NULL,
 				current_step TINYINT UNSIGNED NOT NULL DEFAULT 0,
 				total_steps TINYINT UNSIGNED NOT NULL,
@@ -87,7 +88,7 @@ class Schema {
 				step_index TINYINT UNSIGNED DEFAULT NULL,
 				handler VARCHAR(255) NOT NULL,
 				queue VARCHAR(64) NOT NULL DEFAULT 'default',
-				event ENUM('started', 'completed', 'failed', 'buried', 'retried', 'workflow_started', 'workflow_completed', 'workflow_failed', 'workflow_paused', 'workflow_resumed', 'debug') NOT NULL,
+				event ENUM('started', 'completed', 'failed', 'buried', 'retried', 'workflow_started', 'workflow_completed', 'workflow_failed', 'workflow_paused', 'workflow_resumed', 'workflow_cancelled', 'debug') NOT NULL,
 				attempt TINYINT UNSIGNED DEFAULT NULL,
 				duration_ms INT UNSIGNED DEFAULT NULL,
 				memory_peak_kb INT UNSIGNED DEFAULT NULL,
@@ -114,6 +115,7 @@ class Schema {
 				expression_type ENUM('interval', 'cron') NOT NULL,
 				last_run DATETIME DEFAULT NULL,
 				next_run DATETIME NOT NULL,
+				overlap_policy ENUM('allow', 'skip', 'buffer') NOT NULL DEFAULT 'allow',
 				enabled TINYINT(1) NOT NULL DEFAULT 1,
 				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				UNIQUE INDEX idx_handler (handler),
@@ -268,6 +270,43 @@ class Schema {
 				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				finished_at DATETIME DEFAULT NULL
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
+	}
+
+	/**
+	 * Migrate from v0.7.x to v0.8.0.
+	 *
+	 * Adds 'cancelled' to the workflows status ENUM, 'workflow_cancelled' to
+	 * the logs event ENUM, heartbeat_data column to jobs table, and
+	 * overlap_policy column to schedules table.
+	 *
+	 * @param Connection $conn Database connection.
+	 */
+	public static function migrate_080( Connection $conn ): void {
+		$pdo       = $conn->pdo();
+		$wf        = $conn->table( Config::table_workflows() );
+		$logs      = $conn->table( Config::table_logs() );
+		$jobs      = $conn->table( Config::table_jobs() );
+		$schedules = $conn->table( Config::table_schedules() );
+
+		$pdo->exec(
+			"ALTER TABLE {$wf} MODIFY COLUMN status
+			ENUM('running', 'completed', 'failed', 'paused', 'waiting_signal', 'cancelled')
+			NOT NULL DEFAULT 'running'"
+		);
+
+		$pdo->exec(
+			"ALTER TABLE {$logs} MODIFY COLUMN event
+			ENUM('started', 'completed', 'failed', 'buried', 'retried', 'workflow_started', 'workflow_completed', 'workflow_failed', 'workflow_paused', 'workflow_resumed', 'workflow_cancelled', 'debug')
+			NOT NULL"
+		);
+
+		$pdo->exec(
+			"ALTER TABLE {$jobs} ADD COLUMN heartbeat_data JSON DEFAULT NULL AFTER batch_id"
+		);
+
+		$pdo->exec(
+			"ALTER TABLE {$schedules} ADD COLUMN overlap_policy ENUM('allow', 'skip', 'buffer') NOT NULL DEFAULT 'allow' AFTER next_run"
 		);
 	}
 

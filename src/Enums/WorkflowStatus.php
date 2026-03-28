@@ -13,4 +13,5 @@ enum WorkflowStatus: string {
 	case Failed        = 'failed';
 	case Paused        = 'paused';
 	case WaitingSignal = 'waiting_signal';
+	case Cancelled     = 'cancelled';
 }

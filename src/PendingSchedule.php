@@ -8,6 +8,7 @@
 namespace Queuety;
 
 use Queuety\Enums\ExpressionType;
+use Queuety\Enums\OverlapPolicy;
 
 /**
  * Fluent builder for adding a recurring schedule.
@@ -41,6 +42,13 @@ class PendingSchedule {
 	 * @var string
 	 */
 	private string $queue = 'default';
+
+	/**
+	 * Overlap policy for concurrent runs.
+	 *
+	 * @var OverlapPolicy
+	 */
+	private OverlapPolicy $overlap_policy = OverlapPolicy::Allow;
 
 	/**
 	 * Whether the schedule has been dispatched.
@@ -103,6 +111,17 @@ class PendingSchedule {
 	}
 
 	/**
+	 * Set the overlap policy.
+	 *
+	 * @param OverlapPolicy $policy Overlap policy.
+	 * @return self
+	 */
+	public function overlap( OverlapPolicy $policy ): self {
+		$this->overlap_policy = $policy;
+		return $this;
+	}
+
+	/**
 	 * Set the target queue.
 	 *
 	 * @param string $queue Queue name.
@@ -141,6 +160,7 @@ class PendingSchedule {
 			queue: $this->queue,
 			expression: $this->expression,
 			type: $this->expression_type,
+			overlap_policy: $this->overlap_policy,
 		);
 		$this->dispatched  = true;
 	}

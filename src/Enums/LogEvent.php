@@ -18,5 +18,6 @@ enum LogEvent: string {
 	case WorkflowFailed    = 'workflow_failed';
 	case WorkflowPaused    = 'workflow_paused';
 	case WorkflowResumed   = 'workflow_resumed';
+	case WorkflowCancelled = 'workflow_cancelled';
 	case Debug             = 'debug';
 }

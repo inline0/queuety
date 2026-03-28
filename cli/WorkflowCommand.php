@@ -70,6 +70,24 @@ class WorkflowCommand extends \WP_CLI_Command {
 	}
 
 	/**
+	 * Cancel a workflow and run cleanup handlers.
+	 *
+	 * <id>
+	 * : Workflow ID.
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function cancel( $args, $assoc_args ) {
+		try {
+			Queuety::cancel_workflow( (int) $args[0] );
+			\WP_CLI::success( "Workflow #{$args[0]} cancelled." );
+		} catch ( \RuntimeException $e ) {
+			\WP_CLI::error( $e->getMessage() );
+		}
+	}
+
+	/**
 	 * Resume a paused workflow.
 	 *
 	 * <id>

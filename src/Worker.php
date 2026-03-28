@@ -254,6 +254,9 @@ class Worker {
 			pcntl_alarm( $timeout_seconds );
 		}
 
+		// Initialize heartbeat context for this job.
+		Heartbeat::init( $job->id, $this->conn );
+
 		try {
 			// Handle sub-workflow placeholder jobs directly.
 			if ( $job->is_workflow_step() && '__queuety_sub_workflow' === $job->handler ) {
@@ -572,6 +575,9 @@ class Worker {
 				);
 			}
 		} finally {
+			// Clear heartbeat context.
+			Heartbeat::clear();
+
 			// Reset the alarm and restore previous signal handler.
 			if ( $pcntl_available ) {
 				pcntl_alarm( 0 );
