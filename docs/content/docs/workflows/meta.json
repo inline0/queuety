@@ -1,3 +1,3 @@
 {
-  "pages": ["index", "chains", "parallel", "conditional", "sub-workflows", "templates", "timers", "signals"]
+  "pages": ["index", "chains", "parallel", "conditional", "sub-workflows", "templates", "timers", "signals", "streaming", "cancellation"]
 }

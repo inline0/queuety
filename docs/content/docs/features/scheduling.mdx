@@ -54,8 +54,61 @@ The `PendingSchedule` builder supports these methods:
 | `every( string $interval )` | Set an interval expression |
 | `cron( string $expression )` | Set a cron expression |
 | `on_queue( string $queue )` | Set the target queue (default: `'default'`) |
+| `overlap( OverlapPolicy $policy )` | Set the overlap policy (default: `Allow`) |
 
 You must call either `every()` or `cron()` before the schedule dispatches. If neither is set, a `RuntimeException` is thrown.
+
+## Overlap policies
+
+When a scheduled job is still running (pending or processing) at the time the next tick fires, the overlap policy determines what happens. Set it with the `overlap()` method:
+
+```php
+use Queuety\Queuety;
+use Queuety\Enums\OverlapPolicy;
+
+Queuety::schedule( 'sync_inventory' )
+    ->every( '5 minutes' )
+    ->overlap( OverlapPolicy::Skip )
+    ->on_queue( 'sync' );
+```
+
+The `OverlapPolicy` enum has three cases:
+
+| Policy | Value | Behavior |
+|---|---|---|
+| `OverlapPolicy::Allow` | `allow` | Always dispatch a new job, even if the previous run is still active. This is the default. |
+| `OverlapPolicy::Skip` | `skip` | Skip the current tick if the handler has any pending or processing jobs. The `next_run` is updated normally so the schedule stays on cadence. |
+| `OverlapPolicy::Buffer` | `buffer` | Do not dispatch now, but push `next_run` forward so the job is retried on the next tick. This effectively buffers one pending execution until the current run finishes. |
+
+### Allow (default)
+
+Multiple instances of the same handler can run concurrently. Use this for idempotent handlers where overlap is harmless.
+
+```php
+Queuety::schedule( 'send_heartbeat_ping' )
+    ->every( '1 minute' )
+    ->overlap( OverlapPolicy::Allow );
+```
+
+### Skip
+
+The tick is silently skipped if the handler is still running. Use this for handlers where running a second instance would be wasteful or cause conflicts.
+
+```php
+Queuety::schedule( 'rebuild_search_index' )
+    ->every( '10 minutes' )
+    ->overlap( OverlapPolicy::Skip );
+```
+
+### Buffer
+
+Similar to Skip, but the next run is rescheduled to the very next tick instead of the next regular interval. Use this when you want to guarantee the job runs as soon as the current instance finishes, without stacking up multiple runs.
+
+```php
+Queuety::schedule( 'sync_inventory' )
+    ->every( '5 minutes' )
+    ->overlap( OverlapPolicy::Buffer );
+```
 
 ## How it works
 

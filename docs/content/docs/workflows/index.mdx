@@ -61,6 +61,8 @@ dispatch() -> running -> step 0 -> step 1 -> ... -> step N -> completed
                   +-> paused -> resumed -> running
                   |
                   +-> waiting_signal -> signal received -> running
+                  |
+                  +-> cancelled (via cancel_workflow)
 ```
 
 | Status | Description |
@@ -70,6 +72,7 @@ dispatch() -> running -> step 0 -> step 1 -> ... -> step N -> completed
 | `failed` | A step failed after exhausting retries |
 | `paused` | Manually paused, no steps will execute |
 | `waiting_signal` | Waiting for an external signal via `Queuety::signal()` |
+| `cancelled` | Explicitly cancelled via `Queuety::cancel_workflow()`. Pending jobs are buried and an optional cleanup handler runs. |
 
 ## Managing workflows
 
@@ -95,6 +98,14 @@ Retry a failed workflow from its failed step:
 Queuety::retry_workflow( $workflow_id );
 ```
 
+Cancel a workflow and run cleanup handlers:
+
+```php
+Queuety::cancel_workflow( $workflow_id );
+```
+
+See [Cancellation](/docs/workflows/cancellation) for details on cleanup handlers and what happens when a workflow is cancelled.
+
 ## Workflow options
 
 Set queue, priority, and retry behavior for all steps in a workflow:
@@ -106,14 +117,20 @@ Queuety::workflow( 'important_pipeline' )
     ->on_queue( 'pipelines' )
     ->with_priority( Priority::High )
     ->max_attempts( 5 )
+    ->on_cancel( PipelineCleanupHandler::class )
+    ->prune_state_after( 3 )
     ->then( StepA::class )
     ->then( StepB::class )
     ->dispatch( $payload );
 ```
 
+The `on_cancel()` method registers a cleanup handler that runs when the workflow is cancelled. See [Cancellation](/docs/workflows/cancellation).
+
+The `prune_state_after()` method enables automatic removal of old step outputs to keep the workflow state bounded. See [State Pruning](/docs/features/state-pruning).
+
 ## Step types
 
-Queuety supports six types of steps within a workflow:
+Queuety supports seven types of steps within a workflow:
 
 - [Sequential chains](/docs/workflows/chains) using `->then()` for one-at-a-time execution
 - [Parallel groups](/docs/workflows/parallel) using `->parallel()` for concurrent execution
@@ -121,3 +138,4 @@ Queuety supports six types of steps within a workflow:
 - [Sub-workflows](/docs/workflows/sub-workflows) using `->sub_workflow()` for nested composition
 - [Durable timers](/docs/workflows/timers) using `->sleep()` for time-based delays
 - [Signals](/docs/workflows/signals) using `->wait_for_signal()` for external event triggers
+- [Streaming steps](/docs/workflows/streaming) using the `StreamingStep` interface for durable chunk-based output

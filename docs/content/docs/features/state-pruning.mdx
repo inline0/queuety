@@ -1,0 +1,69 @@
+---
+title: State Pruning
+description: Automatic pruning of old workflow state to keep it bounded.
+---
+
+# State Pruning
+
+As a workflow progresses through many steps, the accumulated state can grow large. State pruning automatically removes old step outputs to keep the state JSON bounded while preserving the data that matters.
+
+## Enabling state pruning
+
+Call `prune_state_after()` on the workflow builder. The argument is the number of recent steps whose output should be kept:
+
+```php
+use Queuety\Queuety;
+
+Queuety::workflow( 'long_pipeline' )
+    ->then( StepA::class )
+    ->then( StepB::class )
+    ->then( StepC::class )
+    ->then( StepD::class )
+    ->then( StepE::class )
+    ->prune_state_after( 2 )
+    ->dispatch( [ 'input' => $data ] );
+```
+
+With `prune_state_after( 2 )`, after step D completes, the outputs from steps A and B are removed from the state. Steps C and D (the two most recent) are preserved.
+
+## How pruning works
+
+When state pruning is enabled, Queuety tracks which keys each step adds to the state in a reserved `_step_outputs` array. After advancing to a new step, any keys introduced by steps older than the threshold are removed.
+
+For example, with `prune_state_after( 2 )`:
+
+```
+After step 0 (StepA): state has keys from StepA + initial payload
+After step 1 (StepB): state has keys from StepA + StepB + initial payload
+After step 2 (StepC): state has keys from StepA + StepB + StepC + initial payload
+  -> prune: StepA output removed (only 2 most recent kept)
+After step 3 (StepD): state has keys from StepB + StepC + StepD + initial payload
+  -> prune: StepB output removed
+```
+
+## What is preserved
+
+The following data is never pruned:
+
+- **Reserved keys** that start with `_` (such as `_steps`, `_queue`, `_priority`, `_max_attempts`, `_on_cancel`, `_prune_state_after`, `_step_outputs`)
+- **Initial payload keys** passed to `dispatch()` are not tracked as step outputs, so they are never pruned
+- **The N most recent step outputs** as configured by the threshold
+
+## When to use it
+
+State pruning is helpful for workflows with many steps where each step produces data that subsequent steps do not need. Common examples:
+
+- Pipelines with 10+ steps where each step only needs the output of the previous 1-2 steps
+- ETL workflows that produce intermediate data structures
+- Recursive or looping workflows that accumulate repetitive output
+
+If your workflow has only a few steps or later steps need data from early steps, you do not need state pruning.
+
+## Default behavior
+
+State pruning is disabled by default. The `prune_state_after()` method accepts an integer argument. Calling it without an argument defaults to 2:
+
+```php
+->prune_state_after()     // keeps the 2 most recent step outputs
+->prune_state_after( 5 )  // keeps the 5 most recent step outputs
+```

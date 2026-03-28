@@ -259,6 +259,8 @@ $workflow_id = Queuety::workflow( 'generate_report' )
 | `on_queue( string $queue )` | Set the queue for all steps. |
 | `with_priority( Priority $priority )` | Set the priority for all steps. |
 | `max_attempts( int $max )` | Set max retry attempts per step. |
+| `on_cancel( string $class )` | Register a cleanup handler class for cancellation. See [Cancellation](/docs/workflows/cancellation). |
+| `prune_state_after( int $steps = 2 )` | Enable automatic state pruning. Removes step outputs older than the threshold. See [State Pruning](/docs/features/state-pruning). |
 | `dispatch( array $payload )` | Dispatch the workflow. Returns the workflow ID. |
 
 ### `Queuety::workflow_status( $workflow_id )`
@@ -297,6 +299,16 @@ Resume a paused workflow.
 ```php
 Queuety::resume_workflow( $workflow_id );
 ```
+
+### `Queuety::cancel_workflow( $workflow_id )`
+
+Cancel a workflow and run any registered cleanup handlers. Sets the status to `cancelled` and buries all pending and processing jobs for the workflow.
+
+```php
+Queuety::cancel_workflow( $workflow_id );
+```
+
+Throws `RuntimeException` if the workflow is already `completed` or `cancelled`. See [Cancellation](/docs/workflows/cancellation) for details.
 
 ### `Queuety::signal( $workflow_id, $name, $data )`
 
@@ -374,6 +386,7 @@ Queuety::schedule( 'nightly_report' )
 |---|---|
 | `every( string $interval )` | Set an interval expression (e.g. `1 hour`, `30 minutes`) |
 | `cron( string $expression )` | Set a 5-field cron expression |
+| `overlap( OverlapPolicy $policy )` | Set the overlap policy (default: `Allow`). See [Scheduling](/docs/features/scheduling). |
 | `on_queue( string $queue )` | Set the target queue (default: `default`) |
 | `id()` | Force dispatch and return the schedule ID |
 
@@ -469,6 +482,7 @@ These methods return internal instances for advanced use cases.
 | `Queuety::workflow_manager()` | `Workflow` | Workflow orchestration |
 | `Queuety::connection()` | `Connection` | PDO database connection |
 | `Queuety::batch_manager()` | `BatchManager` | Batch lifecycle management (cancel, prune) |
+| `Queuety::chunk_store()` | `ChunkStore` | Chunk persistence for streaming steps |
 
 ## Testing
 
@@ -542,6 +556,49 @@ interface Job {
 ```
 
 Job classes can optionally define a `middleware()` method returning an array of `Contracts\Middleware` instances.
+
+### `Contracts\StreamingStep`
+
+Interface for workflow step handlers that produce a stream of chunks. Each yielded value is persisted to the database immediately. See [Streaming Steps](/docs/workflows/streaming).
+
+```php
+namespace Queuety\Contracts;
+
+interface StreamingStep {
+    public function stream( array $state, array $existing_chunks = [] ): \Generator;
+    public function on_complete( array $chunks, array $state ): array;
+    public function config(): array;
+}
+```
+
+| Method | Description |
+|---|---|
+| `stream( $state, $existing_chunks )` | Generator that yields string chunks. Each yield triggers an immediate DB write. On retry, `$existing_chunks` contains previously persisted chunks. |
+| `on_complete( $chunks, $state )` | Called after the stream finishes. Returns data to merge into workflow state. |
+| `config()` | Optional configuration. Supports `needs_wordpress` and `max_attempts`. |
+
+### `ChunkStore`
+
+Manages chunk persistence for streaming steps. Access via `Queuety::chunk_store()`.
+
+| Method | Returns | Description |
+|---|---|---|
+| `get_chunks( int $job_id )` | `string[]` | Fetch all chunks for a job, ordered by chunk index |
+| `append_chunk( int $job_id, int $chunk_index, string $content, ?int $workflow_id, ?int $step_index )` | `void` | Append a single chunk |
+| `clear_chunks( int $job_id )` | `void` | Delete all chunks for a job |
+| `chunk_count( int $job_id )` | `int` | Count chunks for a job |
+| `get_accumulated( int $job_id )` | `string` | Concatenate all chunks into one string |
+
+### `Heartbeat`
+
+Static helper for sending activity heartbeats from inside step handlers and streaming steps. See [Heartbeats](/docs/features/heartbeats).
+
+| Method | Description |
+|---|---|
+| `Heartbeat::init( int $job_id, Connection $conn )` | Set the job context. Called automatically by the worker. |
+| `Heartbeat::beat( array $progress = [] )` | Send a heartbeat. Updates `reserved_at` and optionally stores progress data in `heartbeat_data`. |
+| `Heartbeat::clear()` | Clear the job context. Called automatically by the worker. |
+| `Heartbeat::current_job_id()` | Get the current job ID (for testing). |
 
 ### `Contracts\Middleware`
 
@@ -673,6 +730,7 @@ enum WorkflowStatus: string {
     case Failed         = 'failed';
     case Paused         = 'paused';
     case WaitingSignal  = 'waiting_signal';
+    case Cancelled      = 'cancelled';
 }
 ```
 
@@ -700,9 +758,22 @@ enum LogEvent: string {
     case WorkflowFailed    = 'workflow_failed';
     case WorkflowPaused    = 'workflow_paused';
     case WorkflowResumed   = 'workflow_resumed';
+    case WorkflowCancelled = 'workflow_cancelled';
     case Debug             = 'debug';
 }
 ```
+
+### `OverlapPolicy`
+
+```php
+enum OverlapPolicy: string {
+    case Allow  = 'allow';
+    case Skip   = 'skip';
+    case Buffer = 'buffer';
+}
+```
+
+See [Scheduling](/docs/features/scheduling) for details on how each policy works.
 
 ## Attributes
 

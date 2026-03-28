@@ -1,0 +1,114 @@
+---
+title: Cancellation
+description: Cancel workflows gracefully with optional cleanup handlers.
+---
+
+# Workflow Cancellation
+
+Workflows can be cancelled programmatically or via CLI. When a workflow is cancelled, Queuety sets its status to `cancelled`, buries any pending or processing jobs, and runs an optional cleanup handler.
+
+## Registering a cleanup handler
+
+Use `on_cancel()` on the workflow builder to register a class that runs when the workflow is cancelled. The handler class must implement a `handle( array $state ): void` method.
+
+```php
+use Queuety\Queuety;
+
+Queuety::workflow( 'import_data' )
+    ->then( FetchDataHandler::class )
+    ->then( TransformDataHandler::class )
+    ->then( LoadDataHandler::class )
+    ->on_cancel( ImportCleanupHandler::class )
+    ->dispatch( [ 'source_url' => $url ] );
+```
+
+The cleanup handler receives the public workflow state (all keys that do not start with `_`):
+
+```php
+class ImportCleanupHandler {
+
+    public function handle( array $state ): void {
+        // Clean up any partial imports.
+        if ( isset( $state['temp_table'] ) ) {
+            global $wpdb;
+            $wpdb->query( "DROP TABLE IF EXISTS {$state['temp_table']}" );
+        }
+
+        // Notify the user.
+        wp_mail(
+            $state['notify_email'] ?? '',
+            'Import cancelled',
+            'Your data import was cancelled.'
+        );
+    }
+}
+```
+
+## Cancelling via PHP
+
+Call `Queuety::cancel_workflow()` with the workflow ID:
+
+```php
+Queuety::cancel_workflow( $workflow_id );
+```
+
+This method:
+
+1. Locks the workflow row
+2. Runs the `on_cancel` cleanup handler (if registered)
+3. Sets the workflow status to `cancelled`
+4. Buries all pending and processing jobs for the workflow with the message "Workflow cancelled"
+5. Logs a `workflow_cancelled` event
+
+A `RuntimeException` is thrown if the workflow is already `completed` or `cancelled`.
+
+## Cancelling via CLI
+
+```bash
+wp queuety workflow cancel <id>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID to cancel (required) |
+
+```bash
+wp queuety workflow cancel 42
+```
+
+## What happens on cancel
+
+When a workflow is cancelled:
+
+- **Status** changes to `cancelled`
+- **Cleanup handler** runs synchronously inside the same database transaction
+- **Pending jobs** for the workflow are buried immediately
+- **Processing jobs** for the workflow are buried (they will fail when the worker tries to advance the workflow)
+- **Completed jobs** from prior steps are left as-is
+- **A log entry** with event `workflow_cancelled` is recorded
+
+## Cancelled vs. Failed
+
+| Aspect | Failed | Cancelled |
+|---|---|---|
+| Trigger | A step exhausts its retry attempts | Explicit call to `cancel_workflow()` |
+| Status | `failed` | `cancelled` |
+| Can retry | Yes, via `retry_workflow()` | No |
+| Cleanup handler | Not called | Called if registered via `on_cancel()` |
+| Log event | `workflow_failed` | `workflow_cancelled` |
+
+## Example: cancellation with confirmation
+
+A common pattern is to check workflow status before cancelling:
+
+```php
+$status = Queuety::workflow_status( $workflow_id );
+
+if ( null === $status ) {
+    throw new \RuntimeException( 'Workflow not found.' );
+}
+
+if ( 'running' === $status->status->value || 'paused' === $status->status->value ) {
+    Queuety::cancel_workflow( $workflow_id );
+}
+```

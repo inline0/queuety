@@ -246,7 +246,7 @@ wp queuety workflow list [--status=<status>] [--format=<format>]
 
 | Option | Description |
 |---|---|
-| `--status=<status>` | Filter by status: `running`, `completed`, `failed`, `paused` |
+| `--status=<status>` | Filter by status: `running`, `completed`, `failed`, `paused`, `cancelled` |
 | `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml` |
 
 ### `wp queuety workflow retry`
@@ -284,6 +284,22 @@ wp queuety workflow resume <id>
 | Option | Description |
 |---|---|
 | `<id>` | Workflow ID (required) |
+
+### `wp queuety workflow cancel`
+
+Cancel a running or paused workflow. Runs any registered cleanup handler, sets the status to `cancelled`, and buries pending jobs.
+
+```bash
+wp queuety workflow cancel <id>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID to cancel (required) |
+
+```bash
+wp queuety workflow cancel 42
+```
 
 ## Schedule commands
 
@@ -357,7 +373,7 @@ wp queuety log [--job=<id>] [--workflow=<id>] [--handler=<name>] [--event=<event
 | `--job=<id>` | Filter by job ID |
 | `--workflow=<id>` | Filter by workflow ID |
 | `--handler=<name>` | Filter by handler name |
-| `--event=<event>` | Filter by event type (`started`, `completed`, `failed`, `buried`, `retried`, `workflow_started`, `workflow_completed`, `workflow_failed`, `workflow_paused`, `workflow_resumed`, `debug`) |
+| `--event=<event>` | Filter by event type (`started`, `completed`, `failed`, `buried`, `retried`, `workflow_started`, `workflow_completed`, `workflow_failed`, `workflow_paused`, `workflow_resumed`, `workflow_cancelled`, `debug`) |
 | `--since=<datetime>` | Show entries since this datetime |
 | `--limit=<n>` | Max entries to show (default: `50`) |
 | `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml` |
