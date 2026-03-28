@@ -1,13 +1,11 @@
 <?php
 /**
  * Plugin Name:  Queuety
- * Plugin URI:   https://github.com/fabrikat/queuety
+ * Plugin URI:   https://github.com/inline0/queuety
  * Description:  A job queue and durable workflow engine for WordPress.
  * Version:      0.2.0
- * Author:       Fabrikat
- * Author URI:   https://fabrikat.io
+ * Author:       Queuety
  * License:      GPL-2.0-or-later
- * License URI:  https://www.gnu.org/licenses/gpl-2.0.html
  * Requires PHP: 8.2
  * Requires at least: 6.4
  * Text Domain:  queuety

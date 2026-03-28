@@ -775,7 +775,7 @@ This means WooCommerce and any plugin using Action Scheduler can switch to Queue
 
 ## Project conventions (follows Rudel)
 
-Queuety follows the same project conventions as [Rudel](https://github.com/fabrikat/rudel), our WordPress sandbox plugin. This ensures consistency across projects.
+Queuety follows the same project conventions as [Rudel](https://github.com/inline0/rudel), our WordPress sandbox plugin. This ensures consistency across projects.
 
 ### Namespaces and autoloading (PSR-4)
 
