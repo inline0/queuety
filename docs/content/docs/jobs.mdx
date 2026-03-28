@@ -281,6 +281,155 @@ The `Dispatchable` trait calls `Queuety::dispatch()` internally, so all `Pending
 
 When you dispatch a `Job` instance, Queuety's `JobSerializer` extracts the fully qualified class name as the handler and all public properties as the payload. On the worker side, the serializer reconstructs the instance by matching payload keys to constructor parameter names. Backed enums are serialized to their underlying value and restored automatically.
 
+### Job properties
+
+Job classes can declare public properties to control retry and timeout behavior. The worker reads these via reflection and applies them automatically.
+
+```php
+use Queuety\Contracts\Job;
+use Queuety\Dispatchable;
+
+class ImportProductsJob implements Job {
+    use Dispatchable;
+
+    public int $tries = 5;
+    public int $timeout = 120;
+    public array $backoff = [ 10, 30, 60, 120 ];
+
+    public function __construct(
+        public readonly int $supplier_id,
+    ) {}
+
+    public function handle(): void {
+        // Import products...
+    }
+}
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `$tries` | `int` | Maximum number of attempts before the job is buried. Overrides the dispatch-time `max_attempts` value. |
+| `$timeout` | `int` | Maximum execution time in seconds. Overrides the global `QUEUETY_MAX_EXECUTION_TIME` constant. Requires `pcntl`. |
+| `$backoff` | `array` | Array of delay values in seconds for each retry attempt. The last value is reused for subsequent attempts. |
+
+The `$backoff` array provides escalating retry delays. For example, `[10, 30, 60, 120]` means the first retry waits 10 seconds, the second 30 seconds, the third 60 seconds, and any further retries wait 120 seconds.
+
+### Failed hook
+
+When a job is buried after exhausting all retry attempts, Queuety calls a `failed()` method on the job instance if one is defined. Use it for cleanup, alerting, or logging.
+
+```php
+use Queuety\Contracts\Job;
+use Queuety\Dispatchable;
+
+class ProcessPaymentJob implements Job {
+    use Dispatchable;
+
+    public int $tries = 3;
+
+    public function __construct(
+        public readonly int $order_id,
+    ) {}
+
+    public function handle(): void {
+        // Process the payment...
+    }
+
+    public function failed( \Throwable $exception ): void {
+        // Notify the team that payment processing failed permanently.
+        error_log( "Payment failed for order {$this->order_id}: {$exception->getMessage()}" );
+    }
+}
+```
+
+The `failed()` method receives the exception that caused the final failure. The job instance is deserialized with its original payload, so all public properties are available.
+
+### Conditional dispatch
+
+The `Dispatchable` trait provides `dispatch_if()` and `dispatch_unless()` for conditional dispatching. Both accept a boolean condition as the first argument followed by the job constructor arguments.
+
+```php
+// Only dispatch if the user has opted in to notifications.
+SendEmailJob::dispatch_if( $user->wants_notifications, $user->email, 'Update', $body );
+
+// Dispatch unless the feature flag is disabled.
+SyncInventoryJob::dispatch_unless( $maintenance_mode, $sku );
+```
+
+`dispatch_if()` dispatches when the condition is `true` and returns the `PendingJob`. It returns `null` when the condition is `false`.
+
+`dispatch_unless()` dispatches when the condition is `false` and returns the `PendingJob`. It returns `null` when the condition is `true`.
+
+Both methods support chaining `PendingJob` options when they dispatch:
+
+```php
+SendEmailJob::dispatch_if( $should_send, $to, $subject, $body )
+    ?->on_queue( 'emails' )
+    ?->with_priority( Priority::High );
+```
+
+### Synchronous dispatch
+
+Use `Queuety::dispatch_sync()` to execute a job immediately in the current process without adding it to the queue. This is useful for testing and for jobs that must run inline.
+
+```php
+use Queuety\Queuety;
+
+// With a Job instance
+Queuety::dispatch_sync( new SendEmailJob( to: 'user@example.com', subject: 'Hello', body: 'Hi!' ) );
+
+// With a handler name and payload
+Queuety::dispatch_sync( 'send_email', [ 'to' => 'user@example.com' ] );
+```
+
+The job's `handle()` method is called directly. No database row is created, no worker is involved, and middleware is not applied.
+
+### Job chaining
+
+Job chaining executes a sequence of jobs one after another. Each job in the chain depends on the previous job completing successfully. If any job fails, subsequent jobs in the chain remain pending.
+
+#### Using `Queuety::chain()`
+
+```php
+use Queuety\Queuety;
+
+$first_job_id = Queuety::chain( [
+    new FetchDataJob( $url ),
+    new ProcessDataJob(),
+    new NotifyCompleteJob(),
+] )
+    ->on_queue( 'pipeline' )
+    ->catch( ChainFailedHandler::class )
+    ->dispatch();
+```
+
+`Queuety::chain()` returns a `ChainBuilder` with fluent methods for setting the queue and a failure handler. The `dispatch()` method creates all jobs with sequential `depends_on` relationships and returns the ID of the first job.
+
+#### Using `with_chain()`
+
+The `Dispatchable` trait provides a `with_chain()` method as a shorthand for starting a chain from a specific job class:
+
+```php
+FetchDataJob::with_chain( [
+    new ProcessDataJob(),
+    new NotifyCompleteJob(),
+] )
+    ->on_queue( 'pipeline' )
+    ->dispatch();
+```
+
+#### Chain failure handling
+
+Register a failure handler class using `catch()`. The handler class must have a `handle()` method. It is called when any job in the chain fails.
+
+```php
+class ChainFailedHandler {
+    public function handle(): void {
+        // Alert, clean up, etc.
+    }
+}
+```
+
 ### Adding middleware
 
 Job classes can define a `middleware()` method to return middleware that wraps execution:
@@ -322,7 +471,7 @@ See [Middleware](/docs/features/middleware) for details on built-in middleware a
 | Payload | Untyped `array $payload` | Typed public properties |
 | Registration | `Queuety::register()` or `#[QueuetyHandler]` | Not required (uses FQCN) |
 | Middleware | Not available | Optional `middleware()` method |
-| Config | `config()` method | Use `PendingJob` chain or middleware |
+| Config | `config()` method | Job properties + `PendingJob` chain |
 
 Both approaches are fully supported. Existing handler-based jobs continue to work without changes. You can mix both styles in the same project.
 

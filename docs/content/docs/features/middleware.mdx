@@ -113,6 +113,29 @@ class SkipOnMaintenanceMode implements Middleware {
 
 ## Built-in middleware
 
+### `ThrottlesExceptions`
+
+Throttles exceptions from a job handler to prevent job storms. If a handler has thrown too many exceptions within a time window, subsequent jobs for that handler are rejected with a `RuntimeException` instead of being processed. This prevents a failing external service from burning through all retry attempts across many jobs at once.
+
+```php
+use Queuety\Middleware\ThrottlesExceptions;
+
+public function middleware(): array {
+    return [
+        new ThrottlesExceptions( max_attempts: 10, decay_minutes: 10 ),
+    ];
+}
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `$max_attempts` | `int` | `10` | Maximum exceptions allowed within the decay window |
+| `$decay_minutes` | `int` | `10` | Window duration in minutes |
+
+Exception counts are tracked per handler class in Queuety's locks table and shared across all worker processes. When the threshold is reached, the middleware throws a `RuntimeException` with the message "Too many exceptions for {class} ({count} in {minutes} minutes). Throttled." and the job is retried after a backoff delay.
+
+Example: if an external API is down, the first 10 failures are processed normally (each incrementing the exception counter). The 11th and subsequent attempts within 10 minutes are throttled, preserving retry attempts until the API recovers.
+
 ### `RateLimited`
 
 Enforces a maximum number of executions within a sliding time window. If the limit is exceeded, a `RateLimitExceededException` is thrown and the job is retried after the window resets.

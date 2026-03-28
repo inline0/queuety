@@ -1,0 +1,158 @@
+---
+title: Batching
+description: Group jobs into a batch with progress tracking, callbacks, and cancellation.
+---
+
+# Batching
+
+Batches let you dispatch a group of jobs and track them as a single unit. You can register callbacks that fire when the batch completes, when any job fails, or when the batch finishes regardless of outcome. Queuety tracks progress, failures, and cancellation state automatically.
+
+## Creating a batch
+
+Use `Queuety::create_batch()` to start a `BatchBuilder`. Pass an array of `Contracts\Job` instances, then call `dispatch()` to create the batch row and all jobs.
+
+```php
+use Queuety\Queuety;
+
+$batch = Queuety::create_batch( [
+    new ImportUsersJob( $csv_chunk_1 ),
+    new ImportUsersJob( $csv_chunk_2 ),
+    new ImportUsersJob( $csv_chunk_3 ),
+] )
+    ->name( 'Import users' )
+    ->on_queue( 'imports' )
+    ->dispatch();
+
+echo $batch->id; // The batch ID
+```
+
+`dispatch()` returns a `Batch` value object with the batch state.
+
+You can also pass handler+payload arrays instead of job instances:
+
+```php
+$batch = Queuety::create_batch( [
+    [ 'handler' => 'import_users', 'payload' => [ 'chunk' => 1 ] ],
+    [ 'handler' => 'import_users', 'payload' => [ 'chunk' => 2 ] ],
+] )->dispatch();
+```
+
+## Callbacks
+
+Register handler classes to be called at different points in the batch lifecycle. Each handler class must have a `handle( Batch $batch )` method.
+
+```php
+$batch = Queuety::create_batch( $jobs )
+    ->name( 'Import users' )
+    ->then( ImportCompleteHandler::class )
+    ->catch( ImportFailedHandler::class )
+    ->finally( ImportCleanupHandler::class )
+    ->dispatch();
+```
+
+| Method | When it fires |
+|---|---|
+| `then( $handler_class )` | All jobs completed successfully (or `allow_failures()` is set) |
+| `catch( $handler_class )` | The first job in the batch fails |
+| `finally( $handler_class )` | The batch finishes, whether it succeeded or failed |
+
+### Writing a callback handler
+
+```php
+use Queuety\Batch;
+
+class ImportCompleteHandler {
+    public function handle( Batch $batch ): void {
+        // All users imported. Send a notification.
+        error_log( "Batch {$batch->id} completed: {$batch->total_jobs} jobs processed." );
+    }
+}
+
+class ImportFailedHandler {
+    public function handle( Batch $batch ): void {
+        error_log( "Batch {$batch->id} had a failure. Failed jobs: {$batch->failed_jobs}" );
+    }
+}
+
+class ImportCleanupHandler {
+    public function handle( Batch $batch ): void {
+        // Runs regardless of outcome. Clean up temp files, etc.
+    }
+}
+```
+
+## Allowing failures
+
+By default, the `then` callback only fires if all jobs in the batch succeed. Call `allow_failures()` to let the `then` callback fire even when some jobs fail.
+
+```php
+$batch = Queuety::create_batch( $jobs )
+    ->then( ReportHandler::class )
+    ->allow_failures()
+    ->dispatch();
+```
+
+## Progress tracking
+
+The `Batch` value object provides properties and methods for tracking progress.
+
+```php
+$batch = Queuety::find_batch( $batch_id );
+
+$batch->progress();      // 0-100 percentage
+$batch->finished();      // true if all jobs are done
+$batch->has_failures();  // true if any job failed
+$batch->cancelled();     // true if the batch was cancelled
+
+$batch->total_jobs;      // Total number of jobs
+$batch->pending_jobs;    // Jobs still pending
+$batch->failed_jobs;     // Number of failed jobs
+$batch->failed_job_ids;  // Array of failed job IDs
+```
+
+| Method/Property | Type | Description |
+|---|---|---|
+| `progress()` | `int` | Completion percentage from 0 to 100 |
+| `finished()` | `bool` | Whether the batch has finished (all jobs complete or failed) |
+| `has_failures()` | `bool` | Whether any jobs in the batch failed |
+| `cancelled()` | `bool` | Whether the batch has been cancelled |
+| `$total_jobs` | `int` | Total number of jobs in the batch |
+| `$pending_jobs` | `int` | Number of jobs still pending |
+| `$failed_jobs` | `int` | Number of failed jobs |
+| `$failed_job_ids` | `array` | IDs of the jobs that failed |
+| `$name` | `string\|null` | Optional batch name |
+| `$created_at` | `DateTimeImmutable` | When the batch was created |
+| `$finished_at` | `DateTimeImmutable\|null` | When the batch finished |
+| `$cancelled_at` | `DateTimeImmutable\|null` | When the batch was cancelled |
+
+## Cancellation
+
+Cancel a batch through the `BatchManager`. Cancelling a batch sets `cancelled_at` and `finished_at`, and fires the `finally` callback.
+
+```php
+Queuety::batch_manager()->cancel( $batch_id );
+```
+
+Jobs already in progress will continue to run, but pending jobs in a cancelled batch are effectively abandoned.
+
+## Finding batches
+
+Look up a batch by its ID:
+
+```php
+$batch = Queuety::find_batch( $batch_id );
+
+if ( null === $batch ) {
+    // Batch not found.
+}
+```
+
+## Pruning old batches
+
+Remove finished batches older than a given number of days:
+
+```php
+$deleted = Queuety::batch_manager()->prune( 30 ); // Delete batches finished > 30 days ago
+```
+
+Only batches with a non-null `finished_at` timestamp are deleted. Active batches are never pruned.

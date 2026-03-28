@@ -1,0 +1,165 @@
+---
+title: Testing
+description: Fake the queue and assert job dispatch behavior in your test suite.
+---
+
+# Testing
+
+Queuety provides a `QueueFake` class that replaces the real queue with an in-memory store. All dispatched jobs are recorded instead of being written to the database, letting you assert dispatch behavior without running workers or requiring a database connection.
+
+## Setting up the fake
+
+Call `Queuety::fake()` at the start of your test. It returns a `QueueFake` instance that records all subsequent dispatches.
+
+```php
+use Queuety\Queuety;
+
+class SendEmailTest extends \PHPUnit\Framework\TestCase {
+    protected function setUp(): void {
+        $this->fake = Queuety::fake();
+    }
+
+    protected function tearDown(): void {
+        Queuety::reset();
+    }
+}
+```
+
+`Queuety::fake()` creates a new `QueueFake` and wires it into the `Queuety` facade. Every call to `Queuety::dispatch()` (including `Dispatchable::dispatch()`) will record the job on the fake.
+
+Call `Queuety::reset()` in `tearDown()` to clear the fake and restore normal behavior between tests.
+
+## Asserting jobs were pushed
+
+### `assert_pushed()`
+
+Assert that a specific job class was dispatched at least once.
+
+```php
+public function test_welcome_email_is_sent(): void {
+    $this->fake = Queuety::fake();
+
+    // Code under test...
+    register_new_user( 'user@example.com' );
+
+    $this->fake->assert_pushed( SendWelcomeEmailJob::class );
+}
+```
+
+Pass an optional callback to filter by payload or other attributes. The callback receives the recorded job data array with keys `handler`, `payload`, `queue`, and `instance`.
+
+```php
+$this->fake->assert_pushed( SendWelcomeEmailJob::class, function ( array $job ) {
+    return $job['payload']['to'] === 'user@example.com';
+} );
+```
+
+### `assert_pushed_times()`
+
+Assert that a job was pushed an exact number of times.
+
+```php
+$this->fake->assert_pushed_times( SendEmailJob::class, 3 );
+```
+
+### `assert_not_pushed()`
+
+Assert that a job was never dispatched.
+
+```php
+$this->fake->assert_not_pushed( DeleteAccountJob::class );
+```
+
+### `assert_nothing_pushed()`
+
+Assert that no jobs were dispatched at all.
+
+```php
+public function test_no_jobs_on_invalid_input(): void {
+    $this->fake = Queuety::fake();
+
+    process_input( '' ); // invalid, should not dispatch anything
+
+    $this->fake->assert_nothing_pushed();
+}
+```
+
+## Asserting batches
+
+### `assert_batched()`
+
+Assert that a batch was dispatched. Optionally pass a callback to filter by batch contents.
+
+```php
+$this->fake->assert_batched();
+
+$this->fake->assert_batched( function ( array $batch ) {
+    return count( $batch['jobs'] ) === 3;
+} );
+```
+
+The callback receives an array with `jobs` and `options` keys.
+
+## Inspecting pushed jobs
+
+Use `pushed()` to retrieve all recorded dispatches for a given class, and `batches()` to retrieve all recorded batches.
+
+```php
+$emails = $this->fake->pushed( SendEmailJob::class );
+// [ ['handler' => '...', 'payload' => [...], 'queue' => 'default', 'instance' => ...], ... ]
+
+$batches = $this->fake->batches();
+// [ ['jobs' => [...], 'options' => [...]], ... ]
+```
+
+## Resetting between tests
+
+Call `reset()` on the fake to clear all recorded jobs and batches without creating a new instance.
+
+```php
+$this->fake->reset();
+```
+
+Or call `Queuety::reset()` to fully tear down the fake and all internal state.
+
+## Full example
+
+```php
+use PHPUnit\Framework\TestCase;
+use Queuety\Queuety;
+
+class OrderWorkflowTest extends TestCase {
+    private \Queuety\Testing\QueueFake $fake;
+
+    protected function setUp(): void {
+        $this->fake = Queuety::fake();
+    }
+
+    protected function tearDown(): void {
+        Queuety::reset();
+    }
+
+    public function test_order_dispatches_payment_job(): void {
+        $order = create_order( [ 'total' => 99.99 ] );
+
+        $this->fake->assert_pushed( ProcessPaymentJob::class, function ( array $job ) use ( $order ) {
+            return $job['payload']['order_id'] === $order->id;
+        } );
+        $this->fake->assert_not_pushed( RefundJob::class );
+    }
+
+    public function test_bulk_import_dispatches_batch(): void {
+        start_bulk_import( $rows );
+
+        $this->fake->assert_batched( function ( array $batch ) use ( $rows ) {
+            return count( $batch['jobs'] ) === count( $rows );
+        } );
+    }
+
+    public function test_nothing_dispatched_without_data(): void {
+        process_empty_queue();
+
+        $this->fake->assert_nothing_pushed();
+    }
+}
+```

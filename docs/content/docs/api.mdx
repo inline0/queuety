@@ -53,6 +53,20 @@ When a `Contracts\Job` instance is passed, the serializer extracts the FQCN as t
 | `after( int $job_id )` | Wait for another job to complete first |
 | `id()` | Force dispatch and return the job ID |
 
+### `Queuety::dispatch_sync( $handler, $payload )`
+
+Execute a job synchronously in the current process without adding it to the queue.
+
+```php
+// With a Job instance
+Queuety::dispatch_sync( new SendEmailJob( to: 'user@example.com', subject: 'Hi', body: 'Hello' ) );
+
+// With a handler name and payload
+Queuety::dispatch_sync( 'send_email', [ 'to' => 'user@example.com' ] );
+```
+
+The job's `handle()` method is called directly. No database row is created, no worker is involved, and middleware is not applied.
+
 ### `Queuety::batch( $jobs )`
 
 Dispatch multiple jobs in a single multi-row INSERT.
@@ -63,6 +77,89 @@ $job_ids = Queuety::batch( [
     [ 'handler' => 'send_email', 'payload' => [ 'to' => 'b@example.com' ], 'priority' => 2 ],
 ] );
 ```
+
+### `Queuety::create_batch( $jobs )`
+
+Create a `BatchBuilder` for dispatching a group of jobs with callbacks and progress tracking. See [Batching](/docs/features/batching) for full details.
+
+```php
+$batch = Queuety::create_batch( [
+    new ImportUsersJob( $chunk_1 ),
+    new ImportUsersJob( $chunk_2 ),
+] )
+    ->name( 'Import users' )
+    ->then( ImportCompleteHandler::class )
+    ->catch( ImportFailedHandler::class )
+    ->finally( ImportCleanupHandler::class )
+    ->allow_failures()
+    ->on_queue( 'imports' )
+    ->dispatch();
+```
+
+### `BatchBuilder` methods
+
+| Method | Returns | Description |
+|---|---|---|
+| `name( string $name )` | `self` | Set a name for the batch |
+| `on_queue( string $queue )` | `self` | Set the queue for all jobs in the batch |
+| `then( string $handler_class )` | `self` | Handler called when the batch completes successfully |
+| `catch( string $handler_class )` | `self` | Handler called when the first job in the batch fails |
+| `finally( string $handler_class )` | `self` | Handler called when the batch finishes (success or failure) |
+| `allow_failures()` | `self` | Allow the `then` callback to fire even with failures |
+| `dispatch()` | `Batch` | Create the batch row and all jobs, returns the `Batch` value object |
+
+### `Queuety::find_batch( $id )`
+
+Find a batch by ID. Returns a `Batch` value object or `null`.
+
+```php
+$batch = Queuety::find_batch( $batch_id );
+
+if ( null !== $batch ) {
+    echo $batch->progress() . '% complete';
+}
+```
+
+### `Batch` value object
+
+| Method/Property | Type | Description |
+|---|---|---|
+| `$id` | `int` | Batch ID |
+| `$name` | `string\|null` | Optional batch name |
+| `$total_jobs` | `int` | Total number of jobs in the batch |
+| `$pending_jobs` | `int` | Jobs still pending |
+| `$failed_jobs` | `int` | Number of failed jobs |
+| `$failed_job_ids` | `array` | IDs of failed jobs |
+| `$created_at` | `DateTimeImmutable` | When the batch was created |
+| `$finished_at` | `DateTimeImmutable\|null` | When the batch finished |
+| `$cancelled_at` | `DateTimeImmutable\|null` | When the batch was cancelled |
+| `progress()` | `int` | Completion percentage (0-100) |
+| `finished()` | `bool` | Whether the batch has finished |
+| `has_failures()` | `bool` | Whether any job failed |
+| `cancelled()` | `bool` | Whether the batch was cancelled |
+
+### `Queuety::chain( $jobs )`
+
+Create a `ChainBuilder` for sequential job execution. Each job depends on the previous one completing successfully.
+
+```php
+$first_job_id = Queuety::chain( [
+    new FetchDataJob( $url ),
+    new ProcessDataJob(),
+    new NotifyCompleteJob(),
+] )
+    ->on_queue( 'pipeline' )
+    ->catch( ChainFailedHandler::class )
+    ->dispatch();
+```
+
+### `ChainBuilder` methods
+
+| Method | Returns | Description |
+|---|---|---|
+| `on_queue( string $queue )` | `self` | Set the queue for all jobs in the chain |
+| `catch( string $handler_class )` | `self` | Handler called when any job in the chain fails |
+| `dispatch()` | `int` | Create all jobs with sequential dependencies, returns the first job ID |
 
 ### `Queuety::retry( $job_id )`
 
@@ -371,6 +468,42 @@ These methods return internal instances for advanced use cases.
 | `Queuety::worker()` | `Worker` | Worker process control |
 | `Queuety::workflow_manager()` | `Workflow` | Workflow orchestration |
 | `Queuety::connection()` | `Connection` | PDO database connection |
+| `Queuety::batch_manager()` | `BatchManager` | Batch lifecycle management (cancel, prune) |
+
+## Testing
+
+### `Queuety::fake()`
+
+Replace the queue with an in-memory fake for testing. Returns a `QueueFake` instance that records all dispatched jobs.
+
+```php
+$fake = Queuety::fake();
+SendEmailJob::dispatch( 'user@example.com', 'Hello', 'Hi!' );
+$fake->assert_pushed( SendEmailJob::class );
+```
+
+### `Queuety::reset()`
+
+Reset all internal state, including the queue fake. Call in `tearDown()`.
+
+```php
+Queuety::reset();
+```
+
+### `QueueFake` methods
+
+| Method | Description |
+|---|---|
+| `assert_pushed( string $class, ?Closure $callback )` | Assert a job class was pushed. Optional callback filters by job data. |
+| `assert_pushed_times( string $class, int $count )` | Assert a job was pushed exactly N times. |
+| `assert_not_pushed( string $class )` | Assert a job was never pushed. |
+| `assert_nothing_pushed()` | Assert no jobs were pushed at all. |
+| `assert_batched( ?Closure $callback )` | Assert a batch was dispatched. Optional callback filters by batch data. |
+| `pushed( string $class )` | Get all recorded dispatches for a class. Returns an array. |
+| `batches()` | Get all recorded batches. Returns an array. |
+| `reset()` | Clear all recorded jobs and batches. |
+
+See [Testing](/docs/features/testing) for full examples.
 
 ## Interfaces
 
@@ -426,7 +559,7 @@ interface Middleware {
 
 ### `Dispatchable`
 
-Provides a static `dispatch()` method on job classes implementing `Contracts\Job`. Constructor arguments are passed through to create the job instance.
+Provides static dispatch methods on job classes implementing `Contracts\Job`. Constructor arguments are passed through to create the job instance.
 
 ```php
 use Queuety\Contracts\Job;
@@ -441,6 +574,57 @@ class SendEmailJob implements Job {
 SendEmailJob::dispatch( 'user@example.com', 'Subject', 'Body' );
 ```
 
+| Method | Returns | Description |
+|---|---|---|
+| `dispatch( ...$args )` | `PendingJob` | Create an instance and dispatch it |
+| `dispatch_if( bool $condition, ...$args )` | `PendingJob\|null` | Dispatch only if `$condition` is true |
+| `dispatch_unless( bool $condition, ...$args )` | `PendingJob\|null` | Dispatch only if `$condition` is false |
+| `with_chain( array $jobs )` | `ChainBuilder` | Start a chain from this job class |
+
+```php
+// Conditional dispatch
+SendEmailJob::dispatch_if( $user->wants_email, $user->email, 'Hello', 'Hi!' );
+SendEmailJob::dispatch_unless( $maintenance_mode, $user->email, 'Hello', 'Hi!' );
+
+// Chain from a job class
+FetchDataJob::with_chain( [
+    new ProcessDataJob(),
+    new NotifyCompleteJob(),
+] )->dispatch();
+```
+
+### Job properties
+
+Job classes can declare public properties that the worker reads via reflection to override retry and timeout behavior.
+
+| Property | Type | Description |
+|---|---|---|
+| `$tries` | `int` | Maximum number of attempts before the job is buried |
+| `$timeout` | `int` | Maximum execution time in seconds (requires `pcntl`) |
+| `$backoff` | `array` | Escalating delay values in seconds for each retry attempt |
+
+```php
+class ImportProductsJob implements Job {
+    use Dispatchable;
+
+    public int $tries = 5;
+    public int $timeout = 120;
+    public array $backoff = [ 10, 30, 60, 120 ];
+
+    // ...
+}
+```
+
+### `failed()` hook
+
+When a job is buried after exhausting all retries, the worker calls a `failed()` method on the job instance if defined.
+
+```php
+public function failed( \Throwable $exception ): void {
+    error_log( "Job failed: {$exception->getMessage()}" );
+}
+```
+
 ## Built-in middleware
 
 All middleware classes implement `Contracts\Middleware` and are located in the `Queuety\Middleware` namespace.
@@ -451,6 +635,7 @@ All middleware classes implement `Contracts\Middleware` and are located in the `
 | `Timeout( int $seconds )` | Kill the job after `$seconds` seconds (requires `pcntl`) |
 | `UniqueJob( ?string $key )` | Prevent concurrent execution via a database lock |
 | `WithoutOverlapping( string $key, int $release_after )` | Prevent overlapping execution with automatic lock expiry |
+| `ThrottlesExceptions( int $max_attempts, int $decay_minutes )` | Throttle exceptions to prevent job storms when an external service is down |
 
 See [Middleware](/docs/features/middleware) for usage details and examples.
 
