@@ -43,18 +43,14 @@ class WorkflowScenarioTest extends IntegrationTestCase {
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->queue        = new Queue( $this->conn );
-		$this->logger       = new Logger( $this->conn );
-		$this->workflow_mgr = new Workflow( $this->conn, $this->queue, $this->logger );
-		$this->registry     = new HandlerRegistry();
-		$this->worker       = new Worker(
-			$this->conn,
-			$this->queue,
-			$this->logger,
-			$this->workflow_mgr,
-			$this->registry,
-			new Config(),
-		);
+		Queuety::reset();
+		Queuety::init( $this->conn );
+
+		$this->queue        = Queuety::queue();
+		$this->logger       = Queuety::logger();
+		$this->workflow_mgr = Queuety::workflow_manager();
+		$this->registry     = Queuety::registry();
+		$this->worker       = Queuety::worker();
 
 		LlmProcessStep::reset();
 		FlakyApiStep::reset();
