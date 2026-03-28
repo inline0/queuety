@@ -1,0 +1,11 @@
+{
+	"name": "queuety",
+	"private": true,
+	"scripts": {
+		"test:e2e": "bash tests/e2e/run-all.sh",
+		"test:e2e:wp-env": "bash tests/e2e/test-wp-env.sh"
+	},
+	"devDependencies": {
+		"@wordpress/env": "^10.0.0"
+	}
+}

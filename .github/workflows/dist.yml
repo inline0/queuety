@@ -1,0 +1,134 @@
+name: Distribution
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: dist-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zip-integrity:
+    name: Zip integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: mysqli, pdo_mysql
+          tools: composer
+
+      - name: Install production dependencies
+        run: composer install --no-dev --optimize-autoloader --no-interaction
+
+      - name: Build zip
+        run: |
+          mkdir -p dist
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.claude' \
+            --exclude='tests' \
+            --exclude='docs' \
+            --exclude='node_modules' \
+            --exclude='CLAUDE.md' \
+            --exclude='PRD.md' \
+            --exclude='phpunit.xml*' \
+            --exclude='phpcs.xml*' \
+            --exclude='.wp-env.json' \
+            --exclude='package.json' \
+            --exclude='package-lock.json' \
+            --exclude='dist' \
+            . dist/queuety/
+          cd dist && zip -r queuety.zip queuety/
+
+      - name: Verify required files
+        run: |
+          cd dist/queuety
+          for f in queuety.php bootstrap.php src/Queuety.php cli/QueuetyCommand.php vendor/autoload.php; do
+            test -f "$f" || { echo "Missing: $f"; exit 1; }
+          done
+          echo "All required files present."
+
+      - name: Verify no dev files leaked
+        run: |
+          cd dist/queuety
+          for f in phpunit.xml phpunit.xml.dist phpcs.xml phpcs.xml.dist CLAUDE.md PRD.md .wp-env.json package.json; do
+            test ! -f "$f" || { echo "Dev file leaked: $f"; exit 1; }
+          done
+          test ! -d tests || { echo "Dev directory leaked: tests/"; exit 1; }
+          test ! -d .github || { echo "Dev directory leaked: .github/"; exit 1; }
+          echo "No dev files in zip."
+
+      - name: Verify PHP syntax
+        run: find dist/queuety -name '*.php' -print0 | xargs -0 -n1 php -l
+
+      - name: Verify autoloader resolves classes
+        run: |
+          php -r "
+            \$loader = require 'dist/queuety/vendor/autoload.php';
+            \$classes = ['Queuety\\\Queuety', 'Queuety\\\CLI\\\QueuetyCommand'];
+            foreach (\$classes as \$c) {
+              if (!\$loader->findFile(\$c)) { echo \"Class not found: \$c\n\"; exit(1); }
+            }
+            echo \"Autoloader OK.\n\";
+          "
+
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: queuety-zip
+          path: dist/queuety.zip
+
+  wordpress-activation:
+    name: WordPress activation
+    needs: zip-integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: mysqli, pdo_mysql
+          tools: wp-cli
+
+      - name: Download zip artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: queuety-zip
+
+      - name: Start MySQL
+        run: |
+          sudo systemctl start mysql
+          mysql -u root -proot -e "CREATE DATABASE IF NOT EXISTS wordpress;"
+
+      - name: Install WordPress
+        run: |
+          mkdir wordpress && cd wordpress
+          wp core download
+          wp config create --dbname=wordpress --dbuser=root --dbpass=root
+          wp core install --url=http://localhost --title=Test \
+            --admin_user=admin --admin_password=admin --admin_email=test@example.com --skip-email
+
+      - name: Install and activate Queuety
+        run: |
+          cd wordpress
+          wp plugin install ../queuety.zip --activate
+
+      - name: Verify plugin is active
+        run: |
+          cd wordpress
+          wp plugin list --status=active --field=name | grep -q queuety
+          echo "Plugin is active"
+
+      - name: Verify plugin loads
+        run: |
+          cd wordpress
+          wp eval "echo 'QUEUETY_VERSION: ' . QUEUETY_VERSION . PHP_EOL;"
+
+      - name: Verify CLI commands
+        run: |
+          cd wordpress
+          wp queuety status

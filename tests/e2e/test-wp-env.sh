@@ -1,0 +1,326 @@
+#!/usr/bin/env bash
+#
+# E2E test: full WordPress integration via wp-env.
+#
+# Tests plugin activation, table creation, WP-CLI commands,
+# job dispatch/processing, workflow lifecycle, and logging
+# against a real WordPress + MySQL environment.
+#
+# Requires: Docker, Node.js, npm.
+# Skips gracefully if Docker is not available.
+
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PASS=0
+FAIL=0
+TOTAL=0
+
+# Helpers.
+pass() {
+    PASS=$((PASS + 1))
+    TOTAL=$((TOTAL + 1))
+    echo "  PASS: $1"
+}
+
+fail() {
+    FAIL=$((FAIL + 1))
+    TOTAL=$((TOTAL + 1))
+    echo "  FAIL: $1"
+    echo "        $2"
+}
+
+assert_contains() {
+    local haystack="$1"
+    local needle="$2"
+    local label="$3"
+    if echo "$haystack" | grep -q "$needle"; then
+        pass "$label"
+    else
+        fail "$label" "Expected to find '$needle' in output"
+    fi
+}
+
+assert_not_contains() {
+    local haystack="$1"
+    local needle="$2"
+    local label="$3"
+    if echo "$haystack" | grep -q "$needle"; then
+        fail "$label" "Did not expect to find '$needle' in output"
+    else
+        pass "$label"
+    fi
+}
+
+assert_equals() {
+    local expected="$1"
+    local actual="$2"
+    local label="$3"
+    if [ "$expected" = "$actual" ]; then
+        pass "$label"
+    else
+        fail "$label" "Expected '$expected', got '$actual'"
+    fi
+}
+
+wp_cli() {
+    cd "$PROJECT_DIR" && npx wp-env run cli wp "$@" 2>/dev/null
+}
+
+# Check Docker is available.
+if ! docker info > /dev/null 2>&1; then
+    echo "SKIP: Docker is not available"
+    exit 0
+fi
+
+# Check Node.js is available.
+if ! command -v npx > /dev/null 2>&1; then
+    echo "SKIP: npx is not available"
+    exit 0
+fi
+
+echo "=== Queuety wp-env E2E Tests ==="
+echo ""
+
+# Install dependencies if needed.
+if [ ! -d "$PROJECT_DIR/node_modules/@wordpress/env" ]; then
+    echo "Installing @wordpress/env..."
+    cd "$PROJECT_DIR" && npm install --no-audit --no-fund 2>/dev/null
+fi
+
+# Start wp-env.
+echo "Starting wp-env..."
+cd "$PROJECT_DIR" && npx wp-env start 2>/dev/null
+
+# Wait for WordPress to be ready.
+echo "Waiting for WordPress..."
+for i in $(seq 1 30); do
+    if curl -s -o /dev/null -w "%{http_code}" http://localhost:8888/ | grep -q "200\|301\|302"; then
+        break
+    fi
+    sleep 1
+done
+
+echo ""
+echo "--- Plugin Activation ---"
+
+# Test: plugin is active.
+ACTIVE_PLUGINS=$(wp_cli plugin list --status=active --field=name 2>/dev/null || true)
+assert_contains "$ACTIVE_PLUGINS" "queuety" "Plugin is active"
+
+# Test: version constant is defined.
+VERSION=$(wp_cli eval "echo QUEUETY_VERSION;" 2>/dev/null || true)
+assert_equals "0.1.0" "$VERSION" "QUEUETY_VERSION is 0.1.0"
+
+echo ""
+echo "--- Table Creation ---"
+
+# Test: tables exist.
+TABLES=$(wp_cli db query "SHOW TABLES LIKE '%queuety%';" --skip-column-names 2>/dev/null || true)
+assert_contains "$TABLES" "queuety_jobs" "queuety_jobs table exists"
+assert_contains "$TABLES" "queuety_workflows" "queuety_workflows table exists"
+assert_contains "$TABLES" "queuety_logs" "queuety_logs table exists"
+
+echo ""
+echo "--- WP-CLI: Status ---"
+
+# Test: status command works.
+STATUS=$(wp_cli queuety status 2>/dev/null || true)
+assert_contains "$STATUS" "Pending" "status command shows Pending column"
+assert_contains "$STATUS" "Buried" "status command shows Buried column"
+
+echo ""
+echo "--- WP-CLI: Dispatch and List ---"
+
+# Test: dispatch a job.
+DISPATCH_OUT=$(wp_cli queuety dispatch test_handler --payload='{"key":"value"}' 2>/dev/null || true)
+assert_contains "$DISPATCH_OUT" "Dispatched job" "dispatch command succeeds"
+
+# Test: list shows the job.
+LIST_OUT=$(wp_cli queuety list 2>/dev/null || true)
+assert_contains "$LIST_OUT" "test_handler" "list shows dispatched job"
+assert_contains "$LIST_OUT" "pending" "list shows pending status"
+
+# Dispatch more jobs for testing.
+wp_cli queuety dispatch test_handler --payload='{"n":2}' > /dev/null 2>&1 || true
+wp_cli queuety dispatch test_handler --payload='{"n":3}' > /dev/null 2>&1 || true
+
+# Test: status shows correct count.
+STATUS2=$(wp_cli queuety status 2>/dev/null || true)
+assert_contains "$STATUS2" "3" "status shows 3 pending jobs"
+
+echo ""
+echo "--- WP-CLI: Bury and Retry ---"
+
+# Get the first job ID.
+JOB_ID=$(wp_cli db query "SELECT id FROM wp_queuety_jobs ORDER BY id ASC LIMIT 1;" --skip-column-names 2>/dev/null | tr -d '[:space:]' || true)
+
+# Test: bury a job.
+BURY_OUT=$(wp_cli queuety bury "$JOB_ID" 2>/dev/null || true)
+assert_contains "$BURY_OUT" "buried" "bury command succeeds"
+
+# Verify it's buried.
+BURIED_STATUS=$(wp_cli db query "SELECT status FROM wp_queuety_jobs WHERE id=$JOB_ID;" --skip-column-names 2>/dev/null | tr -d '[:space:]' || true)
+assert_equals "buried" "$BURIED_STATUS" "job is in buried status"
+
+# Test: retry buried.
+RETRY_OUT=$(wp_cli queuety retry-buried 2>/dev/null || true)
+assert_contains "$RETRY_OUT" "Retried" "retry-buried command succeeds"
+
+# Verify it's pending again.
+RETRIED_STATUS=$(wp_cli db query "SELECT status FROM wp_queuety_jobs WHERE id=$JOB_ID;" --skip-column-names 2>/dev/null | tr -d '[:space:]' || true)
+assert_equals "pending" "$RETRIED_STATUS" "job is pending after retry"
+
+echo ""
+echo "--- WP-CLI: Delete and Purge ---"
+
+# Test: delete a job.
+DELETE_OUT=$(wp_cli queuety delete "$JOB_ID" 2>/dev/null || true)
+assert_contains "$DELETE_OUT" "deleted" "delete command succeeds"
+
+# Verify it's gone.
+DELETED_COUNT=$(wp_cli db query "SELECT COUNT(*) FROM wp_queuety_jobs WHERE id=$JOB_ID;" --skip-column-names 2>/dev/null | tr -d '[:space:]' || true)
+assert_equals "0" "$DELETED_COUNT" "job is deleted from database"
+
+echo ""
+echo "--- WP-CLI: Workflow Commands ---"
+
+# Create a workflow via direct PHP (WP-CLI dispatch doesn't support workflows).
+WF_ID=$(wp_cli eval "
+    \$wf_id = Queuety\Queuety::workflow('test_wf')
+        ->then('Queuety\Tests\Integration\Fixtures\AccumulatingStep')
+        ->then('Queuety\Tests\Integration\Fixtures\AccumulatingStep')
+        ->dispatch(['counter' => 0]);
+    echo \$wf_id;
+" 2>/dev/null || true)
+
+if [ -n "$WF_ID" ] && [ "$WF_ID" != "0" ]; then
+    pass "workflow dispatch via PHP API (ID: $WF_ID)"
+
+    # Test: workflow status command.
+    WF_STATUS=$(wp_cli queuety workflow status "$WF_ID" 2>/dev/null || true)
+    assert_contains "$WF_STATUS" "test_wf" "workflow status shows name"
+    assert_contains "$WF_STATUS" "running" "workflow status shows running"
+    assert_contains "$WF_STATUS" "0/2" "workflow status shows step 0/2"
+
+    # Test: workflow list command.
+    WF_LIST=$(wp_cli queuety workflow list 2>/dev/null || true)
+    assert_contains "$WF_LIST" "test_wf" "workflow list shows workflow"
+    assert_contains "$WF_LIST" "running" "workflow list shows status"
+
+    # Test: workflow pause.
+    PAUSE_OUT=$(wp_cli queuety workflow pause "$WF_ID" 2>/dev/null || true)
+    assert_contains "$PAUSE_OUT" "paused" "workflow pause succeeds"
+
+    # Verify paused.
+    WF_PAUSED=$(wp_cli queuety workflow status "$WF_ID" 2>/dev/null || true)
+    assert_contains "$WF_PAUSED" "paused" "workflow is paused"
+
+    # Test: workflow resume.
+    RESUME_OUT=$(wp_cli queuety workflow resume "$WF_ID" 2>/dev/null || true)
+    assert_contains "$RESUME_OUT" "resumed" "workflow resume succeeds"
+else
+    fail "workflow dispatch via PHP API" "Could not create workflow"
+fi
+
+echo ""
+echo "--- WP-CLI: Worker ---"
+
+# Clear all existing jobs for a clean test.
+wp_cli db query "DELETE FROM wp_queuety_jobs;" > /dev/null 2>&1 || true
+wp_cli db query "DELETE FROM wp_queuety_workflows;" > /dev/null 2>&1 || true
+wp_cli db query "DELETE FROM wp_queuety_logs;" > /dev/null 2>&1 || true
+
+# Register a test handler and dispatch a job.
+WORK_RESULT=$(wp_cli eval "
+    class E2eTestHandler implements Queuety\Handler {
+        public function handle(array \\\$payload): void {
+            update_option('queuety_e2e_result', json_encode(\\\$payload));
+        }
+        public function config(): array { return []; }
+    }
+    Queuety\Queuety::register('e2e_test', 'E2eTestHandler');
+    Queuety\Queuety::dispatch('e2e_test', ['msg' => 'hello from e2e'])->id();
+
+    // Process the job inline since we can't run work --once in a separate process easily.
+    \\\$worker = Queuety\Queuety::worker();
+    \\\$worker->flush();
+
+    echo get_option('queuety_e2e_result', 'NOT_SET');
+" 2>/dev/null || true)
+
+assert_contains "$WORK_RESULT" "hello from e2e" "worker processes job with correct payload"
+
+echo ""
+echo "--- WP-CLI: Log ---"
+
+# Test: log command shows entries.
+LOG_OUT=$(wp_cli queuety log 2>/dev/null || true)
+if echo "$LOG_OUT" | grep -q "started\|completed"; then
+    pass "log command shows entries"
+else
+    # Might be empty if previous tests cleaned up. Check it at least doesn't error.
+    assert_not_contains "$LOG_OUT" "Error" "log command does not error"
+fi
+
+echo ""
+echo "--- WP-CLI: Recover ---"
+
+RECOVER_OUT=$(wp_cli queuety recover 2>/dev/null || true)
+assert_contains "$RECOVER_OUT" "Recovered" "recover command succeeds"
+
+echo ""
+echo "--- WP-CLI: Purge ---"
+
+PURGE_OUT=$(wp_cli queuety purge --older-than=0 2>/dev/null || true)
+assert_contains "$PURGE_OUT" "Purged" "purge command succeeds"
+
+echo ""
+echo "--- WP-CLI: Full Workflow E2E ---"
+
+# Run a complete workflow through the worker.
+FULL_WF=$(wp_cli eval "
+    class FetchStep implements Queuety\Step {
+        public function handle(array \\\$state): array {
+            return ['fetched' => 'data for user ' . \\\$state['user_id']];
+        }
+        public function config(): array { return []; }
+    }
+    class ProcessStep implements Queuety\Step {
+        public function handle(array \\\$state): array {
+            return ['processed' => 'result from: ' . \\\$state['fetched']];
+        }
+        public function config(): array { return []; }
+    }
+
+    \\\$wf_id = Queuety\Queuety::workflow('full_e2e')
+        ->then('FetchStep')
+        ->then('ProcessStep')
+        ->dispatch(['user_id' => 42]);
+
+    // Process all steps.
+    Queuety\Queuety::worker()->flush();
+    Queuety\Queuety::worker()->flush();
+
+    \\\$status = Queuety\Queuety::workflow_status(\\\$wf_id);
+    echo \\\$status->status->value . '|' . (\\\$status->state['processed'] ?? 'MISSING');
+" 2>/dev/null || true)
+
+if echo "$FULL_WF" | grep -q "completed"; then
+    pass "full workflow completes via worker"
+    assert_contains "$FULL_WF" "result from: data for user 42" "workflow state accumulates correctly"
+else
+    fail "full workflow completes via worker" "Got: $FULL_WF"
+fi
+
+echo ""
+echo "=============================="
+echo "Results: ${PASS} passed, ${FAIL} failed (${TOTAL} total)"
+echo "=============================="
+
+# Stop wp-env.
+echo ""
+echo "Stopping wp-env..."
+cd "$PROJECT_DIR" && npx wp-env stop 2>/dev/null || true
+
+[ "$FAIL" -eq 0 ] || exit 1

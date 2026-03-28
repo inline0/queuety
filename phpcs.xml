@@ -1,0 +1,94 @@
+<?xml version="1.0"?>
+<ruleset name="Queuety">
+    <description>WordPress Coding Standards for Queuety</description>
+
+    <file>./queuety.php</file>
+    <file>./bootstrap.php</file>
+    <file>./src/</file>
+    <file>./cli/</file>
+
+    <exclude-pattern>*/vendor/*</exclude-pattern>
+    <exclude-pattern>*/node_modules/*</exclude-pattern>
+    <exclude-pattern>*/tests/*</exclude-pattern>
+    <exclude-pattern>*/templates/*</exclude-pattern>
+
+    <rule ref="WordPress"/>
+
+    <!-- PSR-4 style file naming -->
+    <rule ref="WordPress.Files.FileName.InvalidClassFileName">
+        <exclude-pattern>*</exclude-pattern>
+    </rule>
+    <rule ref="WordPress.Files.FileName.NotHyphenatedLowercase">
+        <exclude-pattern>*</exclude-pattern>
+    </rule>
+
+    <!-- Allow dynamic hook names -->
+    <rule ref="WordPress.NamingConventions.PrefixAllGlobals.DynamicHooknameFound">
+        <severity>0</severity>
+    </rule>
+
+    <!-- Allow reserved keyword parameter names -->
+    <rule ref="Universal.NamingConventions.NoReservedKeywordParameterNames">
+        <severity>0</severity>
+    </rule>
+
+    <!-- Allow unused method parameters (required by interface signatures) -->
+    <rule ref="Generic.CodeAnalysis.UnusedFunctionParameter">
+        <severity>0</severity>
+    </rule>
+
+    <!-- RuntimeException messages are not browser output -->
+    <rule ref="WordPress.Security.EscapeOutput.ExceptionNotEscaped">
+        <severity>0</severity>
+    </rule>
+
+    <!-- Core engine uses json_encode directly (no WP dependency) -->
+    <rule ref="WordPress.WP.AlternativeFunctions.json_encode_json_encode">
+        <severity>0</severity>
+    </rule>
+
+    <!-- Core engine uses fwrite for stderr (no WP dependency) -->
+    <rule ref="WordPress.WP.AlternativeFunctions.file_system_operations_fwrite">
+        <severity>0</severity>
+    </rule>
+
+    <!-- Allow short ternaries in engine code -->
+    <rule ref="Universal.Operators.DisallowShortTernary">
+        <severity>0</severity>
+    </rule>
+
+    <!-- Yoda conditions: relax for readability -->
+    <rule ref="WordPress.PHP.YodaConditions.NotYoda">
+        <severity>0</severity>
+    </rule>
+
+    <!-- bootstrap.php defines WP constants dynamically -->
+    <rule ref="WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound">
+        <exclude-pattern>bootstrap.php</exclude-pattern>
+    </rule>
+    <rule ref="WordPress.NamingConventions.PrefixAllGlobals.VariableConstantNameFound">
+        <exclude-pattern>bootstrap.php</exclude-pattern>
+    </rule>
+
+    <!-- PHP 8.2+ -->
+    <config name="testVersion" value="8.2-"/>
+
+    <!-- Text domain -->
+    <rule ref="WordPress.WP.I18n">
+        <properties>
+            <property name="text_domain" type="array">
+                <element value="queuety"/>
+            </property>
+        </properties>
+    </rule>
+
+    <!-- Prefix for hooks, functions, classes -->
+    <rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+        <properties>
+            <property name="prefixes" type="array">
+                <element value="queuety"/>
+                <element value="Queuety"/>
+            </property>
+        </properties>
+    </rule>
+</ruleset>

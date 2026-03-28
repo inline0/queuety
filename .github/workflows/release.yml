@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  release-zip:
+    name: Build release zip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          tools: composer
+
+      - name: Install production dependencies
+        run: composer install --no-dev --optimize-autoloader --no-interaction
+
+      - name: Create release zip
+        run: |
+          mkdir -p dist/queuety
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.claude' \
+            --exclude='tests' \
+            --exclude='docs' \
+            --exclude='node_modules' \
+            --exclude='CLAUDE.md' \
+            --exclude='PRD.md' \
+            --exclude='phpunit.xml*' \
+            --exclude='phpcs.xml*' \
+            --exclude='.wp-env.json' \
+            --exclude='package.json' \
+            --exclude='package-lock.json' \
+            --exclude='dist' \
+            . dist/queuety/
+          cd dist && zip -r ../queuety.zip queuety/
+
+      - name: Upload release asset
+        run: gh release upload "${{ github.event.release.tag_name }}" queuety.zip --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
