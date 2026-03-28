@@ -19,7 +19,7 @@ composer require queuety/queuety
 wp plugin activate queuety
 ```
 
-On activation, Queuety creates its database tables (`queuety_jobs`, `queuety_workflows`, `queuety_logs`, `queuety_schedules`) and installs a bootstrap file that allows workers to run without booting WordPress.
+On activation, Queuety creates its database tables (`queuety_jobs`, `queuety_workflows`, `queuety_logs`, `queuety_schedules`, `queuety_signals`, `queuety_chunks`, `queuety_queue_states`, `queuety_webhooks`) and installs a bootstrap file that allows workers to run without booting WordPress.
 
 ## Configuration
 
@@ -35,11 +35,14 @@ All constants are optional. Define them in `wp-config.php` before the plugin loa
 | `QUEUETY_WORKER_MAX_MEMORY` | `128` | Max MB before worker restarts |
 | `QUEUETY_RETRY_BACKOFF` | `exponential` | Backoff strategy: `exponential`, `linear`, or `fixed` |
 | `QUEUETY_STALE_TIMEOUT` | `600` | Seconds before stuck jobs are recovered |
+| `QUEUETY_CACHE_TTL` | `5` | Default cache TTL in seconds |
 | `QUEUETY_DEBUG` | `false` | Enable verbose worker logging |
 | `QUEUETY_TABLE_JOBS` | `queuety_jobs` | Jobs table name |
 | `QUEUETY_TABLE_WORKFLOWS` | `queuety_workflows` | Workflows table name |
 | `QUEUETY_TABLE_LOGS` | `queuety_logs` | Logs table name |
 | `QUEUETY_TABLE_SCHEDULES` | `queuety_schedules` | Schedules table name |
+| `QUEUETY_TABLE_SIGNALS` | `queuety_signals` | Signals table name |
+| `QUEUETY_TABLE_CHUNKS` | `queuety_chunks` | Streaming chunks table name |
 | `QUEUETY_TABLE_QUEUE_STATES` | `queuety_queue_states` | Queue states table name |
 | `QUEUETY_TABLE_WEBHOOKS` | `queuety_webhooks` | Webhooks table name |
 
@@ -77,6 +80,29 @@ Queuety::dispatch( 'send_email', [
     'subject' => 'Welcome',
     'body'    => 'Hello from Queuety!',
 ] );
+```
+
+Or use the modern dispatchable job class:
+
+```php
+use Queuety\Contracts\Job;
+use Queuety\Dispatchable;
+
+readonly class SendEmailJob implements Job {
+    use Dispatchable;
+
+    public function __construct(
+        public string $to,
+        public string $subject,
+        public string $body,
+    ) {}
+
+    public function handle(): void {
+        wp_mail( $this->to, $this->subject, $this->body );
+    }
+}
+
+SendEmailJob::dispatch( 'user@example.com', 'Welcome', 'Hello from Queuety!' );
 ```
 
 ## Your first workflow
@@ -146,10 +172,21 @@ For production, run multiple workers:
 wp queuety work --workers=4
 ```
 
+Process multiple queues with priority ordering:
+
+```bash
+wp queuety work --queue=high,default,low
+```
+
 ## What's next
 
 - [Jobs](/docs/jobs) for the complete dispatch and handler guide
 - [Workflows](/docs/workflows) for chains, parallel steps, conditional branching, and sub-workflows
+- [Middleware](/docs/features/middleware) for rate limiting, throttling, and custom pipeline logic
+- [Batching](/docs/features/batching) for dispatching groups of jobs with callbacks
+- [Streaming Steps](/docs/workflows/streaming) for persisting streamed data chunk by chunk
 - [Scheduling](/docs/features/scheduling) for recurring jobs
+- [Caching](/docs/features/caching) for the pluggable cache layer
+- [Testing](/docs/features/testing) for QueueFake and test assertions
 - [CLI Reference](/docs/cli) for all available commands
 - [PHP API](/docs/api) for programmatic access
