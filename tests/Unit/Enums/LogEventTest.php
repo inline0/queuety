@@ -23,7 +23,7 @@ class LogEventTest extends TestCase {
 	}
 
 	public function test_all_cases(): void {
-		$this->assertCount( 12, LogEvent::cases() );
+		$this->assertCount( 15, LogEvent::cases() );
 	}
 
 	public function test_from_valid_value(): void {

@@ -77,8 +77,10 @@ class Schema {
 				completed_at DATETIME DEFAULT NULL,
 				failed_at DATETIME DEFAULT NULL,
 				error_message TEXT DEFAULT NULL,
+				deadline_at DATETIME DEFAULT NULL,
 				INDEX idx_status (status),
-				INDEX idx_parent (parent_workflow_id)
+				INDEX idx_parent (parent_workflow_id),
+				INDEX idx_deadline (status, deadline_at)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 
@@ -90,7 +92,7 @@ class Schema {
 				step_index TINYINT UNSIGNED DEFAULT NULL,
 				handler VARCHAR(255) NOT NULL,
 				queue VARCHAR(64) NOT NULL DEFAULT 'default',
-				event ENUM('started', 'completed', 'failed', 'buried', 'retried', 'workflow_started', 'workflow_completed', 'workflow_failed', 'workflow_paused', 'workflow_resumed', 'workflow_cancelled', 'debug') NOT NULL,
+				event ENUM('started', 'completed', 'failed', 'buried', 'retried', 'workflow_started', 'workflow_completed', 'workflow_failed', 'workflow_paused', 'workflow_resumed', 'workflow_cancelled', 'workflow_rewound', 'workflow_forked', 'workflow_deadline_exceeded', 'debug') NOT NULL,
 				attempt TINYINT UNSIGNED DEFAULT NULL,
 				duration_ms INT UNSIGNED DEFAULT NULL,
 				memory_peak_kb INT UNSIGNED DEFAULT NULL,
@@ -198,7 +200,7 @@ class Schema {
 				workflow_id BIGINT UNSIGNED NOT NULL,
 				step_index TINYINT UNSIGNED NOT NULL,
 				handler VARCHAR(255) NOT NULL,
-				event ENUM('step_started', 'step_completed', 'step_failed', 'state_snapshot') NOT NULL,
+				event ENUM('step_started', 'step_completed', 'step_failed', 'state_snapshot', 'workflow_rewound', 'workflow_forked', 'workflow_deadline_exceeded') NOT NULL,
 				state_snapshot LONGTEXT DEFAULT NULL,
 				step_output LONGTEXT DEFAULT NULL,
 				duration_ms INT UNSIGNED DEFAULT NULL,
@@ -399,6 +401,41 @@ class Schema {
 				INDEX idx_workflow (workflow_id, step_index),
 				INDEX idx_created (created_at)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
+	}
+
+	/**
+	 * Migrate from v0.11.x to v0.12.0.
+	 *
+	 * Adds deadline_at column to workflows table, new event types to the logs
+	 * and workflow_events ENUM columns for rewind, fork, and deadline features.
+	 *
+	 * @param Connection $conn Database connection.
+	 */
+	public static function migrate_0120( Connection $conn ): void {
+		$pdo             = $conn->pdo();
+		$wf              = $conn->table( Config::table_workflows() );
+		$logs            = $conn->table( Config::table_logs() );
+		$workflow_events = $conn->table( Config::table_workflow_events() );
+
+		$pdo->exec(
+			"ALTER TABLE {$wf} ADD COLUMN deadline_at DATETIME DEFAULT NULL AFTER error_message"
+		);
+
+		$pdo->exec(
+			"ALTER TABLE {$wf} ADD INDEX idx_deadline (status, deadline_at)"
+		);
+
+		$pdo->exec(
+			"ALTER TABLE {$logs} MODIFY COLUMN event
+			ENUM('started', 'completed', 'failed', 'buried', 'retried', 'workflow_started', 'workflow_completed', 'workflow_failed', 'workflow_paused', 'workflow_resumed', 'workflow_cancelled', 'workflow_rewound', 'workflow_forked', 'workflow_deadline_exceeded', 'debug')
+			NOT NULL"
+		);
+
+		$pdo->exec(
+			"ALTER TABLE {$workflow_events} MODIFY COLUMN event
+			ENUM('step_started', 'step_completed', 'step_failed', 'state_snapshot', 'workflow_rewound', 'workflow_forked', 'workflow_deadline_exceeded')
+			NOT NULL"
 		);
 	}
 

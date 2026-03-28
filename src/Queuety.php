@@ -738,6 +738,66 @@ class Queuety {
 	}
 
 	/**
+	 * Rewind a workflow to a previous step and re-run from there.
+	 *
+	 * @param int $workflow_id Workflow ID.
+	 * @param int $to_step     Step index to rewind to.
+	 */
+	public static function rewind_workflow( int $workflow_id, int $to_step ): void {
+		self::ensure_initialized();
+		self::$workflow->rewind( $workflow_id, $to_step );
+	}
+
+	/**
+	 * Fork a running workflow into an independent copy.
+	 *
+	 * @param int $workflow_id Workflow ID.
+	 * @return int The new (forked) workflow ID.
+	 */
+	public static function fork_workflow( int $workflow_id ): int {
+		self::ensure_initialized();
+		return self::$workflow->fork( $workflow_id );
+	}
+
+	/**
+	 * Replace WordPress cron with Queuety's scheduler.
+	 *
+	 * Only works when WordPress is loaded (the plugin is active).
+	 */
+	public static function replace_wp_cron(): void {
+		CronBridge::install();
+	}
+
+	/**
+	 * Restore WordPress default cron behaviour.
+	 */
+	public static function restore_wp_cron(): void {
+		CronBridge::uninstall();
+	}
+
+	/**
+	 * Export a workflow's full execution history.
+	 *
+	 * @param int $workflow_id Workflow ID.
+	 * @return array JSON-serializable export data.
+	 */
+	public static function export_workflow( int $workflow_id ): array {
+		self::ensure_initialized();
+		return WorkflowExporter::export( $workflow_id, self::$conn );
+	}
+
+	/**
+	 * Replay an exported workflow in the current environment.
+	 *
+	 * @param array $data Export data from export_workflow().
+	 * @return int The new workflow ID.
+	 */
+	public static function replay_workflow( array $data ): int {
+		self::ensure_initialized();
+		return WorkflowReplayer::replay( $data, self::$conn );
+	}
+
+	/**
 	 * Get the full timeline of events for a workflow.
 	 *
 	 * @param int $workflow_id Workflow ID.

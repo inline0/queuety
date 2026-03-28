@@ -132,6 +132,7 @@ class Worker {
 		$jobs_processed       = 0;
 		$stale_check_timer    = time();
 		$schedule_check_timer = time();
+		$deadline_check_timer = time();
 		$primary_queue        = $queues[0];
 
 		while ( ! $this->should_stop ) {
@@ -154,6 +155,12 @@ class Worker {
 					$this->debug_log( 'Running scheduler tick.', $primary_queue );
 					$this->scheduler->tick();
 					$schedule_check_timer = time();
+				}
+
+				// Check for expired workflow deadlines periodically.
+				if ( time() - $deadline_check_timer >= 60 ) {
+					$this->workflow->check_deadlines();
+					$deadline_check_timer = time();
 				}
 
 				continue;
@@ -202,6 +209,12 @@ class Worker {
 			if ( null !== $this->scheduler && time() - $schedule_check_timer >= 60 ) {
 				$this->scheduler->tick();
 				$schedule_check_timer = time();
+			}
+
+			// Periodic deadline check.
+			if ( time() - $deadline_check_timer >= 60 ) {
+				$this->workflow->check_deadlines();
+				$deadline_check_timer = time();
 			}
 		}
 	}

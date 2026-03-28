@@ -1482,6 +1482,286 @@ class Workflow {
 	}
 
 	/**
+	 * Rewind a workflow to a previous step's state and re-run from there.
+	 *
+	 * Loads the state snapshot from the event log at the given step,
+	 * restores internal state, sets current_step to $to_step + 1,
+	 * and enqueues the next step.
+	 *
+	 * @param int $workflow_id The workflow ID.
+	 * @param int $to_step     The step index to rewind to (must have a completed snapshot).
+	 * @throws \RuntimeException If the workflow is not found, no snapshot exists, or event log is unavailable.
+	 * @throws \Throwable If the database transaction fails.
+	 */
+	public function rewind( int $workflow_id, int $to_step ): void {
+		if ( null === $this->event_log ) {
+			throw new \RuntimeException( 'Workflow event log is required for rewind.' );
+		}
+
+		$snapshot = $this->event_log->get_state_at_step( $workflow_id, $to_step );
+
+		if ( null === $snapshot ) {
+			throw new \RuntimeException(
+				"No state snapshot found for workflow {$workflow_id} at step {$to_step}."
+			);
+		}
+
+		$pdo    = $this->conn->pdo();
+		$wf_tbl = $this->conn->table( Config::table_workflows() );
+
+		$pdo->beginTransaction();
+		try {
+			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+			$stmt->execute( array( 'id' => $workflow_id ) );
+			$wf_row = $stmt->fetch();
+
+			if ( ! $wf_row ) {
+				$pdo->rollBack();
+				throw new \RuntimeException( "Workflow {$workflow_id} not found." );
+			}
+
+			$full_state = json_decode( $wf_row['state'], true ) ?: array();
+
+			// Restore internal reserved keys from the current workflow row.
+			$steps        = $full_state['_steps'] ?? array();
+			$queue_name   = $full_state['_queue'] ?? 'default';
+			$priority_val = $full_state['_priority'] ?? 0;
+			$max_attempts = $full_state['_max_attempts'] ?? 3;
+
+			// Build the new state: snapshot (public data) + reserved keys.
+			$new_state                  = $snapshot;
+			$new_state['_steps']        = $steps;
+			$new_state['_queue']        = $queue_name;
+			$new_state['_priority']     = $priority_val;
+			$new_state['_max_attempts'] = $max_attempts;
+
+			// Preserve other reserved keys from the original state.
+			foreach ( $full_state as $key => $value ) {
+				if ( str_starts_with( $key, '_' ) && ! isset( $new_state[ $key ] ) ) {
+					$new_state[ $key ] = $value;
+				}
+			}
+
+			$next_step = $to_step + 1;
+
+			// Update workflow row.
+			$upd = $pdo->prepare(
+				"UPDATE {$wf_tbl}
+				SET state = :state, current_step = :step, status = 'running',
+					error_message = NULL, failed_at = NULL
+				WHERE id = :id"
+			);
+			$upd->execute(
+				array(
+					'state' => json_encode( $new_state, JSON_THROW_ON_ERROR ),
+					'step'  => $next_step,
+					'id'    => $workflow_id,
+				)
+			);
+
+			// Enqueue the next step.
+			if ( isset( $steps[ $next_step ] ) ) {
+				$priority = Priority::tryFrom( $priority_val ) ?? Priority::Low;
+
+				$this->enqueue_step_def(
+					$steps[ $next_step ],
+					$workflow_id,
+					$next_step,
+					$queue_name,
+					$priority,
+					$max_attempts,
+				);
+			}
+
+			// Log the rewind event.
+			$this->logger->log(
+				LogEvent::WorkflowRewound,
+				array(
+					'workflow_id' => $workflow_id,
+					'handler'     => $wf_row['name'],
+					'queue'       => $queue_name,
+					'context'     => array( 'rewound_to_step' => $to_step ),
+				)
+			);
+
+			$pdo->commit();
+			$this->invalidate_workflow_cache( $workflow_id );
+		} catch ( \Throwable $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+			throw $e;
+		}
+	}
+
+	/**
+	 * Fork a running workflow into an independent copy at its current state.
+	 *
+	 * Creates a new workflow row with the same state and step definitions,
+	 * enqueues the current step for the new workflow, and logs the fork
+	 * event on both the original and the forked workflow.
+	 *
+	 * @param int $workflow_id The workflow ID to fork.
+	 * @return int The new (forked) workflow ID.
+	 * @throws \RuntimeException If the workflow is not found.
+	 * @throws \Throwable If the database transaction fails.
+	 */
+	public function fork( int $workflow_id ): int {
+		$pdo    = $this->conn->pdo();
+		$wf_tbl = $this->conn->table( Config::table_workflows() );
+
+		$pdo->beginTransaction();
+		try {
+			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+			$stmt->execute( array( 'id' => $workflow_id ) );
+			$wf_row = $stmt->fetch();
+
+			if ( ! $wf_row ) {
+				$pdo->rollBack();
+				throw new \RuntimeException( "Workflow {$workflow_id} not found." );
+			}
+
+			$state        = json_decode( $wf_row['state'], true ) ?: array();
+			$current_step = (int) $wf_row['current_step'];
+			$total_steps  = (int) $wf_row['total_steps'];
+			$steps        = $state['_steps'] ?? array();
+			$queue_name   = $state['_queue'] ?? 'default';
+			$priority_val = $state['_priority'] ?? 0;
+			$max_attempts = $state['_max_attempts'] ?? 3;
+			$fork_name    = $wf_row['name'] . '_fork_' . time();
+
+			// Insert the forked workflow row.
+			$ins = $pdo->prepare(
+				"INSERT INTO {$wf_tbl}
+				(name, status, state, current_step, total_steps)
+				VALUES (:name, 'running', :state, :step, :total)"
+			);
+			$ins->execute(
+				array(
+					'name'  => $fork_name,
+					'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
+					'step'  => $current_step,
+					'total' => $total_steps,
+				)
+			);
+			$forked_id = (int) $pdo->lastInsertId();
+
+			// Enqueue the current step for the forked workflow.
+			if ( isset( $steps[ $current_step ] ) ) {
+				$priority = Priority::tryFrom( $priority_val ) ?? Priority::Low;
+
+				$this->enqueue_step_def(
+					$steps[ $current_step ],
+					$forked_id,
+					$current_step,
+					$queue_name,
+					$priority,
+					$max_attempts,
+				);
+			}
+
+			// Log fork event on the original workflow.
+			$this->logger->log(
+				LogEvent::WorkflowForked,
+				array(
+					'workflow_id' => $workflow_id,
+					'handler'     => $wf_row['name'],
+					'queue'       => $queue_name,
+					'context'     => array( 'forked_workflow_id' => $forked_id ),
+				)
+			);
+
+			// Log fork event on the forked workflow.
+			$this->logger->log(
+				LogEvent::WorkflowForked,
+				array(
+					'workflow_id' => $forked_id,
+					'handler'     => $fork_name,
+					'queue'       => $queue_name,
+					'context'     => array( 'forked_from_workflow_id' => $workflow_id ),
+				)
+			);
+
+			$pdo->commit();
+			return $forked_id;
+		} catch ( \Throwable $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+			throw $e;
+		}
+	}
+
+	/**
+	 * Check for workflows that have exceeded their deadline.
+	 *
+	 * Finds running workflows where deadline_at has passed, calls the
+	 * deadline handler if one is defined, marks them as failed, and
+	 * logs the WorkflowDeadlineExceeded event.
+	 *
+	 * @return int Number of workflows that exceeded their deadline.
+	 */
+	public function check_deadlines(): int {
+		$pdo    = $this->conn->pdo();
+		$wf_tbl = $this->conn->table( Config::table_workflows() );
+		$count  = 0;
+
+		$stmt = $pdo->prepare(
+			"SELECT * FROM {$wf_tbl}
+			WHERE status = 'running'
+				AND deadline_at IS NOT NULL
+				AND deadline_at <= NOW()"
+		);
+		$stmt->execute();
+		$rows = $stmt->fetchAll();
+
+		foreach ( $rows as $wf_row ) {
+			$state         = json_decode( $wf_row['state'], true ) ?: array();
+			$handler_class = $state['_on_deadline'] ?? null;
+
+			// Call deadline handler if defined.
+			if ( null !== $handler_class && class_exists( $handler_class ) ) {
+				$public_state = array_filter(
+					$state,
+					fn( string $key ) => ! str_starts_with( $key, '_' ),
+					ARRAY_FILTER_USE_KEY
+				);
+
+				try {
+					$handler_instance = new $handler_class();
+					$handler_instance->handle( $public_state );
+				} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Deadline handler failure should not prevent marking as failed.
+					unset( $e );
+				}
+			}
+
+			// Mark workflow as failed.
+			$upd = $pdo->prepare(
+				"UPDATE {$wf_tbl}
+				SET status = 'failed', failed_at = NOW(), error_message = 'Deadline exceeded'
+				WHERE id = :id AND status = 'running'"
+			);
+			$upd->execute( array( 'id' => $wf_row['id'] ) );
+
+			if ( $upd->rowCount() > 0 ) {
+				$this->logger->log(
+					LogEvent::WorkflowDeadlineExceeded,
+					array(
+						'workflow_id' => (int) $wf_row['id'],
+						'handler'     => $wf_row['name'],
+						'queue'       => $state['_queue'] ?? 'default',
+					)
+				);
+
+				$this->invalidate_workflow_cache( (int) $wf_row['id'] );
+				++$count;
+			}
+		}
+
+		return $count;
+	}
+
+	/**
 	 * Invalidate cached workflow state and status after a mutation.
 	 *
 	 * @param int $workflow_id The workflow ID whose cache entries should be cleared.

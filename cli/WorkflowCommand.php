@@ -188,6 +188,104 @@ class WorkflowCommand extends \WP_CLI_Command {
 	}
 
 	/**
+	 * Rewind a workflow to a previous step and re-run from there.
+	 *
+	 * <id>
+	 * : Workflow ID.
+	 *
+	 * <step>
+	 * : Step index to rewind to (0-based).
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function rewind( $args, $assoc_args ) {
+		try {
+			Queuety::rewind_workflow( (int) $args[0], (int) $args[1] );
+			\WP_CLI::success( "Workflow #{$args[0]} rewound to step {$args[1]}." );
+		} catch ( \RuntimeException $e ) {
+			\WP_CLI::error( $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Fork a running workflow into an independent copy.
+	 *
+	 * <id>
+	 * : Workflow ID.
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function fork( $args, $assoc_args ) {
+		try {
+			$forked_id = Queuety::fork_workflow( (int) $args[0] );
+			\WP_CLI::success( "Workflow #{$args[0]} forked. New workflow ID: {$forked_id}." );
+		} catch ( \RuntimeException $e ) {
+			\WP_CLI::error( $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Export a workflow's full execution history to JSON.
+	 *
+	 * <id>
+	 * : Workflow ID.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [--output=<file>]
+	 * : File path to write the JSON to. Defaults to stdout.
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function export( $args, $assoc_args ) {
+		try {
+			$data = Queuety::export_workflow( (int) $args[0] );
+			$json = json_encode( $data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR );
+
+			if ( isset( $assoc_args['output'] ) ) {
+				file_put_contents( $assoc_args['output'], $json );
+				\WP_CLI::success( "Workflow #{$args[0]} exported to {$assoc_args['output']}." );
+			} else {
+				\WP_CLI::log( $json );
+			}
+		} catch ( \RuntimeException $e ) {
+			\WP_CLI::error( $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Replay an exported workflow from a JSON file.
+	 *
+	 * <file>
+	 * : Path to the exported JSON file.
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function replay( $args, $assoc_args ) {
+		$file = $args[0];
+
+		if ( ! file_exists( $file ) ) {
+			\WP_CLI::error( "File not found: {$file}" );
+			return;
+		}
+
+		try {
+			$json   = file_get_contents( $file );
+			$data   = json_decode( $json, true, 512, JSON_THROW_ON_ERROR );
+			$new_id = Queuety::replay_workflow( $data );
+			\WP_CLI::success( "Workflow replayed. New workflow ID: {$new_id}." );
+		} catch ( \JsonException $e ) {
+			\WP_CLI::error( "Invalid JSON: {$e->getMessage()}" );
+		} catch ( \RuntimeException $e ) {
+			\WP_CLI::error( $e->getMessage() );
+		}
+	}
+
+	/**
 	 * Show the state snapshot at a specific workflow step.
 	 *
 	 * Displays the full workflow state as it was after the given step completed.

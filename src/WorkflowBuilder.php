@@ -68,6 +68,20 @@ class WorkflowBuilder {
 	private ?int $prune_after = null;
 
 	/**
+	 * Deadline duration in seconds for the entire workflow.
+	 *
+	 * @var int|null
+	 */
+	private ?int $deadline_seconds = null;
+
+	/**
+	 * Handler class to call when the workflow deadline is exceeded.
+	 *
+	 * @var string|null
+	 */
+	private ?string $deadline_handler = null;
+
+	/**
 	 * Constructor.
 	 *
 	 * @param string     $name      Workflow name.
@@ -212,6 +226,37 @@ class WorkflowBuilder {
 	 */
 	public function prune_state_after( int $steps = 2 ): self {
 		$this->prune_after = $steps;
+		return $this;
+	}
+
+	/**
+	 * Set a deadline for the entire workflow.
+	 *
+	 * If the workflow is not completed within the specified duration,
+	 * the deadline handler (if set) will be called and the workflow
+	 * will be marked as failed.
+	 *
+	 * @param int $seconds Seconds.
+	 * @param int $minutes Minutes.
+	 * @param int $hours   Hours.
+	 * @param int $days    Days.
+	 * @return self
+	 */
+	public function must_complete_within( int $seconds = 0, int $minutes = 0, int $hours = 0, int $days = 0 ): self {
+		$this->deadline_seconds = $seconds + ( $minutes * 60 ) + ( $hours * 3600 ) + ( $days * 86400 );
+		return $this;
+	}
+
+	/**
+	 * Register a handler class that is called when the workflow deadline is exceeded.
+	 *
+	 * The handler class must implement a handle(array $state): void method.
+	 *
+	 * @param string $handler_class Fully qualified class name.
+	 * @return self
+	 */
+	public function on_deadline( string $handler_class ): self {
+		$this->deadline_handler = $handler_class;
 		return $this;
 	}
 
@@ -369,17 +414,31 @@ class WorkflowBuilder {
 			$state['_step_outputs']      = array();
 		}
 
+		if ( null !== $this->deadline_seconds ) {
+			$state['_deadline_seconds'] = $this->deadline_seconds;
+		}
+
+		if ( null !== $this->deadline_handler ) {
+			$state['_on_deadline'] = $this->deadline_handler;
+		}
+
+		$deadline_at = null;
+		if ( null !== $this->deadline_seconds ) {
+			$deadline_at = gmdate( 'Y-m-d H:i:s', time() + $this->deadline_seconds );
+		}
+
 		$pdo->beginTransaction();
 		try {
 			$stmt = $pdo->prepare(
-				"INSERT INTO {$wf_tbl} (name, status, state, current_step, total_steps)
-				VALUES (:name, 'running', :state, 0, :total_steps)"
+				"INSERT INTO {$wf_tbl} (name, status, state, current_step, total_steps, deadline_at)
+				VALUES (:name, 'running', :state, 0, :total_steps, :deadline_at)"
 			);
 			$stmt->execute(
 				array(
 					'name'        => $this->name,
 					'state'       => json_encode( $state, JSON_THROW_ON_ERROR ),
 					'total_steps' => count( $built_steps ),
+					'deadline_at' => $deadline_at,
 				)
 			);
 			$workflow_id = (int) $pdo->lastInsertId();
