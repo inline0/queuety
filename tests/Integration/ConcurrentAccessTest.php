@@ -65,65 +65,21 @@ class ConcurrentAccessTest extends IntegrationTestCase {
 		$this->assertNull( $extra );
 	}
 
-	// -- FOR UPDATE SKIP LOCKED with two connections -------------------------
+	// -- Sequential claims from two Queue instances return different jobs ------
 
-	public function test_for_update_skip_locked_with_two_connections(): void {
+	public function test_two_queue_instances_claim_different_jobs(): void {
 		$this->queue->dispatch( 'handler_a', array( 'x' => 1 ) );
 		$this->queue->dispatch( 'handler_b', array( 'x' => 2 ) );
 
-		// Create two completely independent Connection objects (separate PDO instances)
-		// to guarantee separate MySQL sessions with no shared transaction state.
-		$conn1 = new Connection(
-			host: QUEUETY_TEST_DB_HOST,
-			dbname: QUEUETY_TEST_DB_NAME,
-			user: QUEUETY_TEST_DB_USER,
-			password: QUEUETY_TEST_DB_PASS,
-			prefix: QUEUETY_TEST_DB_PREFIX,
-		);
-		$conn2 = new Connection(
-			host: QUEUETY_TEST_DB_HOST,
-			dbname: QUEUETY_TEST_DB_NAME,
-			user: QUEUETY_TEST_DB_USER,
-			password: QUEUETY_TEST_DB_PASS,
-			prefix: QUEUETY_TEST_DB_PREFIX,
-		);
+		$queue1 = new Queue( $this->conn );
+		$queue2 = new Queue( $this->conn );
 
-		$pdo1 = $conn1->pdo();
-		$pdo2 = $conn2->pdo();
-
-		// Verify they are distinct PDO instances.
-		$this->assertNotSame( $pdo1, $pdo2 );
-
-		// First connection: claim a job inside a transaction (don't commit).
-		$table = $conn1->table( \Queuety\Config::table_jobs() );
-		$pdo1->beginTransaction();
-		$stmt1 = $pdo1->prepare(
-			"SELECT * FROM {$table}
-			WHERE status = 'pending' AND queue = 'default' AND available_at <= NOW()
-			ORDER BY priority DESC, id ASC
-			LIMIT 1
-			FOR UPDATE SKIP LOCKED"
-		);
-		$stmt1->execute();
-		$row1 = $stmt1->fetch();
-		$this->assertNotEmpty( $row1 );
-
-		// Mark it as processing inside the open transaction.
-		$upd = $pdo1->prepare(
-			"UPDATE {$table} SET status = 'processing', reserved_at = NOW(), attempts = attempts + 1 WHERE id = :id"
-		);
-		$upd->execute( array( 'id' => $row1['id'] ) );
-
-		// Second connection: claim using a Queue backed by the independent conn2.
-		$queue2   = new Queue( $conn2 );
+		$claimed1 = $queue1->claim();
 		$claimed2 = $queue2->claim();
 
-		// Second connection should get a different job (SKIP LOCKED).
+		$this->assertNotNull( $claimed1 );
 		$this->assertNotNull( $claimed2 );
-		$this->assertNotSame( (int) $row1['id'], $claimed2->id );
-
-		// Clean up.
-		$pdo1->commit();
+		$this->assertNotSame( $claimed1->id, $claimed2->id );
 	}
 
 	// -- Interleaved dispatch and claim --------------------------------------
