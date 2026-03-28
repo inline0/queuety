@@ -364,6 +364,23 @@ $registry = Queuety::workflow_templates();
 $template = $registry->get( 'onboarding' ); // WorkflowTemplate or null
 ```
 
+### `Queuety::load_workflows( $directory, $recursive )`
+
+Load and register all workflow files from a directory. Each `.php` file should return a `WorkflowBuilder`. Returns the number of workflows registered.
+
+```php
+$count = Queuety::load_workflows( __DIR__ . '/workflows/' );
+$count = Queuety::load_workflows( __DIR__ . '/workflows/', recursive: true );
+```
+
+### `Queuety::load_workflow_file( $file_path )`
+
+Load and register a single workflow file. Returns the `WorkflowTemplate` or `null` if the file does not return a builder.
+
+```php
+$template = Queuety::load_workflow_file( __DIR__ . '/workflows/onboard-user.php' );
+```
+
 ## Scheduling
 
 ### `Queuety::schedule( $handler, $payload )`

@@ -1,0 +1,138 @@
+---
+title: File Workflows
+description: Define complete workflows in a single PHP file with inline step classes.
+---
+
+## Single-file workflows
+
+A workflow can be fully self-contained in one PHP file. Define the step classes and the builder together, then drop the file in a directory. Queuety loads and registers it automatically.
+
+```php
+// workflows/onboard-user.php
+
+class CreateAccount implements \Queuety\Step {
+    public function handle(array $state): array {
+        $user = create_user($state['email']);
+        return ['user_id' => $user->id, 'user_name' => $user->name];
+    }
+    public function config(): array {
+        return ['needs_wordpress' => true, 'max_attempts' => 3];
+    }
+}
+
+class SendWelcome implements \Queuety\Step {
+    public function handle(array $state): array {
+        wp_mail($state['email'], 'Welcome ' . $state['user_name'], '...');
+        return ['welcomed' => true];
+    }
+    public function config(): array {
+        return ['needs_wordpress' => true];
+    }
+}
+
+return Queuety::define_workflow('onboard_user')
+    ->then(CreateAccount::class, 'create_account')
+    ->then(SendWelcome::class, 'send_welcome');
+```
+
+The file returns a `WorkflowBuilder`. Each step class is defined inline. When the file is loaded, the classes become available and the workflow is registered as a template.
+
+## Loading workflows
+
+Load all workflow files from a directory:
+
+```php
+// Load all .php files from the workflows directory
+$count = Queuety::load_workflows(__DIR__ . '/workflows/');
+```
+
+Or load a single file:
+
+```php
+$template = Queuety::load_workflow_file(__DIR__ . '/workflows/onboard-user.php');
+```
+
+Then dispatch by name:
+
+```php
+$workflow_id = Queuety::run_workflow('onboard_user', ['email' => 'user@example.com']);
+```
+
+## Recursive loading
+
+Pass `true` as the second argument to scan subdirectories:
+
+```php
+Queuety::load_workflows(__DIR__ . '/workflows/', recursive: true);
+```
+
+This allows organizing workflows into folders:
+
+```
+workflows/
+├── onboarding/
+│   ├── new-user.php
+│   └── trial-upgrade.php
+├── reports/
+│   ├── daily-summary.php
+│   └── weekly-digest.php
+└── notifications/
+    └── digest-email.php
+```
+
+## Using all workflow features
+
+File workflows support everything the builder supports. Timers, signals, parallel steps, conditional branching, sub-workflows, cancellation handlers, and state pruning all work:
+
+```php
+// workflows/approval-flow.php
+
+class SubmitRequest implements \Queuety\Step {
+    public function handle(array $state): array {
+        return ['submitted_at' => date('Y-m-d H:i:s')];
+    }
+    public function config(): array { return []; }
+}
+
+class ProcessApproval implements \Queuety\Step {
+    public function handle(array $state): array {
+        return [
+            'approved_by' => $state['approved_by'],
+            'processed' => true,
+        ];
+    }
+    public function config(): array { return []; }
+}
+
+class CleanupRequest implements \Queuety\Handler {
+    public function handle(array $payload): void {
+        delete_pending_request($payload['request_id']);
+    }
+    public function config(): array { return []; }
+}
+
+return Queuety::define_workflow('approval_flow')
+    ->then(SubmitRequest::class)
+    ->sleep(hours: 0)
+    ->wait_for_signal('approved')
+    ->then(ProcessApproval::class)
+    ->on_cancel(CleanupRequest::class)
+    ->prune_state_after(2);
+```
+
+## When to use file workflows
+
+File workflows are ideal when:
+
+- An LLM or code generator creates workflows programmatically
+- A workflow is simple enough to fit in one file
+- You want to keep step logic close to the workflow definition
+- You're prototyping and want fast iteration
+
+For larger workflows with shared step classes, complex middleware, or steps reused across multiple workflows, the standard approach of separate class files with PSR-4 autoloading is more maintainable.
+
+## How it works
+
+Under the hood, file workflows use the exact same engine as the builder API. Each step is a separate job in the database. State flows via the `queuety_workflows` table. There is no replay, no determinism requirement, and no performance difference.
+
+The file is `require`d once at load time. The returned `WorkflowBuilder` is converted to a `WorkflowTemplate` and stored in the `WorkflowRegistry`. Dispatching and execution are identical to any other workflow.
