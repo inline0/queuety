@@ -27,13 +27,15 @@ readonly class Job {
 	 * @param int                     $attempts      Number of attempts so far.
 	 * @param int                     $max_attempts  Maximum retry attempts.
 	 * @param \DateTimeImmutable      $available_at  When the job becomes available.
-	 * @param \DateTimeImmutable|null $reserved_at  When the job was reserved.
-	 * @param \DateTimeImmutable|null $completed_at When the job completed.
-	 * @param \DateTimeImmutable|null $failed_at    When the job failed.
+	 * @param \DateTimeImmutable|null $reserved_at   When the job was reserved.
+	 * @param \DateTimeImmutable|null $completed_at  When the job completed.
+	 * @param \DateTimeImmutable|null $failed_at     When the job failed.
 	 * @param string|null             $error_message Error message if failed.
 	 * @param int|null                $workflow_id   Parent workflow ID.
 	 * @param int|null                $step_index    Step index in workflow.
 	 * @param \DateTimeImmutable      $created_at    When the job was created.
+	 * @param string|null             $payload_hash  SHA-256 hash of the payload for unique job detection.
+	 * @param int|null                $depends_on    ID of the job this job depends on.
 	 */
 	public function __construct(
 		public int $id,
@@ -52,6 +54,8 @@ readonly class Job {
 		public ?int $workflow_id,
 		public ?int $step_index,
 		public \DateTimeImmutable $created_at,
+		public ?string $payload_hash = null,
+		public ?int $depends_on = null,
 	) {}
 
 	/**
@@ -78,6 +82,8 @@ readonly class Job {
 			workflow_id: $row['workflow_id'] ? (int) $row['workflow_id'] : null,
 			step_index: $row['step_index'] !== null ? (int) $row['step_index'] : null,
 			created_at: new \DateTimeImmutable( $row['created_at'] ),
+			payload_hash: $row['payload_hash'] ?? null,
+			depends_on: isset( $row['depends_on'] ) && null !== $row['depends_on'] ? (int) $row['depends_on'] : null,
 		);
 	}
 

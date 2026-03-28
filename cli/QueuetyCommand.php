@@ -285,6 +285,40 @@ class QueuetyCommand extends \WP_CLI_Command {
 	}
 
 	/**
+	 * Pause a queue so workers skip it.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <queue>
+	 * : Queue name to pause.
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function pause( $args, $assoc_args ) {
+		$queue = $args[0];
+		Queuety::pause( $queue );
+		\WP_CLI::success( "Queue '{$queue}' paused." );
+	}
+
+	/**
+	 * Resume a paused queue.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <queue>
+	 * : Queue name to resume.
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function resume( $args, $assoc_args ) {
+		$queue = $args[0];
+		Queuety::resume( $queue );
+		\WP_CLI::success( "Queue '{$queue}' resumed." );
+	}
+
+	/**
 	 * Get the database connection via reflection.
 	 *
 	 * @return \Queuety\Connection

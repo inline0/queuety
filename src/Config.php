@@ -124,4 +124,13 @@ class Config {
 	public static function table_schedules(): string {
 		return defined( 'QUEUETY_TABLE_SCHEDULES' ) ? QUEUETY_TABLE_SCHEDULES : 'queuety_schedules';
 	}
+
+	/**
+	 * Get the queue states table name.
+	 *
+	 * @return string
+	 */
+	public static function table_queue_states(): string {
+		return defined( 'QUEUETY_TABLE_QUEUE_STATES' ) ? QUEUETY_TABLE_QUEUE_STATES : 'queuety_queue_states';
+	}
 }

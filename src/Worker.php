@@ -9,6 +9,7 @@ namespace Queuety;
 
 use Queuety\Enums\BackoffStrategy;
 use Queuety\Enums\LogEvent;
+use Queuety\Exceptions\TimeoutException;
 
 /**
  * Worker process loop. Claims jobs, executes handlers, manages lifecycle.
@@ -57,6 +58,23 @@ class Worker {
 		$schedule_check_timer = time();
 
 		while ( ! $this->should_stop ) {
+			// Check if queue is paused before claiming.
+			if ( $this->queue->is_queue_paused( $queue_name ) ) {
+				if ( $once ) {
+					break;
+				}
+				$this->logger->log(
+					LogEvent::Started,
+					array(
+						'handler' => '_worker',
+						'queue'   => $queue_name,
+						'context' => array( 'message' => "Queue '{$queue_name}' is paused, skipping." ),
+					)
+				);
+				sleep( Config::worker_sleep() );
+				continue;
+			}
+
 			$job = $this->queue->claim( $queue_name );
 
 			if ( null === $job ) {
@@ -136,6 +154,11 @@ class Worker {
 		$skip_streak  = 0;
 
 		while ( true ) {
+			// Check if queue is paused before claiming.
+			if ( $this->queue->is_queue_paused( $queue_name ) ) {
+				break;
+			}
+
 			$job = $this->queue->claim( $queue_name );
 			if ( null === $job ) {
 				break;
@@ -175,9 +198,13 @@ class Worker {
 	 * Execute a single job.
 	 *
 	 * @param Job $job The claimed job.
+	 * @throws TimeoutException If the job exceeds max execution time (caught internally).
 	 */
 	public function process_job( Job $job ): void {
-		$start_time = hrtime( true );
+		$start_time       = hrtime( true );
+		$timeout_seconds  = Config::max_execution_time();
+		$pcntl_available  = function_exists( 'pcntl_alarm' ) && function_exists( 'pcntl_signal' );
+		$previous_handler = null;
 
 		$this->logger->log(
 			LogEvent::Started,
@@ -190,6 +217,15 @@ class Worker {
 				'attempt'     => $job->attempts,
 			)
 		);
+
+		// Install timeout alarm if pcntl is available.
+		if ( $pcntl_available ) {
+			$alarm_callback   = static function () use ( $timeout_seconds ): void {
+				throw new TimeoutException( $timeout_seconds );
+			};
+			$previous_handler = pcntl_signal( SIGALRM, $alarm_callback );
+			pcntl_alarm( $timeout_seconds );
+		}
 
 		try {
 			$handler = $this->registry->resolve( $job->handler );
@@ -303,6 +339,16 @@ class Worker {
 						'attempt'     => $job->attempts,
 					)
 				);
+			}
+		} finally {
+			// Reset the alarm and restore previous signal handler.
+			if ( $pcntl_available ) {
+				pcntl_alarm( 0 );
+				if ( null !== $previous_handler ) {
+					pcntl_signal( SIGALRM, $previous_handler );
+				} else {
+					pcntl_signal( SIGALRM, SIG_DFL );
+				}
 			}
 		}
 	}

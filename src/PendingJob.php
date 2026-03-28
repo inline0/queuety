@@ -58,6 +58,20 @@ class PendingJob {
 	private ?array $rate_limit_config = null;
 
 	/**
+	 * Whether this job should be unique (no duplicates).
+	 *
+	 * @var bool
+	 */
+	private bool $unique = false;
+
+	/**
+	 * ID of a job this job depends on (must complete first).
+	 *
+	 * @var int|null
+	 */
+	private ?int $depends_on = null;
+
+	/**
 	 * Whether the job has been dispatched.
 	 *
 	 * @var bool
@@ -153,6 +167,32 @@ class PendingJob {
 	}
 
 	/**
+	 * Mark this job as unique to prevent duplicate dispatch.
+	 *
+	 * When unique, dispatching a job with the same handler and payload
+	 * that already exists as pending or processing will return the
+	 * existing job ID instead of creating a new one.
+	 *
+	 * @return self
+	 */
+	public function unique(): self {
+		$this->unique = true;
+		return $this;
+	}
+
+	/**
+	 * Set a job dependency. This job will not be claimed until the
+	 * specified job has completed.
+	 *
+	 * @param int $job_id ID of the job that must complete first.
+	 * @return self
+	 */
+	public function after( int $job_id ): self {
+		$this->depends_on = $job_id;
+		return $this;
+	}
+
+	/**
 	 * Get the dispatched job ID. Forces dispatch if not yet done.
 	 *
 	 * @return int
@@ -175,6 +215,8 @@ class PendingJob {
 			priority: $this->priority,
 			delay: $this->delay,
 			max_attempts: $this->max_attempts,
+			unique: $this->unique,
+			depends_on: $this->depends_on,
 		);
 		$this->dispatched = true;
 

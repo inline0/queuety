@@ -758,13 +758,29 @@ This means WooCommerce and any plugin using Action Scheduler can switch to Queue
 - Recurring jobs / scheduler (`queuety_schedules` table)
 - Worker concurrency (`--workers=N`)
 
-### v0.3.0
+### v0.3.0 - Core completeness
 
-- Action Scheduler compatibility layer
-- Batch dispatch
-- Queue pause/resume
-- Worker memory and job count limits
-- Packagist package
+- Batch dispatch (`Queuety::batch()` with single multi-row INSERT)
+- Queue pause/resume (`Queuety::pause('emails')` / `Queuety::resume('emails')`)
+- Unique jobs (prevent duplicate dispatches for same handler+payload)
+- Job timeout enforcement (kill/bury jobs exceeding max_execution_time)
+- Job dependencies (job B waits for job A to complete)
+
+### v0.4.0 - Advanced workflows
+
+- Conditional branching (if step returns X, skip to step N)
+- Parallel steps (run steps concurrently, wait for all before continuing)
+- Sub-workflows (a step can spawn and await another workflow)
+- Workflow templates (reusable, named workflow definitions)
+
+### v0.5.0 - DX and observability
+
+- Metrics API (throughput, latency percentiles, error rates per handler)
+- Webhook notifications on failure/completion
+- Job payload inspection via CLI (`wp queuety inspect <id>`)
+- PHP attributes for handler registration (`#[QueuetyHandler('name')]`)
+- Auto-discovery of handler classes from a configured directory
+- Debug mode with verbose worker logging
 
 ## Distribution
 

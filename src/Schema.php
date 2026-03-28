@@ -18,11 +18,12 @@ class Schema {
 	 * @param Connection $conn Database connection.
 	 */
 	public static function install( Connection $conn ): void {
-		$pdo       = $conn->pdo();
-		$jobs      = $conn->table( Config::table_jobs() );
-		$wf        = $conn->table( Config::table_workflows() );
-		$logs      = $conn->table( Config::table_logs() );
-		$schedules = $conn->table( Config::table_schedules() );
+		$pdo          = $conn->pdo();
+		$jobs         = $conn->table( Config::table_jobs() );
+		$wf           = $conn->table( Config::table_workflows() );
+		$logs         = $conn->table( Config::table_logs() );
+		$schedules    = $conn->table( Config::table_schedules() );
+		$queue_states = $conn->table( Config::table_queue_states() );
 
 		$pdo->exec(
 			"CREATE TABLE IF NOT EXISTS {$jobs} (
@@ -30,6 +31,7 @@ class Schema {
 				queue VARCHAR(64) NOT NULL DEFAULT 'default',
 				handler VARCHAR(255) NOT NULL,
 				payload LONGTEXT NOT NULL,
+				payload_hash VARCHAR(64) DEFAULT NULL,
 				priority TINYINT NOT NULL DEFAULT 0,
 				status ENUM('pending', 'processing', 'completed', 'failed', 'buried') NOT NULL DEFAULT 'pending',
 				attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
@@ -41,11 +43,14 @@ class Schema {
 				error_message TEXT DEFAULT NULL,
 				workflow_id BIGINT UNSIGNED DEFAULT NULL,
 				step_index TINYINT UNSIGNED DEFAULT NULL,
+				depends_on BIGINT UNSIGNED DEFAULT NULL,
 				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				INDEX idx_queue_status_available (queue, status, available_at, priority),
 				INDEX idx_status (status),
 				INDEX idx_reserved (status, reserved_at),
-				INDEX idx_workflow (workflow_id, step_index)
+				INDEX idx_workflow (workflow_id, step_index),
+				INDEX idx_unique (handler, payload_hash, status),
+				INDEX idx_depends (depends_on)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 
@@ -106,6 +111,14 @@ class Schema {
 				INDEX idx_next_run (enabled, next_run)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$queue_states} (
+				queue VARCHAR(64) NOT NULL PRIMARY KEY,
+				paused TINYINT(1) NOT NULL DEFAULT 0,
+				paused_at DATETIME DEFAULT NULL
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
 	}
 
 	/**
@@ -114,14 +127,16 @@ class Schema {
 	 * @param Connection $conn Database connection.
 	 */
 	public static function uninstall( Connection $conn ): void {
-		$pdo       = $conn->pdo();
-		$jobs      = $conn->table( Config::table_jobs() );
-		$wf        = $conn->table( Config::table_workflows() );
-		$logs      = $conn->table( Config::table_logs() );
-		$schedules = $conn->table( Config::table_schedules() );
+		$pdo          = $conn->pdo();
+		$jobs         = $conn->table( Config::table_jobs() );
+		$wf           = $conn->table( Config::table_workflows() );
+		$logs         = $conn->table( Config::table_logs() );
+		$schedules    = $conn->table( Config::table_schedules() );
+		$queue_states = $conn->table( Config::table_queue_states() );
 
 		$pdo->exec( "DROP TABLE IF EXISTS {$logs}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$schedules}" );
+		$pdo->exec( "DROP TABLE IF EXISTS {$queue_states}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$jobs}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$wf}" );
 	}

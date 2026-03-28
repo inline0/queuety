@@ -36,7 +36,9 @@ class Queue {
 	 * @param int      $max_attempts Maximum retry attempts.
 	 * @param int|null $workflow_id  Parent workflow ID, if part of a workflow.
 	 * @param int|null $step_index   Step index within the workflow.
-	 * @return int The new job ID.
+	 * @param bool     $unique       When true, prevent duplicate jobs with the same handler and payload.
+	 * @param int|null $depends_on   ID of a job that must complete before this one can be claimed.
+	 * @return int The new job ID (or the existing job ID if unique and a duplicate exists).
 	 */
 	public function dispatch(
 		string $handler,
@@ -47,28 +49,57 @@ class Queue {
 		int $max_attempts = 3,
 		?int $workflow_id = null,
 		?int $step_index = null,
+		bool $unique = false,
+		?int $depends_on = null,
 	): int {
 		$table        = $this->conn->table( Config::table_jobs() );
 		$available_at = gmdate( 'Y-m-d H:i:s', time() + $delay );
+		$payload_json = json_encode( $payload, JSON_THROW_ON_ERROR ) ?: '{}';
+		$payload_hash = $unique ? hash( 'sha256', $payload_json ) : null;
+
+		// Unique job deduplication: check for existing pending/processing job.
+		if ( $unique ) {
+			$check = $this->conn->pdo()->prepare(
+				"SELECT id FROM {$table}
+				WHERE handler = :handler
+					AND payload_hash = :payload_hash
+					AND status IN (:pending, :processing)
+				LIMIT 1"
+			);
+			$check->execute(
+				array(
+					'handler'      => $handler,
+					'payload_hash' => $payload_hash,
+					'pending'      => JobStatus::Pending->value,
+					'processing'   => JobStatus::Processing->value,
+				)
+			);
+			$existing = $check->fetch();
+			if ( $existing ) {
+				return (int) $existing['id'];
+			}
+		}
 
 		$stmt = $this->conn->pdo()->prepare(
 			"INSERT INTO {$table}
-				(queue, handler, payload, priority, status, max_attempts, available_at, workflow_id, step_index)
+				(queue, handler, payload, payload_hash, priority, status, max_attempts, available_at, workflow_id, step_index, depends_on)
 			VALUES
-				(:queue, :handler, :payload, :priority, :status, :max_attempts, :available_at, :workflow_id, :step_index)"
+				(:queue, :handler, :payload, :payload_hash, :priority, :status, :max_attempts, :available_at, :workflow_id, :step_index, :depends_on)"
 		);
 
 		$stmt->execute(
 			array(
 				'queue'        => $queue,
 				'handler'      => $handler,
-				'payload'      => json_encode( $payload, JSON_THROW_ON_ERROR ) ?: '{}',
+				'payload'      => $payload_json,
+				'payload_hash' => $payload_hash,
 				'priority'     => $priority->value,
 				'status'       => JobStatus::Pending->value,
 				'max_attempts' => $max_attempts,
 				'available_at' => $available_at,
 				'workflow_id'  => $workflow_id,
 				'step_index'   => $step_index,
+				'depends_on'   => $depends_on,
 			)
 		);
 
@@ -76,7 +107,83 @@ class Queue {
 	}
 
 	/**
+	 * Dispatch multiple jobs in a single multi-row INSERT.
+	 *
+	 * Each item in $jobs is an associative array with keys:
+	 * handler, payload, queue, priority, delay, max_attempts.
+	 * All keys are optional except handler.
+	 *
+	 * @param array $jobs Array of job definitions.
+	 * @return int[] Array of new job IDs.
+	 */
+	public function batch( array $jobs ): array {
+		if ( empty( $jobs ) ) {
+			return array();
+		}
+
+		$table        = $this->conn->table( Config::table_jobs() );
+		$placeholders = array();
+		$params       = array();
+		$now          = time();
+
+		foreach ( $jobs as $i => $job ) {
+			$handler      = $job['handler'];
+			$payload      = $job['payload'] ?? array();
+			$queue        = $job['queue'] ?? 'default';
+			$priority     = $job['priority'] ?? Priority::Low;
+			$delay        = $job['delay'] ?? 0;
+			$max_attempts = $job['max_attempts'] ?? 3;
+
+			if ( $priority instanceof Priority ) {
+				$priority = $priority->value;
+			}
+
+			$payload_json = json_encode( $payload, JSON_THROW_ON_ERROR ) ?: '{}';
+			$available_at = gmdate( 'Y-m-d H:i:s', $now + $delay );
+
+			$q_key  = "queue_{$i}";
+			$h_key  = "handler_{$i}";
+			$p_key  = "payload_{$i}";
+			$pr_key = "priority_{$i}";
+			$s_key  = "status_{$i}";
+			$m_key  = "max_attempts_{$i}";
+			$a_key  = "available_at_{$i}";
+
+			$placeholders[] = "(:{$q_key}, :{$h_key}, :{$p_key}, :{$pr_key}, :{$s_key}, :{$m_key}, :{$a_key})";
+
+			$params[ $q_key ]  = $queue;
+			$params[ $h_key ]  = $handler;
+			$params[ $p_key ]  = $payload_json;
+			$params[ $pr_key ] = (int) $priority;
+			$params[ $s_key ]  = JobStatus::Pending->value;
+			$params[ $m_key ]  = $max_attempts;
+			$params[ $a_key ]  = $available_at;
+		}
+
+		$values_sql = implode( ', ', $placeholders );
+		$stmt       = $this->conn->pdo()->prepare(
+			"INSERT INTO {$table}
+				(queue, handler, payload, priority, status, max_attempts, available_at)
+			VALUES
+				{$values_sql}"
+		);
+		$stmt->execute( $params );
+
+		$first_id  = (int) $this->conn->pdo()->lastInsertId();
+		$ids       = array();
+		$job_count = count( $jobs );
+		for ( $i = 0; $i < $job_count; $i++ ) {
+			$ids[] = $first_id + $i;
+		}
+
+		return $ids;
+	}
+
+	/**
 	 * Atomically claim the next available job from a queue.
+	 *
+	 * Jobs with unmet dependencies (depends_on a job that is not yet completed)
+	 * are excluded from claiming.
 	 *
 	 * @param string $queue Queue name.
 	 * @return Job|null The claimed job, or null if the queue is empty.
@@ -93,6 +200,7 @@ class Queue {
 				WHERE status = :status
 					AND queue = :queue
 					AND available_at <= NOW()
+					AND (depends_on IS NULL OR depends_on IN (SELECT id FROM {$table} AS dep WHERE dep.status = 'completed'))
 				ORDER BY priority DESC, id ASC
 				LIMIT 1
 				FOR UPDATE SKIP LOCKED"
@@ -398,5 +506,64 @@ class Queue {
 			fn( array $row ) => Job::from_row( $row ),
 			$stmt->fetchAll()
 		);
+	}
+
+	/**
+	 * Pause a queue so workers skip it.
+	 *
+	 * @param string $queue Queue name to pause.
+	 */
+	public function pause_queue( string $queue ): void {
+		$table = $this->conn->table( Config::table_queue_states() );
+		$stmt  = $this->conn->pdo()->prepare(
+			"INSERT INTO {$table} (queue, paused, paused_at)
+			VALUES (:queue, 1, NOW())
+			ON DUPLICATE KEY UPDATE paused = 1, paused_at = NOW()"
+		);
+		$stmt->execute( array( 'queue' => $queue ) );
+	}
+
+	/**
+	 * Resume a paused queue.
+	 *
+	 * @param string $queue Queue name to resume.
+	 */
+	public function resume_queue( string $queue ): void {
+		$table = $this->conn->table( Config::table_queue_states() );
+		$stmt  = $this->conn->pdo()->prepare(
+			"DELETE FROM {$table} WHERE queue = :queue"
+		);
+		$stmt->execute( array( 'queue' => $queue ) );
+	}
+
+	/**
+	 * Check if a queue is paused.
+	 *
+	 * @param string $queue Queue name.
+	 * @return bool
+	 */
+	public function is_queue_paused( string $queue ): bool {
+		$table = $this->conn->table( Config::table_queue_states() );
+		$stmt  = $this->conn->pdo()->prepare(
+			"SELECT paused FROM {$table} WHERE queue = :queue"
+		);
+		$stmt->execute( array( 'queue' => $queue ) );
+		$row = $stmt->fetch();
+
+		return $row && (bool) $row['paused'];
+	}
+
+	/**
+	 * Get all paused queues.
+	 *
+	 * @return string[] List of paused queue names.
+	 */
+	public function paused_queues(): array {
+		$table = $this->conn->table( Config::table_queue_states() );
+		$stmt  = $this->conn->pdo()->query(
+			"SELECT queue FROM {$table} WHERE paused = 1"
+		);
+
+		return array_column( $stmt->fetchAll(), 'queue' );
 	}
 }

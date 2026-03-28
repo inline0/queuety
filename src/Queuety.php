@@ -120,6 +120,51 @@ class Queuety {
 	}
 
 	/**
+	 * Dispatch multiple jobs in a single multi-row INSERT.
+	 *
+	 * Each item in $jobs is an associative array with keys:
+	 * handler, payload, queue, priority, delay, max_attempts.
+	 *
+	 * @param array $jobs Array of job definitions.
+	 * @return int[] Array of new job IDs.
+	 */
+	public static function batch( array $jobs ): array {
+		self::ensure_initialized();
+		return self::$queue->batch( $jobs );
+	}
+
+	/**
+	 * Pause a queue so workers skip it.
+	 *
+	 * @param string $queue Queue name.
+	 */
+	public static function pause( string $queue ): void {
+		self::ensure_initialized();
+		self::$queue->pause_queue( $queue );
+	}
+
+	/**
+	 * Resume a paused queue.
+	 *
+	 * @param string $queue Queue name.
+	 */
+	public static function resume( string $queue ): void {
+		self::ensure_initialized();
+		self::$queue->resume_queue( $queue );
+	}
+
+	/**
+	 * Check if a queue is paused.
+	 *
+	 * @param string $queue Queue name.
+	 * @return bool
+	 */
+	public static function is_paused( string $queue ): bool {
+		self::ensure_initialized();
+		return self::$queue->is_queue_paused( $queue );
+	}
+
+	/**
 	 * Start building a workflow.
 	 *
 	 * @param string $name Workflow name.

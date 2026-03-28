@@ -56,6 +56,26 @@ class PendingJobTest extends TestCase {
 		$pending->id();
 	}
 
+	public function test_unique_returns_self(): void {
+		$queue   = $this->make_stub_queue();
+		$pending = new PendingJob( 'TestHandler', array(), $queue );
+
+		$result = $pending->unique();
+		$this->assertSame( $pending, $result );
+
+		$pending->id();
+	}
+
+	public function test_after_returns_self(): void {
+		$queue   = $this->make_stub_queue();
+		$pending = new PendingJob( 'TestHandler', array(), $queue );
+
+		$result = $pending->after( 42 );
+		$this->assertSame( $pending, $result );
+
+		$pending->id();
+	}
+
 	public function test_full_fluent_chain(): void {
 		$queue   = $this->make_stub_queue();
 		$pending = new PendingJob( 'TestHandler', array( 'key' => 'value' ), $queue );
@@ -64,7 +84,9 @@ class PendingJobTest extends TestCase {
 			->on_queue( 'emails' )
 			->with_priority( Priority::Urgent )
 			->delay( 600 )
-			->max_attempts( 10 );
+			->max_attempts( 10 )
+			->unique()
+			->after( 5 );
 
 		$this->assertSame( $pending, $result );
 
@@ -117,6 +139,10 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->anything(),
 				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
 			)
 			->willReturn( 1 );
 
@@ -133,6 +159,10 @@ class PendingJobTest extends TestCase {
 			->with(
 				$this->anything(),
 				$this->identicalTo( $payload ),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
 				$this->anything(),
 				$this->anything(),
 				$this->anything(),
@@ -155,6 +185,10 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->anything(),
 				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
 			)
 			->willReturn( 1 );
 
@@ -171,6 +205,10 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->anything(),
 				$this->identicalTo( Priority::High ),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
 				$this->anything(),
 				$this->anything(),
 			)
@@ -191,6 +229,10 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->identicalTo( 300 ),
 				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
 			)
 			->willReturn( 1 );
 
@@ -209,6 +251,10 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->anything(),
 				$this->identicalTo( 10 ),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
 			)
 			->willReturn( 1 );
 
@@ -224,6 +270,10 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->anything(),
 				$this->identicalTo( 'default' ),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
 				$this->anything(),
 				$this->anything(),
 				$this->anything(),
@@ -245,6 +295,10 @@ class PendingJobTest extends TestCase {
 				$this->identicalTo( Priority::Low ),
 				$this->anything(),
 				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
 			)
 			->willReturn( 1 );
 
@@ -262,6 +316,10 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->anything(),
 				$this->identicalTo( 0 ),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
 				$this->anything(),
 			)
 			->willReturn( 1 );
@@ -281,6 +339,10 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->anything(),
 				$this->identicalTo( 3 ),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
 			)
 			->willReturn( 1 );
 
@@ -326,6 +388,10 @@ class PendingJobTest extends TestCase {
 				$this->identicalTo( Priority::Urgent ),
 				$this->identicalTo( 600 ),
 				$this->identicalTo( 7 ),
+				$this->anything(),
+				$this->anything(),
+				$this->identicalTo( true ),
+				$this->identicalTo( 42 ),
 			)
 			->willReturn( 123 );
 
@@ -335,8 +401,54 @@ class PendingJobTest extends TestCase {
 			->with_priority( Priority::Urgent )
 			->delay( 600 )
 			->max_attempts( 7 )
+			->unique()
+			->after( 42 )
 			->id();
 
 		$this->assertSame( 123, $id );
+	}
+
+	public function test_default_unique_is_false(): void {
+		$queue = $this->createMock( Queue::class );
+		$queue->expects( $this->once() )
+			->method( 'dispatch' )
+			->with(
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->identicalTo( false ),
+				$this->anything(),
+			)
+			->willReturn( 1 );
+
+		$pending = new PendingJob( 'Handler', array(), $queue );
+		$pending->id();
+	}
+
+	public function test_default_depends_on_is_null(): void {
+		$queue = $this->createMock( Queue::class );
+		$queue->expects( $this->once() )
+			->method( 'dispatch' )
+			->with(
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->identicalTo( null ),
+			)
+			->willReturn( 1 );
+
+		$pending = new PendingJob( 'Handler', array(), $queue );
+		$pending->id();
 	}
 }
