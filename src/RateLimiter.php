@@ -81,6 +81,16 @@ class RateLimiter {
 	}
 
 	/**
+	 * Check if a handler has an explicitly registered rate limit.
+	 *
+	 * @param string $handler Handler name or class.
+	 * @return bool
+	 */
+	public function is_registered( string $handler ): bool {
+		return isset( $this->limits[ $handler ] );
+	}
+
+	/**
 	 * Check if handler is at its rate limit.
 	 *
 	 * @param string $handler Handler name or class.

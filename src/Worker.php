@@ -368,6 +368,11 @@ class Worker {
 			return;
 		}
 
+		// Don't overwrite an explicitly registered rate limit.
+		if ( $this->rate_limiter->is_registered( $handler ) ) {
+			return;
+		}
+
 		if ( ! $this->registry->has( $handler ) ) {
 			return;
 		}
