@@ -89,8 +89,14 @@ class JobPropertiesTest extends IntegrationTestCase {
 
 		JobWithProperties::$should_fail = true;
 
-		// Process 5 times (the tries value).
+		// Process all 5 attempts (the $tries value on the job class).
+		// After each failed retry, backoff pushes available_at into the future,
+		// so we must reset it to allow the next claim().
+		$jobs_table = $this->conn->table( Config::table_jobs() );
 		for ( $i = 0; $i < 7; $i++ ) {
+			$this->conn->pdo()->exec(
+				"UPDATE {$jobs_table} SET available_at = NOW() WHERE status = 'pending'"
+			);
 			$job = $this->queue->claim();
 			if ( null === $job ) {
 				break;

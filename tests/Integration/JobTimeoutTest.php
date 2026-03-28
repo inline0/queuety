@@ -54,42 +54,61 @@ class JobTimeoutTest extends IntegrationTestCase {
 	}
 
 	public function test_timeout_handling_with_pcntl_available(): void {
-		if ( ! function_exists( 'pcntl_alarm' ) ) {
+		if ( ! function_exists( 'pcntl_alarm' ) || ! function_exists( 'pcntl_async_signals' ) ) {
 			$this->markTestSkipped( 'pcntl extension is not available.' );
 		}
 
-		$this->registry->register( 'slow', SlowHandler::class );
-		$id  = $this->queue->dispatch( 'slow', max_attempts: 1 );
-		$job = $this->queue->claim();
+		// Enable async signal dispatch so SIGALRM interrupts sleep().
+		$prev_async = pcntl_async_signals( true );
 
 		// Override the max execution time for this test.
 		if ( ! defined( 'QUEUETY_MAX_EXECUTION_TIME' ) ) {
 			define( 'QUEUETY_MAX_EXECUTION_TIME', 1 );
 		}
 
-		$this->worker->process_job( $job );
+		try {
+			$this->registry->register( 'slow', SlowHandler::class );
+			$id  = $this->queue->dispatch( 'slow', max_attempts: 1 );
+			$job = $this->queue->claim();
 
-		$result = $this->queue->find( $id );
+			$this->worker->process_job( $job );
 
-		// The job should be buried since max_attempts=1 and it timed out.
-		$this->assertSame( JobStatus::Buried, $result->status );
-		$this->assertStringContainsString( 'maximum execution time', $result->error_message );
+			$result = $this->queue->find( $id );
+
+			// The job should be buried since max_attempts=1 and it timed out.
+			$this->assertSame( JobStatus::Buried, $result->status );
+			$this->assertStringContainsString( 'maximum execution time', $result->error_message );
+		} finally {
+			pcntl_async_signals( $prev_async );
+		}
 	}
 
 	public function test_timeout_with_retries_schedules_retry(): void {
-		if ( ! function_exists( 'pcntl_alarm' ) ) {
+		if ( ! function_exists( 'pcntl_alarm' ) || ! function_exists( 'pcntl_async_signals' ) ) {
 			$this->markTestSkipped( 'pcntl extension is not available.' );
 		}
 
-		$this->registry->register( 'slow', SlowHandler::class );
-		$id  = $this->queue->dispatch( 'slow', max_attempts: 3 );
-		$job = $this->queue->claim();
+		// Enable async signal dispatch so SIGALRM interrupts sleep().
+		$prev_async = pcntl_async_signals( true );
 
-		$this->worker->process_job( $job );
+		// Ensure the constant is defined (may already be from previous test).
+		if ( ! defined( 'QUEUETY_MAX_EXECUTION_TIME' ) ) {
+			define( 'QUEUETY_MAX_EXECUTION_TIME', 1 );
+		}
 
-		$result = $this->queue->find( $id );
+		try {
+			$this->registry->register( 'slow', SlowHandler::class );
+			$id  = $this->queue->dispatch( 'slow', max_attempts: 3 );
+			$job = $this->queue->claim();
 
-		// With max_attempts=3 and attempts=1, it should be retried (pending).
-		$this->assertSame( JobStatus::Pending, $result->status );
+			$this->worker->process_job( $job );
+
+			$result = $this->queue->find( $id );
+
+			// With max_attempts=3 and attempts=1, it should be retried (pending).
+			$this->assertSame( JobStatus::Pending, $result->status );
+		} finally {
+			pcntl_async_signals( $prev_async );
+		}
 	}
 }

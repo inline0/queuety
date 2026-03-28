@@ -70,6 +70,11 @@ class RateLimitedMiddlewareTest extends TestCase {
 
 		// Pre-register and exhaust the limit.
 		$limiter->register( $job_class, 1, 60 );
+
+		// Trigger a DB refresh first (sets last_refresh to now),
+		// then record the execution. This ensures the in-memory counter
+		// is not reset by a subsequent DB refresh within the 5-second window.
+		$limiter->is_limited( $job_class );
 		$limiter->record( $job_class );
 
 		$middleware = new RateLimited( max: 1, window: 60 );

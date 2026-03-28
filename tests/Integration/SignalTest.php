@@ -76,13 +76,9 @@ class SignalTest extends IntegrationTestCase {
 			->dispatch( array( 'user_id' => 1 ) );
 
 		// Process step 0: DataFetchStep.
-		$this->process_one();
-
-		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( 1, $status->current_step );
-		$this->assertSame( WorkflowStatus::Running, $status->status );
-
-		// Process step 1: signal placeholder job.
+		// When advance_step enqueues the signal step, it calls enqueue_signal_step
+		// directly (no placeholder job). Since no signal exists yet, the workflow
+		// enters WaitingSignal status immediately.
 		$this->process_one();
 
 		// Workflow should now be in waiting_signal status.
@@ -148,11 +144,10 @@ class SignalTest extends IntegrationTestCase {
 			'early_data' => 'sent_early',
 		) );
 
-		// Process step 0.
-		$this->process_one();
-
-		// Process step 1: signal placeholder. Since the signal already exists,
-		// the workflow should skip waiting and advance immediately.
+		// Process step 0: DataFetchStep.
+		// When advance_step enqueues the signal step, enqueue_signal_step finds
+		// the pre-existing signal. It merges the data, advances to step 2, and
+		// enqueues the next step's job -- all inline without a placeholder job.
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
@@ -211,13 +206,16 @@ class SignalTest extends IntegrationTestCase {
 			->then( AccumulatingStep::class )
 			->dispatch( array( 'user_id' => 5 ) );
 
-		// Step 0.
+		// Step 0: DataFetchStep. After completion, the signal step is handled
+		// inline by enqueue_signal_step (no placeholder job). The workflow
+		// enters WaitingSignal status.
 		$this->process_one();
 
-		// Step 1: signal placeholder.
-		$this->process_one();
+		$status = $this->workflow_mgr->status( $wf_id );
+		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
 
-		// Send the signal.
+		// Send the signal. This resumes the workflow, merges data, and
+		// enqueues step 2 (SignalCheckStep).
 		Queuety::signal( $wf_id, 'review', array(
 			'approval_status' => 'reviewed',
 			'approved_by'     => 'reviewer',
@@ -227,7 +225,7 @@ class SignalTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( 2, $status->current_step );
+		$this->assertSame( 3, $status->current_step );
 		$this->assertTrue( $status->state['signal_received'] );
 
 		// Step 3: AccumulatingStep.

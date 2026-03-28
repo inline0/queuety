@@ -99,6 +99,7 @@ class ConditionalWorkflowTest extends IntegrationTestCase {
 		$wf_id = Queuety::workflow( 'bad_goto' )
 			->then( ConditionalGoToStep::class, 'condition' )
 			->then( AccumulatingStep::class, 'next' )
+			->max_attempts( 1 )
 			->dispatch(
 				array(
 					'should_skip' => true,
@@ -106,10 +107,20 @@ class ConditionalWorkflowTest extends IntegrationTestCase {
 				)
 			);
 
-		$this->expectException( \RuntimeException::class );
-		$this->expectExceptionMessage( '_goto target' );
-
+		// The RuntimeException from advance_step is caught by process_job's
+		// catch block. With max_attempts=1, the job is buried on the first failure.
 		$this->process_one();
+
+		// Verify the job was buried with the _goto target error.
+		$jobs_table = $this->conn->table( \Queuety\Config::table_jobs() );
+		$stmt       = $this->conn->pdo()->prepare(
+			"SELECT status, error_message FROM {$jobs_table} WHERE workflow_id = :wf_id"
+		);
+		$stmt->execute( array( 'wf_id' => $wf_id ) );
+		$row = $stmt->fetch();
+
+		$this->assertSame( 'buried', $row['status'] );
+		$this->assertStringContainsString( '_goto target', $row['error_message'] );
 	}
 
 	public function test_normal_flow_without_goto(): void {

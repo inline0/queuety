@@ -148,9 +148,14 @@ class BatchTest extends IntegrationTestCase {
 			->catch( BatchCatchHandler::class )
 			->dispatch();
 
-		// The job will fail, bury (max attempts = 3, but this is attempt 1).
-		// Process until buried (3 attempts by default).
+		// The job will fail and be retried with backoff delay.
+		// We must reset available_at after each retry so claim() can pick it up.
+		$jobs_table = $this->conn->table( Config::table_jobs() );
 		for ( $i = 0; $i < 5; $i++ ) {
+			// Reset available_at so the retried job can be claimed immediately.
+			$this->conn->pdo()->exec(
+				"UPDATE {$jobs_table} SET available_at = NOW() WHERE status = 'pending'"
+			);
 			$job = $this->queue->claim();
 			if ( null === $job ) {
 				break;
@@ -205,7 +210,12 @@ class BatchTest extends IntegrationTestCase {
 		$this->worker->process_job( $job );
 
 		// Process the failing job until buried.
+		// Reset available_at after each retry so claim() can pick it up.
+		$jobs_table = $this->conn->table( Config::table_jobs() );
 		for ( $i = 0; $i < 5; $i++ ) {
+			$this->conn->pdo()->exec(
+				"UPDATE {$jobs_table} SET available_at = NOW() WHERE status = 'pending'"
+			);
 			$job = $this->queue->claim();
 			if ( null === $job ) {
 				break;
