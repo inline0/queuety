@@ -1,6 +1,6 @@
 <?php
 
-namespace Queuety\Tests\Unit;
+namespace Queuety\Tests\Integration;
 
 use Queuety\ChunkStore;
 use Queuety\Config;

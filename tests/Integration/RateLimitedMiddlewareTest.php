@@ -5,7 +5,7 @@
  * @package Queuety
  */
 
-namespace Queuety\Tests\Unit\Middleware;
+namespace Queuety\Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
 use Queuety\Connection;
