@@ -15,10 +15,14 @@ use Queuety\Queuety;
 
 ### `Queuety::dispatch( $handler, $payload )`
 
-Dispatch a job. Returns a `PendingJob` builder for chaining options.
+Dispatch a job. Accepts either a handler name string or a `Contracts\Job` instance. Returns a `PendingJob` builder for chaining options.
 
 ```php
+// Handler name + payload (original API)
 Queuety::dispatch( 'send_email', [ 'to' => 'user@example.com' ] );
+
+// Contracts\Job instance (v0.6.0+)
+Queuety::dispatch( new SendEmailJob( to: 'user@example.com' ) );
 
 // With options
 Queuety::dispatch( 'send_email', [ 'to' => 'user@example.com' ] )
@@ -33,6 +37,8 @@ Queuety::dispatch( 'send_email', [ 'to' => 'user@example.com' ] )
 // Get the job ID
 $job_id = Queuety::dispatch( 'send_email', $payload )->id();
 ```
+
+When a `Contracts\Job` instance is passed, the serializer extracts the FQCN as the handler name and public properties as the payload. The `$payload` parameter is ignored when `$handler` is a `Job` instance.
 
 ### `PendingJob` methods
 
@@ -151,6 +157,8 @@ $workflow_id = Queuety::workflow( 'generate_report' )
 | `then( string $class, ?string $name )` | Add a sequential step. Optional name for conditional branching. |
 | `parallel( array $classes )` | Add a parallel step group. |
 | `sub_workflow( string $name, WorkflowBuilder $builder )` | Add a sub-workflow step. |
+| `sleep( int $seconds, int $minutes, int $hours, int $days )` | Add a durable timer step. All durations are summed. |
+| `wait_for_signal( string $name )` | Add a signal wait step. Pauses until the named signal is received. |
 | `on_queue( string $queue )` | Set the queue for all steps. |
 | `with_priority( Priority $priority )` | Set the priority for all steps. |
 | `max_attempts( int $max )` | Set max retry attempts per step. |
@@ -192,6 +200,21 @@ Resume a paused workflow.
 ```php
 Queuety::resume_workflow( $workflow_id );
 ```
+
+### `Queuety::signal( $workflow_id, $name, $data )`
+
+Send a signal to a workflow. If the workflow is currently waiting for this signal, it resumes immediately. Otherwise, the signal is stored and picked up when the workflow reaches the corresponding `wait_for_signal` step.
+
+```php
+Queuety::signal( $workflow_id, 'approved' );
+
+// With data merged into workflow state
+Queuety::signal( $workflow_id, 'approved', [
+    'approved_by' => 'admin@example.com',
+] );
+```
+
+See [Workflow Signals](/docs/workflows/signals) for details.
 
 ## Workflow templates
 
@@ -373,6 +396,64 @@ interface Step {
 }
 ```
 
+### `Contracts\Job`
+
+Interface for self-contained dispatchable job classes. Job classes encapsulate their payload as public properties and execution logic in `handle()`.
+
+```php
+namespace Queuety\Contracts;
+
+interface Job {
+    public function handle(): void;
+}
+```
+
+Job classes can optionally define a `middleware()` method returning an array of `Contracts\Middleware` instances.
+
+### `Contracts\Middleware`
+
+Interface for job middleware. Middleware wraps job execution in an onion-style pipeline.
+
+```php
+namespace Queuety\Contracts;
+
+interface Middleware {
+    public function handle( object $job, \Closure $next ): void;
+}
+```
+
+## Traits
+
+### `Dispatchable`
+
+Provides a static `dispatch()` method on job classes implementing `Contracts\Job`. Constructor arguments are passed through to create the job instance.
+
+```php
+use Queuety\Contracts\Job;
+use Queuety\Dispatchable;
+
+class SendEmailJob implements Job {
+    use Dispatchable;
+    // ...
+}
+
+// Dispatches a new SendEmailJob instance
+SendEmailJob::dispatch( 'user@example.com', 'Subject', 'Body' );
+```
+
+## Built-in middleware
+
+All middleware classes implement `Contracts\Middleware` and are located in the `Queuety\Middleware` namespace.
+
+| Class | Description |
+|---|---|
+| `RateLimited( int $max, int $window )` | Enforce a rate limit of `$max` executions per `$window` seconds |
+| `Timeout( int $seconds )` | Kill the job after `$seconds` seconds (requires `pcntl`) |
+| `UniqueJob( ?string $key )` | Prevent concurrent execution via a database lock |
+| `WithoutOverlapping( string $key, int $release_after )` | Prevent overlapping execution with automatic lock expiry |
+
+See [Middleware](/docs/features/middleware) for usage details and examples.
+
 ## Enums
 
 ### `Priority`
@@ -402,10 +483,11 @@ enum JobStatus: string {
 
 ```php
 enum WorkflowStatus: string {
-    case Running   = 'running';
-    case Completed = 'completed';
-    case Failed    = 'failed';
-    case Paused    = 'paused';
+    case Running        = 'running';
+    case Completed      = 'completed';
+    case Failed         = 'failed';
+    case Paused         = 'paused';
+    case WaitingSignal  = 'waiting_signal';
 }
 ```
 

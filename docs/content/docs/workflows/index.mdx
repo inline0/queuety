@@ -59,6 +59,8 @@ dispatch() -> running -> step 0 -> step 1 -> ... -> step N -> completed
                   |                   +-> failed -> retry -> running (from failed step)
                   |
                   +-> paused -> resumed -> running
+                  |
+                  +-> waiting_signal -> signal received -> running
 ```
 
 | Status | Description |
@@ -67,6 +69,7 @@ dispatch() -> running -> step 0 -> step 1 -> ... -> step N -> completed
 | `completed` | All steps finished successfully |
 | `failed` | A step failed after exhausting retries |
 | `paused` | Manually paused, no steps will execute |
+| `waiting_signal` | Waiting for an external signal via `Queuety::signal()` |
 
 ## Managing workflows
 
@@ -110,9 +113,11 @@ Queuety::workflow( 'important_pipeline' )
 
 ## Step types
 
-Queuety supports four types of steps within a workflow:
+Queuety supports six types of steps within a workflow:
 
 - [Sequential chains](/docs/workflows/chains) using `->then()` for one-at-a-time execution
 - [Parallel groups](/docs/workflows/parallel) using `->parallel()` for concurrent execution
 - [Conditional branching](/docs/workflows/conditional) using named steps and `_goto`
 - [Sub-workflows](/docs/workflows/sub-workflows) using `->sub_workflow()` for nested composition
+- [Durable timers](/docs/workflows/timers) using `->sleep()` for time-based delays
+- [Signals](/docs/workflows/signals) using `->wait_for_signal()` for external event triggers

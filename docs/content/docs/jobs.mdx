@@ -228,6 +228,104 @@ Queuety::dispatch( 'call_api', $payload )
 
 See [Rate Limiting](/docs/features/rate-limiting) for details.
 
+## Dispatchable job classes
+
+Queuety v0.6.0 introduces a class-based job API. Instead of separating handler name, payload, and handler class, you define a single class that encapsulates everything: the payload (as typed public properties), the execution logic, and optional middleware.
+
+### The `Contracts\Job` interface
+
+```php
+use Queuety\Contracts\Job;
+
+interface Job {
+    public function handle(): void;
+}
+```
+
+A `Job` class holds its payload as public properties and executes its own logic in `handle()`. There is no separate `config()` method or handler registration required.
+
+### The `Dispatchable` trait
+
+Add the `Dispatchable` trait to get a static `dispatch()` method on your job class:
+
+```php
+use Queuety\Contracts\Job;
+use Queuety\Dispatchable;
+
+class SendEmailJob implements Job {
+    use Dispatchable;
+
+    public function __construct(
+        public readonly string $to,
+        public readonly string $subject,
+        public readonly string $body,
+    ) {}
+
+    public function handle(): void {
+        wp_mail( $this->to, $this->subject, $this->body );
+    }
+}
+```
+
+Dispatch it by passing constructor arguments:
+
+```php
+SendEmailJob::dispatch( 'user@example.com', 'Welcome!', 'Hello there.' )
+    ->on_queue( 'emails' )
+    ->with_priority( Priority::High );
+```
+
+The `Dispatchable` trait calls `Queuety::dispatch()` internally, so all `PendingJob` options (queue, priority, delay, max_attempts, unique, after) work exactly the same.
+
+### How serialization works
+
+When you dispatch a `Job` instance, Queuety's `JobSerializer` extracts the fully qualified class name as the handler and all public properties as the payload. On the worker side, the serializer reconstructs the instance by matching payload keys to constructor parameter names. Backed enums are serialized to their underlying value and restored automatically.
+
+### Adding middleware
+
+Job classes can define a `middleware()` method to return middleware that wraps execution:
+
+```php
+use Queuety\Contracts\Job;
+use Queuety\Dispatchable;
+use Queuety\Middleware\RateLimited;
+use Queuety\Middleware\Timeout;
+
+class CallOpenAIJob implements Job {
+    use Dispatchable;
+
+    public function __construct(
+        public readonly string $prompt,
+    ) {}
+
+    public function handle(): void {
+        // Call the API...
+    }
+
+    public function middleware(): array {
+        return [
+            new RateLimited( max: 60, window: 60 ),
+            new Timeout( seconds: 120 ),
+        ];
+    }
+}
+```
+
+See [Middleware](/docs/features/middleware) for details on built-in middleware and writing custom middleware.
+
+### Comparison with handler-based jobs
+
+| | Handler-based (v0.1+) | Class-based (v0.6+) |
+|---|---|---|
+| Dispatch | `Queuety::dispatch( 'send_email', $payload )` | `SendEmailJob::dispatch( $to, $subject )` |
+| Handler | Separate class implementing `Handler` | Same class implements `Contracts\Job` |
+| Payload | Untyped `array $payload` | Typed public properties |
+| Registration | `Queuety::register()` or `#[QueuetyHandler]` | Not required (uses FQCN) |
+| Middleware | Not available | Optional `middleware()` method |
+| Config | `config()` method | Use `PendingJob` chain or middleware |
+
+Both approaches are fully supported. Existing handler-based jobs continue to work without changes. You can mix both styles in the same project.
+
 ## Job lifecycle
 
 ```

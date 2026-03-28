@@ -1,0 +1,166 @@
+---
+title: Workflow Signals
+description: Pause a workflow and wait for an external signal before continuing.
+---
+
+# Workflow Signals
+
+Workflows can pause and wait for an external event using signals. The `wait_for_signal()` builder method inserts a step that blocks the workflow until your application (or an external system) sends the named signal via `Queuety::signal()`.
+
+## The `->wait_for_signal()` method
+
+Add a signal wait step to a workflow:
+
+```php
+use Queuety\Queuety;
+
+$workflow_id = Queuety::workflow( 'content_approval' )
+    ->then( DraftContentHandler::class )
+    ->wait_for_signal( 'approved' )
+    ->then( PublishContentHandler::class )
+    ->dispatch( [ 'post_id' => 99 ] );
+```
+
+When the workflow reaches the `wait_for_signal` step, it sets its status to `waiting_signal` and pauses. No jobs are running and no resources are consumed while waiting.
+
+## Sending a signal
+
+Send a signal to a workflow using `Queuety::signal()`:
+
+```php
+Queuety::signal( $workflow_id, 'approved' );
+```
+
+When the signal matches the one the workflow is waiting for, the workflow resumes and advances to the next step.
+
+### Signal data
+
+You can pass a data array with the signal. The data is merged into the workflow state, making it available to subsequent steps:
+
+```php
+Queuety::signal( $workflow_id, 'approved', [
+    'approved_by' => 'admin@example.com',
+    'approved_at' => time(),
+] );
+```
+
+In the next step:
+
+```php
+class PublishContentHandler implements Step {
+    public function handle( array $state ): array {
+        // $state['approved_by'] is 'admin@example.com'
+        // $state['approved_at'] is the timestamp
+        // $state['post_id'] is 99
+        wp_update_post( [
+            'ID'          => $state['post_id'],
+            'post_status' => 'publish',
+        ] );
+        return [ 'published' => true ];
+    }
+
+    public function config(): array {
+        return [ 'needs_wordpress' => true ];
+    }
+}
+```
+
+Keys that start with `_` (underscore) are reserved for internal use and are not merged into the state.
+
+## Pre-existing signals
+
+Signals can be sent before the workflow reaches the wait step. When a signal arrives, it is recorded in the `queuety_signals` table regardless of the workflow's current status. When the workflow later reaches the `wait_for_signal` step, it checks for pre-existing signals and continues immediately if one is found.
+
+This means the order does not matter:
+
+```php
+// Dispatch workflow
+$workflow_id = Queuety::workflow( 'order_fulfillment' )
+    ->then( PrepareOrderHandler::class )
+    ->wait_for_signal( 'payment_confirmed' )
+    ->then( ShipOrderHandler::class )
+    ->dispatch( [ 'order_id' => 123 ] );
+
+// Signal arrives before the workflow reaches the wait step
+Queuety::signal( $workflow_id, 'payment_confirmed', [ 'transaction_id' => 'txn_abc' ] );
+
+// When the workflow finishes PrepareOrderHandler and reaches the wait step,
+// it sees the pre-existing signal and continues immediately.
+```
+
+## Workflow status during signal wait
+
+While waiting for a signal, the workflow status is `WorkflowStatus::WaitingSignal` (`waiting_signal`):
+
+```php
+$state = Queuety::workflow_status( $workflow_id );
+echo $state->status->value; // 'waiting_signal'
+```
+
+## Use case: human approval
+
+Build an approval workflow where a human reviewer must approve content before it goes live:
+
+```php
+$workflow_id = Queuety::workflow( 'blog_review' )
+    ->then( GenerateDraftHandler::class )
+    ->then( NotifyReviewerHandler::class )
+    ->wait_for_signal( 'review_decision' )
+    ->then( HandleDecisionHandler::class )
+    ->dispatch( [ 'topic' => 'PHP middleware patterns' ] );
+```
+
+The `NotifyReviewerHandler` sends an email or Slack message with approve/reject links. Those links call your controller, which sends the signal:
+
+```php
+// In your approval controller
+Queuety::signal( $workflow_id, 'review_decision', [
+    'decision'    => 'approved',
+    'reviewer'    => $current_user->user_email,
+    'reviewed_at' => time(),
+] );
+```
+
+The `HandleDecisionHandler` step reads `$state['decision']` and either publishes or archives the draft.
+
+## Use case: external API callback
+
+Wait for a webhook from an external service:
+
+```php
+$workflow_id = Queuety::workflow( 'generate_video' )
+    ->then( SubmitToRenderServiceHandler::class )
+    ->wait_for_signal( 'render_complete' )
+    ->then( DownloadVideoHandler::class )
+    ->then( NotifyUserHandler::class )
+    ->dispatch( [ 'template_id' => 'promo_v2', 'user_id' => 42 ] );
+```
+
+When the external service posts to your webhook endpoint:
+
+```php
+// In your webhook handler
+$payload = json_decode( file_get_contents( 'php://input' ), true );
+$workflow_id = (int) $payload['metadata']['workflow_id'];
+
+Queuety::signal( $workflow_id, 'render_complete', [
+    'video_url'  => $payload['output_url'],
+    'duration'   => $payload['duration_seconds'],
+] );
+```
+
+## Multiple signals in a workflow
+
+A workflow can wait for multiple signals at different points:
+
+```php
+Queuety::workflow( 'multi_approval' )
+    ->then( CreateProposalHandler::class )
+    ->wait_for_signal( 'manager_approval' )
+    ->then( EscalateToDirectorHandler::class )
+    ->wait_for_signal( 'director_approval' )
+    ->then( ExecuteProposalHandler::class )
+    ->dispatch( [ 'proposal_id' => 7 ] );
+```
+
+Each `wait_for_signal` step waits for its own named signal independently.
