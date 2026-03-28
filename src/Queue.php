@@ -137,6 +137,29 @@ class Queue {
 	}
 
 	/**
+	 * Reset a just-claimed job back to pending.
+	 *
+	 * Clears reserved_at and decrements attempts by 1, so that claiming
+	 * and then unclaiming a rate-limited job does not waste an attempt.
+	 *
+	 * @param int $job_id Job ID.
+	 */
+	public function unclaim( int $job_id ): void {
+		$table = $this->conn->table( Config::table_jobs() );
+		$stmt  = $this->conn->pdo()->prepare(
+			"UPDATE {$table}
+			SET status = :status, reserved_at = NULL, attempts = GREATEST(attempts - 1, 0)
+			WHERE id = :id"
+		);
+		$stmt->execute(
+			array(
+				'status' => JobStatus::Pending->value,
+				'id'     => $job_id,
+			)
+		);
+	}
+
+	/**
 	 * Mark a job as completed.
 	 *
 	 * @param int $job_id Job ID.

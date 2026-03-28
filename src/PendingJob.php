@@ -51,6 +51,13 @@ class PendingJob {
 	private int $max_attempts = 3;
 
 	/**
+	 * Rate limit configuration: [max_executions, window_seconds].
+	 *
+	 * @var array{int, int}|null
+	 */
+	private ?array $rate_limit_config = null;
+
+	/**
 	 * Whether the job has been dispatched.
 	 *
 	 * @var bool
@@ -131,6 +138,21 @@ class PendingJob {
 	}
 
 	/**
+	 * Set a rate limit for this handler.
+	 *
+	 * Registers the rate limit with the RateLimiter via the Queuety facade
+	 * so that the worker enforces the limit when processing jobs.
+	 *
+	 * @param int $max    Maximum executions allowed in the window.
+	 * @param int $window Window duration in seconds.
+	 * @return self
+	 */
+	public function rate_limit( int $max, int $window ): self {
+		$this->rate_limit_config = array( $max, $window );
+		return $this;
+	}
+
+	/**
 	 * Get the dispatched job ID. Forces dispatch if not yet done.
 	 *
 	 * @return int
@@ -155,5 +177,18 @@ class PendingJob {
 			max_attempts: $this->max_attempts,
 		);
 		$this->dispatched = true;
+
+		// Register rate limit with the facade if configured.
+		if ( null !== $this->rate_limit_config ) {
+			try {
+				Queuety::rate_limiter()->register(
+					$this->handler,
+					$this->rate_limit_config[0],
+					$this->rate_limit_config[1],
+				);
+			} catch ( \RuntimeException $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Facade may not be initialized.
+				unset( $e );
+			}
+		}
 	}
 }

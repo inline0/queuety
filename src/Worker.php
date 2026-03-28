@@ -25,12 +25,14 @@ class Worker {
 	/**
 	 * Constructor.
 	 *
-	 * @param Connection      $conn     Database connection.
-	 * @param Queue           $queue    Queue operations.
-	 * @param Logger          $logger   Logger instance.
-	 * @param Workflow        $workflow Workflow manager.
-	 * @param HandlerRegistry $registry Handler registry.
-	 * @param Config          $config   Configuration.
+	 * @param Connection       $conn         Database connection.
+	 * @param Queue            $queue        Queue operations.
+	 * @param Logger           $logger       Logger instance.
+	 * @param Workflow         $workflow     Workflow manager.
+	 * @param HandlerRegistry  $registry     Handler registry.
+	 * @param Config           $config       Configuration.
+	 * @param RateLimiter|null $rate_limiter Optional rate limiter.
+	 * @param Scheduler|null   $scheduler    Optional scheduler for recurring jobs.
 	 */
 	public function __construct(
 		private readonly Connection $conn,
@@ -39,6 +41,8 @@ class Worker {
 		private readonly Workflow $workflow,
 		private readonly HandlerRegistry $registry,
 		private readonly Config $config,
+		private readonly ?RateLimiter $rate_limiter = null,
+		private readonly ?Scheduler $scheduler = null,
 	) {}
 
 	/**
@@ -48,8 +52,9 @@ class Worker {
 	 * @param bool   $once       If true, process one batch and exit.
 	 */
 	public function run( string $queue_name = 'default', bool $once = false ): void {
-		$jobs_processed    = 0;
-		$stale_check_timer = time();
+		$jobs_processed       = 0;
+		$stale_check_timer    = time();
+		$schedule_check_timer = time();
 
 		while ( ! $this->should_stop ) {
 			$job = $this->queue->claim( $queue_name );
@@ -66,7 +71,27 @@ class Worker {
 					$stale_check_timer = time();
 				}
 
+				// Check for due schedules periodically.
+				if ( null !== $this->scheduler && time() - $schedule_check_timer >= 60 ) {
+					$this->scheduler->tick();
+					$schedule_check_timer = time();
+				}
+
 				continue;
+			}
+
+			// Check rate limiting before processing.
+			if ( null !== $this->rate_limiter ) {
+				$this->register_handler_rate_limit( $job->handler );
+
+				if ( $this->rate_limiter->is_limited( $job->handler ) ) {
+					$this->queue->unclaim( $job->id );
+					if ( $once ) {
+						break;
+					}
+					sleep( Config::worker_sleep() );
+					continue;
+				}
 			}
 
 			$this->process_job( $job );
@@ -90,6 +115,12 @@ class Worker {
 				$this->recover_stale();
 				$stale_check_timer = time();
 			}
+
+			// Periodic schedule check.
+			if ( null !== $this->scheduler && time() - $schedule_check_timer >= 60 ) {
+				$this->scheduler->tick();
+				$schedule_check_timer = time();
+			}
 		}
 	}
 
@@ -100,12 +131,40 @@ class Worker {
 	 * @return int Total jobs processed.
 	 */
 	public function flush( string $queue_name = 'default' ): int {
-		$count = 0;
+		$count        = 0;
+		$last_skipped = null;
+		$skip_streak  = 0;
+
 		while ( true ) {
 			$job = $this->queue->claim( $queue_name );
 			if ( null === $job ) {
 				break;
 			}
+
+			// Check rate limiting before processing.
+			if ( null !== $this->rate_limiter ) {
+				$this->register_handler_rate_limit( $job->handler );
+
+				if ( $this->rate_limiter->is_limited( $job->handler ) ) {
+					$this->queue->unclaim( $job->id );
+
+					// Prevent infinite loop: if we keep skipping the same job, break.
+					if ( $last_skipped === $job->id ) {
+						++$skip_streak;
+						if ( $skip_streak >= 2 ) {
+							break;
+						}
+					} else {
+						$last_skipped = $job->id;
+						$skip_streak  = 1;
+					}
+					continue;
+				}
+			}
+
+			$last_skipped = null;
+			$skip_streak  = 0;
+
 			$this->process_job( $job );
 			++$count;
 		}
@@ -134,6 +193,18 @@ class Worker {
 
 		try {
 			$handler = $this->registry->resolve( $job->handler );
+
+			// Register rate limit from handler config if available.
+			if ( null !== $this->rate_limiter && $handler instanceof Handler ) {
+				$config = $handler->config();
+				if ( isset( $config['rate_limit'] ) && is_array( $config['rate_limit'] ) ) {
+					$this->rate_limiter->register(
+						$job->handler,
+						(int) $config['rate_limit'][0],
+						(int) $config['rate_limit'][1],
+					);
+				}
+			}
 
 			if ( $job->is_workflow_step() && $handler instanceof Step ) {
 				// Workflow step: load accumulated state and pass to handler.
@@ -167,6 +238,11 @@ class Worker {
 						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
 					)
 				);
+			}
+
+			// Record successful execution for rate limiting.
+			if ( null !== $this->rate_limiter ) {
+				$this->rate_limiter->record( $job->handler );
 			}
 		} catch ( \Throwable $e ) {
 			$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
@@ -280,6 +356,38 @@ class Worker {
 		}
 
 		return $count;
+	}
+
+	/**
+	 * Register rate limit for a handler from its config, if available.
+	 *
+	 * @param string $handler Handler name or class.
+	 */
+	private function register_handler_rate_limit( string $handler ): void {
+		if ( null === $this->rate_limiter ) {
+			return;
+		}
+
+		if ( ! $this->registry->has( $handler ) ) {
+			return;
+		}
+
+		try {
+			$instance = $this->registry->resolve( $handler );
+		} catch ( \Throwable ) {
+			return;
+		}
+
+		if ( $instance instanceof Handler ) {
+			$config = $instance->config();
+			if ( isset( $config['rate_limit'] ) && is_array( $config['rate_limit'] ) ) {
+				$this->rate_limiter->register(
+					$handler,
+					(int) $config['rate_limit'][0],
+					(int) $config['rate_limit'][1],
+				);
+			}
+		}
 	}
 
 	/**

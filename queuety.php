@@ -3,7 +3,7 @@
  * Plugin Name:  Queuety
  * Plugin URI:   https://github.com/fabrikat/queuety
  * Description:  A job queue and durable workflow engine for WordPress.
- * Version:      0.1.0
+ * Version:      0.2.0
  * Author:       Fabrikat
  * Author URI:   https://fabrikat.io
  * License:      GPL-2.0-or-later
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'QUEUETY_VERSION', '0.1.0' );
+define( 'QUEUETY_VERSION', '0.2.0' );
 define( 'QUEUETY_PLUGIN_FILE', __FILE__ );
 define( 'QUEUETY_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 
@@ -73,4 +73,5 @@ if ( defined( 'WP_CLI' ) && WP_CLI ) {
 	\WP_CLI::add_command( 'queuety', Queuety\CLI\QueuetyCommand::class );
 	\WP_CLI::add_command( 'queuety workflow', Queuety\CLI\WorkflowCommand::class );
 	\WP_CLI::add_command( 'queuety log', Queuety\CLI\LogCommand::class );
+	\WP_CLI::add_command( 'queuety schedule', Queuety\CLI\ScheduleCommand::class );
 }

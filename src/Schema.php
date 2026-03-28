@@ -18,10 +18,11 @@ class Schema {
 	 * @param Connection $conn Database connection.
 	 */
 	public static function install( Connection $conn ): void {
-		$pdo  = $conn->pdo();
-		$jobs = $conn->table( Config::table_jobs() );
-		$wf   = $conn->table( Config::table_workflows() );
-		$logs = $conn->table( Config::table_logs() );
+		$pdo       = $conn->pdo();
+		$jobs      = $conn->table( Config::table_jobs() );
+		$wf        = $conn->table( Config::table_workflows() );
+		$logs      = $conn->table( Config::table_logs() );
+		$schedules = $conn->table( Config::table_schedules() );
 
 		$pdo->exec(
 			"CREATE TABLE IF NOT EXISTS {$jobs} (
@@ -88,6 +89,23 @@ class Schema {
 				INDEX idx_created (created_at)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$schedules} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				handler VARCHAR(255) NOT NULL,
+				payload LONGTEXT NOT NULL DEFAULT '{}',
+				queue VARCHAR(64) NOT NULL DEFAULT 'default',
+				expression VARCHAR(255) NOT NULL,
+				expression_type ENUM('interval', 'cron') NOT NULL,
+				last_run DATETIME DEFAULT NULL,
+				next_run DATETIME NOT NULL,
+				enabled TINYINT(1) NOT NULL DEFAULT 1,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE INDEX idx_handler (handler),
+				INDEX idx_next_run (enabled, next_run)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
 	}
 
 	/**
@@ -96,12 +114,14 @@ class Schema {
 	 * @param Connection $conn Database connection.
 	 */
 	public static function uninstall( Connection $conn ): void {
-		$pdo  = $conn->pdo();
-		$jobs = $conn->table( Config::table_jobs() );
-		$wf   = $conn->table( Config::table_workflows() );
-		$logs = $conn->table( Config::table_logs() );
+		$pdo       = $conn->pdo();
+		$jobs      = $conn->table( Config::table_jobs() );
+		$wf        = $conn->table( Config::table_workflows() );
+		$logs      = $conn->table( Config::table_logs() );
+		$schedules = $conn->table( Config::table_schedules() );
 
 		$pdo->exec( "DROP TABLE IF EXISTS {$logs}" );
+		$pdo->exec( "DROP TABLE IF EXISTS {$schedules}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$jobs}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$wf}" );
 	}

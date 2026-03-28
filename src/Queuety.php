@@ -7,6 +7,7 @@
 
 namespace Queuety;
 
+use Queuety\Enums\ExpressionType;
 use Queuety\Enums\Priority;
 use Queuety\Enums\WorkflowStatus;
 
@@ -68,23 +69,41 @@ class Queuety {
 	private static ?HandlerRegistry $registry = null;
 
 	/**
+	 * Rate limiter instance.
+	 *
+	 * @var RateLimiter|null
+	 */
+	private static ?RateLimiter $rate_limiter = null;
+
+	/**
+	 * Scheduler instance.
+	 *
+	 * @var Scheduler|null
+	 */
+	private static ?Scheduler $scheduler = null;
+
+	/**
 	 * Initialize Queuety with a database connection.
 	 *
 	 * @param Connection $conn Database connection.
 	 */
 	public static function init( Connection $conn ): void {
-		self::$conn     = $conn;
-		self::$queue    = new Queue( $conn );
-		self::$logger   = new Logger( $conn );
-		self::$workflow = new Workflow( $conn, self::$queue, self::$logger );
-		self::$registry = new HandlerRegistry();
-		self::$worker   = new Worker(
+		self::$conn         = $conn;
+		self::$queue        = new Queue( $conn );
+		self::$logger       = new Logger( $conn );
+		self::$workflow     = new Workflow( $conn, self::$queue, self::$logger );
+		self::$registry     = new HandlerRegistry();
+		self::$rate_limiter = new RateLimiter( $conn );
+		self::$scheduler    = new Scheduler( $conn, self::$queue );
+		self::$worker       = new Worker(
 			$conn,
 			self::$queue,
 			self::$logger,
 			self::$workflow,
 			self::$registry,
 			new Config(),
+			self::$rate_limiter,
+			self::$scheduler,
 		);
 	}
 
@@ -274,15 +293,49 @@ class Queuety {
 	}
 
 	/**
+	 * Get the rate limiter instance.
+	 *
+	 * @return RateLimiter
+	 */
+	public static function rate_limiter(): RateLimiter {
+		self::ensure_initialized();
+		return self::$rate_limiter;
+	}
+
+	/**
+	 * Create a new recurring schedule.
+	 *
+	 * @param string $handler Handler name or class.
+	 * @param array  $payload Job payload.
+	 * @return PendingSchedule Fluent builder for schedule options.
+	 */
+	public static function schedule( string $handler, array $payload = array() ): PendingSchedule {
+		self::ensure_initialized();
+		return new PendingSchedule( $handler, $payload, self::$scheduler );
+	}
+
+	/**
+	 * Get the internal Scheduler instance.
+	 *
+	 * @return Scheduler
+	 */
+	public static function scheduler(): Scheduler {
+		self::ensure_initialized();
+		return self::$scheduler;
+	}
+
+	/**
 	 * Reset the singleton state (for testing).
 	 */
 	public static function reset(): void {
-		self::$conn     = null;
-		self::$queue    = null;
-		self::$logger   = null;
-		self::$workflow = null;
-		self::$worker   = null;
-		self::$registry = null;
+		self::$conn         = null;
+		self::$queue        = null;
+		self::$logger       = null;
+		self::$workflow     = null;
+		self::$worker       = null;
+		self::$registry     = null;
+		self::$rate_limiter = null;
+		self::$scheduler    = null;
 	}
 
 	/**

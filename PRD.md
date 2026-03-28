@@ -754,10 +754,8 @@ This means WooCommerce and any plugin using Action Scheduler can switch to Queue
 
 ### v0.2.0
 
-- Multiple named queues
 - Rate limiting per handler
-- Recurring jobs / scheduler
-- Admin dashboard widget
+- Recurring jobs / scheduler (`queuety_schedules` table)
 - Worker concurrency (`--workers=N`)
 
 ### v0.3.0

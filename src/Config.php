@@ -115,4 +115,13 @@ class Config {
 	public static function stale_timeout(): int {
 		return defined( 'QUEUETY_STALE_TIMEOUT' ) ? (int) QUEUETY_STALE_TIMEOUT : 600;
 	}
+
+	/**
+	 * Get the schedules table name.
+	 *
+	 * @return string
+	 */
+	public static function table_schedules(): string {
+		return defined( 'QUEUETY_TABLE_SCHEDULES' ) ? QUEUETY_TABLE_SCHEDULES : 'queuety_schedules';
+	}
 }

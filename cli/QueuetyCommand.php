@@ -26,12 +26,38 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * [--once]
 	 * : Process one batch and exit.
 	 *
+	 * [--workers=<n>]
+	 * : Fork N worker processes (requires pcntl extension).
+	 *
 	 * @param array $args       Positional arguments.
 	 * @param array $assoc_args Associative arguments.
 	 */
 	public function work( $args, $assoc_args ) {
-		$queue = $assoc_args['queue'] ?? 'default';
-		$once  = isset( $assoc_args['once'] );
+		$queue   = $assoc_args['queue'] ?? 'default';
+		$once    = isset( $assoc_args['once'] );
+		$workers = isset( $assoc_args['workers'] ) ? (int) $assoc_args['workers'] : 0;
+
+		if ( $workers > 1 ) {
+			if ( ! function_exists( 'pcntl_fork' ) ) {
+				\WP_CLI::error( 'The pcntl extension is required for --workers=N.' );
+				return;
+			}
+
+			\WP_CLI::log( "Starting {$workers} workers on queue: {$queue}" );
+
+			$pool = new \Queuety\WorkerPool(
+				$workers,
+				DB_HOST,
+				DB_NAME,
+				DB_USER,
+				DB_PASSWORD,
+				$GLOBALS['wpdb']->prefix,
+			);
+			$pool->run( $queue );
+
+			\WP_CLI::success( 'Worker pool stopped.' );
+			return;
+		}
 
 		\WP_CLI::log( "Starting worker on queue: {$queue}" . ( $once ? ' (once)' : '' ) );
 

@@ -101,6 +101,7 @@ All constants are optional. Define them in `wp-config.php` or `queuety-config.ph
 | `QUEUETY_WORKER_MAX_MEMORY` | `128` | Max MB before worker restarts |
 | `QUEUETY_RETRY_BACKOFF` | `exponential` | Retry backoff strategy |
 | `QUEUETY_STALE_TIMEOUT` | `600` | Seconds before a processing job is considered stale |
+| `QUEUETY_TABLE_SCHEDULES` | `queuety_schedules` | Schedules table name |
 
 ## Key Rules
 
@@ -108,15 +109,17 @@ All constants are optional. Define them in `wp-config.php` or `queuety-config.ph
 2. **Run tests after changes**: `composer test` for PHPUnit.
 3. **bootstrap.php is self-contained**: no autoloader, no WP functions, plain PHP only. Parses wp-config.php via regex.
 4. **PHP 8.2+**: use enums, readonly classes, constructor promotion, match expressions, named arguments.
-5. **Three-table schema**: jobs, workflows, logs. All in WordPress's MySQL database.
+5. **Four-table schema**: jobs, workflows, logs, schedules. All in WordPress's MySQL database.
 6. **Logging is in the database**: no log files. All log entries go to `queuety_logs` table.
 7. **Workflows store step definitions in state**: the `_steps` key in the workflow's state JSON holds the ordered list of handler class names.
+8. **Rate limits are per-handler**: tracked in-memory with periodic DB refresh from logs table.
+9. **Worker concurrency uses pcntl_fork()**: each child creates its own DB connection. Parent monitors and restarts crashed children.
 
 ## WP-CLI Commands
 
 | Command | Description |
 |---------|-------------|
-| `wp queuety work [--queue=<queue>] [--once]` | Start a worker |
+| `wp queuety work [--queue=<queue>] [--once] [--workers=<n>]` | Start a worker (or N workers) |
 | `wp queuety flush` | Process all pending jobs and exit |
 | `wp queuety dispatch <handler> --payload='{}'` | Dispatch a job |
 | `wp queuety status` | Show queue stats |
@@ -134,3 +137,7 @@ All constants are optional. Define them in `wp-config.php` or `queuety-config.ph
 | `wp queuety workflow list [--status=<status>]` | List workflows |
 | `wp queuety log [--workflow=<id>] [--job=<id>]` | Query log entries |
 | `wp queuety log purge --older-than=<days>` | Prune old logs |
+| `wp queuety schedule list` | List recurring schedules |
+| `wp queuety schedule add <handler> [--every=<interval>] [--cron=<expr>]` | Add a recurring schedule |
+| `wp queuety schedule remove <handler>` | Remove a schedule |
+| `wp queuety schedule run` | Manually trigger scheduler tick |
