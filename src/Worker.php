@@ -228,53 +228,81 @@ class Worker {
 		}
 
 		try {
-			$handler = $this->registry->resolve( $job->handler );
+			// Handle sub-workflow placeholder jobs directly.
+			if ( $job->is_workflow_step() && '__queuety_sub_workflow' === $job->handler ) {
+				$state = $this->workflow->get_state( $job->workflow_id ) ?? array();
 
-			// Register rate limit from handler config if available.
-			if ( null !== $this->rate_limiter && $handler instanceof Handler ) {
-				$config = $handler->config();
-				if ( isset( $config['rate_limit'] ) && is_array( $config['rate_limit'] ) ) {
-					$this->rate_limiter->register(
-						$job->handler,
-						(int) $config['rate_limit'][0],
-						(int) $config['rate_limit'][1],
-					);
-				}
-			}
-
-			if ( $job->is_workflow_step() && $handler instanceof Step ) {
-				// Workflow step: load accumulated state and pass to handler.
-				$state  = $this->workflow->get_state( $job->workflow_id ) ?? array();
-				$output = $handler->handle( $state );
-
-				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
-
-				$this->workflow->advance_step(
+				$this->workflow->handle_sub_workflow_step(
 					workflow_id: $job->workflow_id,
-					completed_job_id: $job->id,
-					step_output: $output,
-					duration_ms: $duration_ms,
+					job_id: $job->id,
+					step_index: $job->step_index,
+					workflow_state: $state,
 				);
-			} else {
-				// Simple job.
-				$handler->handle( $job->payload );
 
 				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
-
-				$this->queue->complete( $job->id );
 
 				$this->logger->log(
 					LogEvent::Completed,
 					array(
 						'job_id'         => $job->id,
+						'workflow_id'    => $job->workflow_id,
+						'step_index'     => $job->step_index,
 						'handler'        => $job->handler,
 						'queue'          => $job->queue,
-						'attempt'        => $job->attempts,
 						'duration_ms'    => $duration_ms,
 						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
 					)
 				);
-			}
+			} else {
+
+				$handler = $this->registry->resolve( $job->handler );
+
+				// Register rate limit from handler config if available.
+				if ( null !== $this->rate_limiter && $handler instanceof Handler ) {
+					$config = $handler->config();
+					if ( isset( $config['rate_limit'] ) && is_array( $config['rate_limit'] ) ) {
+						$this->rate_limiter->register(
+							$job->handler,
+							(int) $config['rate_limit'][0],
+							(int) $config['rate_limit'][1],
+						);
+					}
+				}
+
+				if ( $job->is_workflow_step() && $handler instanceof Step ) {
+					// Workflow step: load accumulated state and pass to handler.
+					$state  = $this->workflow->get_state( $job->workflow_id ) ?? array();
+					$output = $handler->handle( $state );
+
+					$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
+
+					$this->workflow->advance_step(
+						workflow_id: $job->workflow_id,
+						completed_job_id: $job->id,
+						step_output: $output,
+						duration_ms: $duration_ms,
+					);
+				} else {
+					// Simple job.
+					$handler->handle( $job->payload );
+
+					$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
+
+					$this->queue->complete( $job->id );
+
+					$this->logger->log(
+						LogEvent::Completed,
+						array(
+							'job_id'         => $job->id,
+							'handler'        => $job->handler,
+							'queue'          => $job->queue,
+							'attempt'        => $job->attempts,
+							'duration_ms'    => $duration_ms,
+							'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
+						)
+					);
+				}
+			} // End of sub-workflow else block.
 
 			// Record successful execution for rate limiting.
 			if ( null !== $this->rate_limiter ) {

@@ -345,7 +345,10 @@ class WorkflowTest extends IntegrationTestCase {
 
 		$this->assertSame( 7, $state['user_id'] );
 		$this->assertArrayHasKey( '_steps', $state );
-		$this->assertSame( array( 'StepA', 'StepB' ), $state['_steps'] );
+		$this->assertCount( 2, $state['_steps'] );
+		$this->assertSame( 'StepA', $state['_steps'][0]['class'] );
+		$this->assertSame( 'StepB', $state['_steps'][1]['class'] );
+		$this->assertSame( 'single', $state['_steps'][0]['type'] );
 		$this->assertArrayHasKey( '_queue', $state );
 		$this->assertArrayHasKey( '_priority', $state );
 		$this->assertArrayHasKey( '_max_attempts', $state );

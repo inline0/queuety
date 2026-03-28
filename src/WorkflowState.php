@@ -17,12 +17,14 @@ readonly class WorkflowState {
 	/**
 	 * Constructor.
 	 *
-	 * @param int            $workflow_id  The workflow ID.
-	 * @param string         $name         The workflow name.
-	 * @param WorkflowStatus $status       Current workflow status.
-	 * @param int            $current_step The current step index.
-	 * @param int            $total_steps  Total number of steps.
-	 * @param array          $state        Accumulated state data.
+	 * @param int            $workflow_id        The workflow ID.
+	 * @param string         $name               The workflow name.
+	 * @param WorkflowStatus $status             Current workflow status.
+	 * @param int            $current_step       The current step index.
+	 * @param int            $total_steps        Total number of steps.
+	 * @param array          $state              Accumulated state data.
+	 * @param int|null       $parent_workflow_id Parent workflow ID, if this is a sub-workflow.
+	 * @param int|null       $parent_step_index  Parent step index, if this is a sub-workflow.
 	 */
 	public function __construct(
 		public int $workflow_id,
@@ -31,5 +33,7 @@ readonly class WorkflowState {
 		public int $current_step,
 		public int $total_steps,
 		public array $state,
+		public ?int $parent_workflow_id = null,
+		public ?int $parent_step_index = null,
 	) {}
 }

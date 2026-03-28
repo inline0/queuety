@@ -62,11 +62,14 @@ class Schema {
 				state LONGTEXT NOT NULL,
 				current_step TINYINT UNSIGNED NOT NULL DEFAULT 0,
 				total_steps TINYINT UNSIGNED NOT NULL,
+				parent_workflow_id BIGINT UNSIGNED DEFAULT NULL,
+				parent_step_index TINYINT UNSIGNED DEFAULT NULL,
 				started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				completed_at DATETIME DEFAULT NULL,
 				failed_at DATETIME DEFAULT NULL,
 				error_message TEXT DEFAULT NULL,
-				INDEX idx_status (status)
+				INDEX idx_status (status),
+				INDEX idx_parent (parent_workflow_id)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 

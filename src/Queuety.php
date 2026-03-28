@@ -83,19 +83,27 @@ class Queuety {
 	private static ?Scheduler $scheduler = null;
 
 	/**
+	 * Workflow template registry instance.
+	 *
+	 * @var WorkflowRegistry|null
+	 */
+	private static ?WorkflowRegistry $workflow_registry = null;
+
+	/**
 	 * Initialize Queuety with a database connection.
 	 *
 	 * @param Connection $conn Database connection.
 	 */
 	public static function init( Connection $conn ): void {
-		self::$conn         = $conn;
-		self::$queue        = new Queue( $conn );
-		self::$logger       = new Logger( $conn );
-		self::$workflow     = new Workflow( $conn, self::$queue, self::$logger );
-		self::$registry     = new HandlerRegistry();
-		self::$rate_limiter = new RateLimiter( $conn );
-		self::$scheduler    = new Scheduler( $conn, self::$queue );
-		self::$worker       = new Worker(
+		self::$conn              = $conn;
+		self::$queue             = new Queue( $conn );
+		self::$logger            = new Logger( $conn );
+		self::$workflow          = new Workflow( $conn, self::$queue, self::$logger );
+		self::$registry          = new HandlerRegistry();
+		self::$rate_limiter      = new RateLimiter( $conn );
+		self::$scheduler         = new Scheduler( $conn, self::$queue );
+		self::$workflow_registry = new WorkflowRegistry();
+		self::$worker            = new Worker(
 			$conn,
 			self::$queue,
 			self::$logger,
@@ -370,17 +378,88 @@ class Queuety {
 	}
 
 	/**
+	 * Get the internal Connection instance.
+	 *
+	 * @return Connection
+	 */
+	public static function connection(): Connection {
+		self::ensure_initialized();
+		return self::$conn;
+	}
+
+	/**
+	 * Define a named workflow template. Returns a builder whose steps will be
+	 * registered as a template when build_and_register() is called.
+	 *
+	 * @param string $name Template name.
+	 * @return WorkflowBuilder Builder for defining the template steps.
+	 */
+	public static function define_workflow( string $name ): WorkflowBuilder {
+		self::ensure_initialized();
+		return new WorkflowBuilder( $name, self::$conn, self::$queue, self::$logger );
+	}
+
+	/**
+	 * Register a workflow template from a builder.
+	 *
+	 * @param WorkflowBuilder $builder The builder with defined steps.
+	 */
+	public static function register_workflow_template( WorkflowBuilder $builder ): void {
+		self::ensure_initialized();
+
+		$template = new WorkflowTemplate(
+			name: $builder->get_name(),
+			steps: $builder->build_steps(),
+			queue: $builder->get_queue(),
+			priority: $builder->get_priority(),
+			max_attempts: $builder->get_max_attempts(),
+		);
+
+		self::$workflow_registry->register( $builder->get_name(), $template );
+	}
+
+	/**
+	 * Dispatch a registered workflow template by name.
+	 *
+	 * @param string $name    Template name.
+	 * @param array  $payload Initial payload/state.
+	 * @return int The workflow ID.
+	 * @throws \RuntimeException If the template is not registered.
+	 */
+	public static function run_workflow( string $name, array $payload = array() ): int {
+		self::ensure_initialized();
+
+		$template = self::$workflow_registry->get( $name );
+		if ( null === $template ) {
+			throw new \RuntimeException( "Workflow template '{$name}' is not registered." );
+		}
+
+		return $template->dispatch( $payload );
+	}
+
+	/**
+	 * Get the workflow template registry.
+	 *
+	 * @return WorkflowRegistry
+	 */
+	public static function workflow_templates(): WorkflowRegistry {
+		self::ensure_initialized();
+		return self::$workflow_registry;
+	}
+
+	/**
 	 * Reset the singleton state (for testing).
 	 */
 	public static function reset(): void {
-		self::$conn         = null;
-		self::$queue        = null;
-		self::$logger       = null;
-		self::$workflow     = null;
-		self::$worker       = null;
-		self::$registry     = null;
-		self::$rate_limiter = null;
-		self::$scheduler    = null;
+		self::$conn              = null;
+		self::$queue             = null;
+		self::$logger            = null;
+		self::$workflow          = null;
+		self::$worker            = null;
+		self::$registry          = null;
+		self::$rate_limiter      = null;
+		self::$scheduler         = null;
+		self::$workflow_registry = null;
 	}
 
 	/**

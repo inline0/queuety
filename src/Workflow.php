@@ -31,6 +31,138 @@ class Workflow {
 	) {}
 
 	/**
+	 * Resolve the handler class from a step definition.
+	 *
+	 * Supports both the new array format and the legacy string format
+	 * for backwards compatibility.
+	 *
+	 * @param array|string $step_def Step definition.
+	 * @return string Handler class name.
+	 */
+	private function resolve_step_handler( array|string $step_def ): string {
+		if ( is_string( $step_def ) ) {
+			return $step_def;
+		}
+		return $step_def['class'] ?? '';
+	}
+
+	/**
+	 * Resolve the step type from a step definition.
+	 *
+	 * @param array|string $step_def Step definition.
+	 * @return string Step type: 'single', 'parallel', or 'sub_workflow'.
+	 */
+	private function resolve_step_type( array|string $step_def ): string {
+		if ( is_string( $step_def ) ) {
+			return 'single';
+		}
+		return $step_def['type'] ?? 'single';
+	}
+
+	/**
+	 * Find the step index by name.
+	 *
+	 * @param array  $steps     Array of step definitions.
+	 * @param string $name      Step name to find.
+	 * @return int|null Step index or null if not found.
+	 */
+	private function find_step_index_by_name( array $steps, string $name ): ?int {
+		foreach ( $steps as $index => $step_def ) {
+			if ( is_array( $step_def ) && isset( $step_def['name'] ) && $step_def['name'] === $name ) {
+				return $index;
+			}
+			// Legacy string format: name is the index as a string.
+			if ( is_string( $step_def ) && (string) $index === $name ) {
+				return $index;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Enqueue a step definition as one or more jobs within a transaction.
+	 *
+	 * @param array|string $step_def    Step definition.
+	 * @param int          $workflow_id Workflow ID.
+	 * @param int          $step_index  Step index.
+	 * @param string       $queue_name  Queue name.
+	 * @param Priority     $priority    Priority level.
+	 * @param int          $max_attempts Maximum attempts.
+	 */
+	private function enqueue_step_def(
+		array|string $step_def,
+		int $workflow_id,
+		int $step_index,
+		string $queue_name,
+		Priority $priority,
+		int $max_attempts,
+	): void {
+		$type = $this->resolve_step_type( $step_def );
+
+		if ( 'parallel' === $type ) {
+			$handlers = $step_def['handlers'] ?? array();
+			foreach ( $handlers as $handler_class ) {
+				$this->queue->dispatch(
+					handler: $handler_class,
+					payload: array(),
+					queue: $queue_name,
+					priority: $priority,
+					max_attempts: $max_attempts,
+					workflow_id: $workflow_id,
+					step_index: $step_index,
+				);
+			}
+		} elseif ( 'sub_workflow' === $type ) {
+			$this->queue->dispatch(
+				handler: '__queuety_sub_workflow',
+				payload: array( 'step_index' => $step_index ),
+				queue: $queue_name,
+				priority: $priority,
+				max_attempts: $max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
+		} else {
+			$handler = $this->resolve_step_handler( $step_def );
+			$this->queue->dispatch(
+				handler: $handler,
+				payload: array(),
+				queue: $queue_name,
+				priority: $priority,
+				max_attempts: $max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
+		}
+	}
+
+	/**
+	 * Count completed jobs for a specific workflow step.
+	 *
+	 * @param int $workflow_id Workflow ID.
+	 * @param int $step_index  Step index.
+	 * @return int Number of completed jobs.
+	 */
+	private function count_completed_jobs_for_step( int $workflow_id, int $step_index ): int {
+		$jb_tbl = $this->conn->table( Config::table_jobs() );
+		$stmt   = $this->conn->pdo()->prepare(
+			"SELECT COUNT(*) AS cnt FROM {$jb_tbl}
+			WHERE workflow_id = :workflow_id
+				AND step_index = :step_index
+				AND status = :status"
+		);
+		$stmt->execute(
+			array(
+				'workflow_id' => $workflow_id,
+				'step_index'  => $step_index,
+				'status'      => JobStatus::Completed->value,
+			)
+		);
+		$row = $stmt->fetch();
+		return (int) ( $row['cnt'] ?? 0 );
+	}
+
+	/**
 	 * Advance a workflow to its next step after the current step completes.
 	 *
 	 * This is the critical transactional boundary. All operations happen atomically:
@@ -41,7 +173,7 @@ class Workflow {
 	 * @param int   $completed_job_id The job ID that just completed.
 	 * @param array $step_output    Data returned by the step handler.
 	 * @param int   $duration_ms    Step execution duration in milliseconds.
-	 * @throws \RuntimeException If the workflow is not found.
+	 * @throws \RuntimeException If the workflow is not found or if _goto target is invalid.
 	 * @throws \Throwable If the database transaction fails.
 	 */
 	public function advance_step( int $workflow_id, int $completed_job_id, array $step_output, int $duration_ms = 0 ): void {
@@ -72,7 +204,149 @@ class Workflow {
 				}
 			}
 
+			// Check if the current step is a parallel group.
+			$current_step_def  = $steps[ $current_step ] ?? null;
+			$current_step_type = $this->resolve_step_type( $current_step_def );
+
+			if ( 'parallel' === $current_step_type ) {
+				$total_handlers = count( $current_step_def['handlers'] ?? array() );
+
+				// Mark the completed job first so count includes it.
+				$mark_stmt = $pdo->prepare(
+					"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
+				);
+				$mark_stmt->execute(
+					array(
+						'status' => JobStatus::Completed->value,
+						'id'     => $completed_job_id,
+					)
+				);
+
+				// Count completed jobs for this step (including the one just marked).
+				$completed_count = $this->count_completed_jobs_for_step( $workflow_id, $current_step );
+
+				// Fetch the completed job for logging context.
+				$job_stmt = $pdo->prepare( "SELECT handler, queue FROM {$jb_tbl} WHERE id = :id" );
+				$job_stmt->execute( array( 'id' => $completed_job_id ) );
+				$job_row = $job_stmt->fetch();
+
+				// Always update state (merge partial results).
+				$state_stmt = $pdo->prepare(
+					"UPDATE {$wf_tbl} SET state = :state WHERE id = :id"
+				);
+				$state_stmt->execute(
+					array(
+						'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
+						'id'    => $workflow_id,
+					)
+				);
+
+				// Log step completion.
+				$this->logger->log(
+					LogEvent::Completed,
+					array(
+						'job_id'         => $completed_job_id,
+						'workflow_id'    => $workflow_id,
+						'step_index'     => $current_step,
+						'handler'        => $job_row['handler'] ?? '',
+						'queue'          => $job_row['queue'] ?? 'default',
+						'duration_ms'    => $duration_ms,
+						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
+					)
+				);
+
+				// Only advance if ALL parallel jobs are done.
+				if ( $completed_count < $total_handlers ) {
+					$pdo->commit();
+					return;
+				}
+
+				// All parallel jobs complete, fall through to normal advancement logic.
+				// Re-read state in case other parallel jobs updated it.
+				$re_stmt = $pdo->prepare( "SELECT state FROM {$wf_tbl} WHERE id = :id" );
+				$re_stmt->execute( array( 'id' => $workflow_id ) );
+				$re_row = $re_stmt->fetch();
+				$state  = json_decode( $re_row['state'], true ) ?: array();
+
+				$next_step = $current_step + 1;
+				$is_last   = $next_step >= $total_steps;
+				$is_paused = WorkflowStatus::Paused->value === $wf_row['status'];
+
+				// Update workflow state.
+				if ( $is_last ) {
+					$upd_stmt = $pdo->prepare(
+						"UPDATE {$wf_tbl}
+						SET state = :state, current_step = :step, status = 'completed', completed_at = NOW()
+						WHERE id = :id"
+					);
+					$upd_stmt->execute(
+						array(
+							'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
+							'step'  => $next_step,
+							'id'    => $workflow_id,
+						)
+					);
+				} else {
+					$upd_stmt = $pdo->prepare(
+						"UPDATE {$wf_tbl} SET state = :state, current_step = :step WHERE id = :id"
+					);
+					$upd_stmt->execute(
+						array(
+							'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
+							'step'  => $next_step,
+							'id'    => $workflow_id,
+						)
+					);
+				}
+
+				// Enqueue next step or log workflow completion.
+				if ( $is_last ) {
+					$this->logger->log(
+						LogEvent::WorkflowCompleted,
+						array(
+							'workflow_id' => $workflow_id,
+							'handler'     => $wf_row['name'],
+							'queue'       => $job_row['queue'] ?? 'default',
+						)
+					);
+					$this->on_workflow_completed( $workflow_id, $state, $pdo );
+				} elseif ( ! $is_paused && isset( $steps[ $next_step ] ) ) {
+					$queue_name   = $state['_queue'] ?? 'default';
+					$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
+					$max_attempts = $state['_max_attempts'] ?? 3;
+
+					$this->enqueue_step_def(
+						$steps[ $next_step ],
+						$workflow_id,
+						$next_step,
+						$queue_name,
+						$priority,
+						$max_attempts,
+					);
+				}
+
+				$pdo->commit();
+				return;
+			}
+
+			// --- Non-parallel step logic (single or sub_workflow) ---
+
+			// Check for conditional _goto branching.
 			$next_step = $current_step + 1;
+
+			if ( isset( $step_output['_goto'] ) ) {
+				$goto_name  = $step_output['_goto'];
+				$goto_index = $this->find_step_index_by_name( $steps, $goto_name );
+
+				if ( null === $goto_index ) {
+					$pdo->rollBack();
+					throw new \RuntimeException(
+						"Workflow {$workflow_id}: _goto target '{$goto_name}' not found."
+					);
+				}
+				$next_step = $goto_index;
+			}
+
 			$is_last   = $next_step >= $total_steps;
 			$is_paused = WorkflowStatus::Paused->value === $wf_row['status'];
 
@@ -143,27 +417,270 @@ class Workflow {
 						'queue'       => $job_row['queue'] ?? 'default',
 					)
 				);
+				$this->on_workflow_completed( $workflow_id, $state, $pdo );
 			} elseif ( ! $is_paused && isset( $steps[ $next_step ] ) ) {
 				$queue_name   = $state['_queue'] ?? 'default';
 				$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
 				$max_attempts = $state['_max_attempts'] ?? 3;
 
-				$this->queue->dispatch(
-					handler: $steps[ $next_step ],
-					payload: array(),
-					queue: $queue_name,
-					priority: $priority,
-					max_attempts: $max_attempts,
-					workflow_id: $workflow_id,
-					step_index: $next_step,
+				$this->enqueue_step_def(
+					$steps[ $next_step ],
+					$workflow_id,
+					$next_step,
+					$queue_name,
+					$priority,
+					$max_attempts,
 				);
 			}
 
 			$pdo->commit();
 		} catch ( \Throwable $e ) {
-			$pdo->rollBack();
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
 			throw $e;
 		}
+	}
+
+	/**
+	 * Handle workflow completion side-effects.
+	 *
+	 * If this workflow has a parent workflow, advance the parent.
+	 *
+	 * @param int   $workflow_id The completed workflow ID.
+	 * @param array $state       The completed workflow's state.
+	 * @param \PDO  $pdo         Active PDO connection (may be in a transaction).
+	 */
+	private function on_workflow_completed( int $workflow_id, array $state, \PDO $pdo ): void {
+		$wf_tbl = $this->conn->table( Config::table_workflows() );
+
+		// Check if this is a sub-workflow with a parent.
+		$stmt = $pdo->prepare(
+			"SELECT parent_workflow_id, parent_step_index FROM {$wf_tbl} WHERE id = :id"
+		);
+		$stmt->execute( array( 'id' => $workflow_id ) );
+		$row = $stmt->fetch();
+
+		if ( ! $row || empty( $row['parent_workflow_id'] ) ) {
+			return;
+		}
+
+		$parent_id   = (int) $row['parent_workflow_id'];
+		$parent_step = (int) $row['parent_step_index'];
+
+		// Merge the sub-workflow's public state into the parent's state.
+		$parent_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+		$parent_stmt->execute( array( 'id' => $parent_id ) );
+		$parent_row = $parent_stmt->fetch();
+
+		if ( ! $parent_row ) {
+			return;
+		}
+
+		$parent_state = json_decode( $parent_row['state'], true ) ?: array();
+
+		// Merge non-reserved keys from sub-workflow state into parent state.
+		foreach ( $state as $key => $value ) {
+			if ( ! str_starts_with( $key, '_' ) ) {
+				$parent_state[ $key ] = $value;
+			}
+		}
+
+		$parent_steps       = $parent_state['_steps'] ?? array();
+		$parent_total_steps = (int) $parent_row['total_steps'];
+		$next_step          = $parent_step + 1;
+		$is_last            = $next_step >= $parent_total_steps;
+		$is_paused          = WorkflowStatus::Paused->value === $parent_row['status'];
+
+		if ( $is_last ) {
+			$upd_stmt = $pdo->prepare(
+				"UPDATE {$wf_tbl}
+				SET state = :state, current_step = :step, status = 'completed', completed_at = NOW()
+				WHERE id = :id"
+			);
+			$upd_stmt->execute(
+				array(
+					'state' => json_encode( $parent_state, JSON_THROW_ON_ERROR ),
+					'step'  => $next_step,
+					'id'    => $parent_id,
+				)
+			);
+
+			$this->logger->log(
+				LogEvent::WorkflowCompleted,
+				array(
+					'workflow_id' => $parent_id,
+					'handler'     => $parent_row['name'],
+					'queue'       => $parent_state['_queue'] ?? 'default',
+				)
+			);
+
+			// Recursive: check if parent also has a parent.
+			$this->on_workflow_completed( $parent_id, $parent_state, $pdo );
+		} else {
+			$upd_stmt = $pdo->prepare(
+				"UPDATE {$wf_tbl} SET state = :state, current_step = :step WHERE id = :id"
+			);
+			$upd_stmt->execute(
+				array(
+					'state' => json_encode( $parent_state, JSON_THROW_ON_ERROR ),
+					'step'  => $next_step,
+					'id'    => $parent_id,
+				)
+			);
+
+			// Enqueue the parent's next step.
+			if ( ! $is_paused && isset( $parent_steps[ $next_step ] ) ) {
+				$queue_name   = $parent_state['_queue'] ?? 'default';
+				$priority     = Priority::tryFrom( $parent_state['_priority'] ?? 0 ) ?? Priority::Low;
+				$max_attempts = $parent_state['_max_attempts'] ?? 3;
+
+				$this->enqueue_step_def(
+					$parent_steps[ $next_step ],
+					$parent_id,
+					$next_step,
+					$queue_name,
+					$priority,
+					$max_attempts,
+				);
+			}
+		}
+	}
+
+	/**
+	 * Dispatch a sub-workflow linked to a parent workflow.
+	 *
+	 * @param int    $parent_workflow_id The parent workflow ID.
+	 * @param int    $parent_step_index  The step index in the parent.
+	 * @param string $name               Sub-workflow name.
+	 * @param array  $steps              Step definitions array (from build_steps()).
+	 * @param array  $initial_state      Initial state for the sub-workflow.
+	 * @param string $queue_name         Queue name.
+	 * @param int    $priority_value     Priority value.
+	 * @param int    $max_attempts       Max attempts.
+	 * @return int The sub-workflow ID.
+	 * @throws \Throwable If the database operation fails.
+	 */
+	public function dispatch_sub_workflow(
+		int $parent_workflow_id,
+		int $parent_step_index,
+		string $name,
+		array $steps,
+		array $initial_state,
+		string $queue_name = 'default',
+		int $priority_value = 0,
+		int $max_attempts = 3,
+	): int {
+		$pdo    = $this->conn->pdo();
+		$wf_tbl = $this->conn->table( Config::table_workflows() );
+
+		$state                  = $initial_state;
+		$state['_steps']        = $steps;
+		$state['_queue']        = $queue_name;
+		$state['_priority']     = $priority_value;
+		$state['_max_attempts'] = $max_attempts;
+
+		$stmt = $pdo->prepare(
+			"INSERT INTO {$wf_tbl}
+			(name, status, state, current_step, total_steps, parent_workflow_id, parent_step_index)
+			VALUES (:name, 'running', :state, 0, :total_steps, :parent_id, :parent_step)"
+		);
+		$stmt->execute(
+			array(
+				'name'        => $name,
+				'state'       => json_encode( $state, JSON_THROW_ON_ERROR ),
+				'total_steps' => count( $steps ),
+				'parent_id'   => $parent_workflow_id,
+				'parent_step' => $parent_step_index,
+			)
+		);
+		$sub_id = (int) $pdo->lastInsertId();
+
+		$priority = Priority::tryFrom( $priority_value ) ?? Priority::Low;
+
+		// Enqueue the first step of the sub-workflow.
+		if ( ! empty( $steps ) ) {
+			$this->enqueue_step_def(
+				$steps[0],
+				$sub_id,
+				0,
+				$queue_name,
+				$priority,
+				$max_attempts,
+			);
+		}
+
+		$this->logger->log(
+			LogEvent::WorkflowStarted,
+			array(
+				'workflow_id' => $sub_id,
+				'handler'     => $name,
+				'queue'       => $queue_name,
+			)
+		);
+
+		return $sub_id;
+	}
+
+	/**
+	 * Handle a sub-workflow step: dispatch the sub-workflow and mark the placeholder job.
+	 *
+	 * Called by the Worker when it encounters a __queuety_sub_workflow handler.
+	 *
+	 * @param int   $workflow_id    The parent workflow ID.
+	 * @param int   $job_id         The placeholder job ID.
+	 * @param int   $step_index     The step index.
+	 * @param array $workflow_state The parent workflow's current state.
+	 * @throws \RuntimeException If the step definition is not a sub_workflow.
+	 */
+	public function handle_sub_workflow_step( int $workflow_id, int $job_id, int $step_index, array $workflow_state ): void {
+		$jb_tbl = $this->conn->table( Config::table_jobs() );
+		$steps  = $workflow_state['_steps'] ?? array();
+
+		$step_def = $steps[ $step_index ] ?? null;
+		if ( ! $step_def || ! is_array( $step_def ) || 'sub_workflow' !== ( $step_def['type'] ?? '' ) ) {
+			throw new \RuntimeException( "Step {$step_index} is not a sub_workflow definition." );
+		}
+
+		$sub_steps    = $step_def['sub_steps'] ?? array();
+		$sub_name     = $step_def['sub_name'] ?? 'sub_workflow';
+		$sub_queue    = $step_def['sub_queue'] ?? ( $workflow_state['_queue'] ?? 'default' );
+		$sub_priority = $step_def['sub_priority'] ?? ( $workflow_state['_priority'] ?? 0 );
+		$sub_max      = $step_def['sub_max_attempts'] ?? ( $workflow_state['_max_attempts'] ?? 3 );
+
+		// Build initial state for sub-workflow from parent's public state.
+		$initial_state = array();
+		foreach ( $workflow_state as $key => $value ) {
+			if ( ! str_starts_with( $key, '_' ) ) {
+				$initial_state[ $key ] = $value;
+			}
+		}
+
+		// Dispatch the sub-workflow.
+		$this->dispatch_sub_workflow(
+			parent_workflow_id: $workflow_id,
+			parent_step_index: $step_index,
+			name: $sub_name,
+			steps: $sub_steps,
+			initial_state: $initial_state,
+			queue_name: $sub_queue,
+			priority_value: $sub_priority,
+			max_attempts: $sub_max,
+		);
+
+		// Mark the placeholder job as completed.
+		$stmt = $this->conn->pdo()->prepare(
+			"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
+		);
+		$stmt->execute(
+			array(
+				'status' => JobStatus::Completed->value,
+				'id'     => $job_id,
+			)
+		);
+
+		// Do NOT advance the parent workflow. The parent stays at current_step
+		// and will be advanced when the sub-workflow completes (via on_workflow_completed).
 	}
 
 	/**
@@ -231,6 +748,8 @@ class Workflow {
 			current_step: (int) $row['current_step'],
 			total_steps: (int) $row['total_steps'],
 			state: $public_state,
+			parent_workflow_id: $row['parent_workflow_id'] ? (int) $row['parent_workflow_id'] : null,
+			parent_step_index: $row['parent_step_index'] !== null ? (int) $row['parent_step_index'] : null,
 		);
 	}
 
@@ -279,14 +798,13 @@ class Workflow {
 			$stmt->execute( array( 'id' => $workflow_id ) );
 
 			// Enqueue the failed step again.
-			$this->queue->dispatch(
-				handler: $steps[ $current_step ],
-				payload: array(),
-				queue: $queue_name,
-				priority: $priority,
-				max_attempts: $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $current_step,
+			$this->enqueue_step_def(
+				$steps[ $current_step ],
+				$workflow_id,
+				$current_step,
+				$queue_name,
+				$priority,
+				$max_attempts,
 			);
 
 			$pdo->commit();
@@ -357,14 +875,13 @@ class Workflow {
 			);
 			$stmt->execute( array( 'id' => $workflow_id ) );
 
-			$this->queue->dispatch(
-				handler: $steps[ $current_step ],
-				payload: array(),
-				queue: $queue_name,
-				priority: $priority,
-				max_attempts: $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $current_step,
+			$this->enqueue_step_def(
+				$steps[ $current_step ],
+				$workflow_id,
+				$current_step,
+				$queue_name,
+				$priority,
+				$max_attempts,
 			);
 
 			$this->logger->log(
@@ -418,6 +935,8 @@ class Workflow {
 				current_step: (int) $row['current_step'],
 				total_steps: (int) $row['total_steps'],
 				state: $public_state,
+				parent_workflow_id: $row['parent_workflow_id'] ? (int) $row['parent_workflow_id'] : null,
+				parent_step_index: $row['parent_step_index'] !== null ? (int) $row['parent_step_index'] : null,
 			);
 		}
 
