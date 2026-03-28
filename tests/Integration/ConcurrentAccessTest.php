@@ -68,16 +68,33 @@ class ConcurrentAccessTest extends IntegrationTestCase {
 	// -- FOR UPDATE SKIP LOCKED with two connections -------------------------
 
 	public function test_for_update_skip_locked_with_two_connections(): void {
-		$this->markTestSkipped( 'Requires two independent MySQL connections which share the same transaction context in CI.' );
 		$this->queue->dispatch( 'handler_a', array( 'x' => 1 ) );
 		$this->queue->dispatch( 'handler_b', array( 'x' => 2 ) );
 
-		// First connection: claim a job inside a transaction (don't commit).
-		$conn1  = $this->conn;
-		$queue1 = $this->queue;
-		$pdo1   = $conn1->pdo();
+		// Create two completely independent Connection objects (separate PDO instances)
+		// to guarantee separate MySQL sessions with no shared transaction state.
+		$conn1 = new Connection(
+			host: QUEUETY_TEST_DB_HOST,
+			dbname: QUEUETY_TEST_DB_NAME,
+			user: QUEUETY_TEST_DB_USER,
+			password: QUEUETY_TEST_DB_PASS,
+			prefix: QUEUETY_TEST_DB_PREFIX,
+		);
+		$conn2 = new Connection(
+			host: QUEUETY_TEST_DB_HOST,
+			dbname: QUEUETY_TEST_DB_NAME,
+			user: QUEUETY_TEST_DB_USER,
+			password: QUEUETY_TEST_DB_PASS,
+			prefix: QUEUETY_TEST_DB_PREFIX,
+		);
 
-		// Manually begin a claim transaction and hold it open.
+		$pdo1 = $conn1->pdo();
+		$pdo2 = $conn2->pdo();
+
+		// Verify they are distinct PDO instances.
+		$this->assertNotSame( $pdo1, $pdo2 );
+
+		// First connection: claim a job inside a transaction (don't commit).
 		$table = $conn1->table( \Queuety\Config::table_jobs() );
 		$pdo1->beginTransaction();
 		$stmt1 = $pdo1->prepare(
@@ -97,15 +114,8 @@ class ConcurrentAccessTest extends IntegrationTestCase {
 		);
 		$upd->execute( array( 'id' => $row1['id'] ) );
 
-		// Second connection: create a fresh connection and claim.
-		$conn2 = new Connection(
-			host: QUEUETY_TEST_DB_HOST,
-			dbname: QUEUETY_TEST_DB_NAME,
-			user: QUEUETY_TEST_DB_USER,
-			password: QUEUETY_TEST_DB_PASS,
-			prefix: QUEUETY_TEST_DB_PREFIX,
-		);
-		$queue2  = new Queue( $conn2 );
+		// Second connection: claim using a Queue backed by the independent conn2.
+		$queue2   = new Queue( $conn2 );
 		$claimed2 = $queue2->claim();
 
 		// Second connection should get a different job (SKIP LOCKED).

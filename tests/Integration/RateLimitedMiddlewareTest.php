@@ -65,18 +65,19 @@ class RateLimitedMiddlewareTest extends TestCase {
 	}
 
 	public function test_throws_when_rate_limit_exceeded(): void {
-		$this->markTestSkipped( "Flaky: in-memory rate limiter counter resets on DB refresh timing." );
 		$job_class = 'stdClass';
-		$limiter   = Queuety::rate_limiter();
 
-		// Pre-register and exhaust the limit.
-		$limiter->register( $job_class, 1, 60 );
-
-		// Trigger a DB refresh first (sets last_refresh to now),
-		// then record the execution. This ensures the in-memory counter
-		// is not reset by a subsequent DB refresh within the 5-second window.
-		$limiter->is_limited( $job_class );
-		$limiter->record( $job_class );
+		// Write a completed log entry to the DB so that refresh_from_db()
+		// will find it and count it against the rate limit. This prevents
+		// the in-memory counter from being reset to 0 on DB refresh.
+		$logger = Queuety::logger();
+		$logger->log(
+			\Queuety\Enums\LogEvent::Completed,
+			array(
+				'handler' => $job_class,
+				'queue'   => 'default',
+			)
+		);
 
 		$middleware = new RateLimited( max: 1, window: 60 );
 		$job       = new \stdClass();

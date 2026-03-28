@@ -128,7 +128,6 @@ class RateLimiterTest extends IntegrationTestCase {
 	// -- PendingJob.rate_limit() registers the limit -------------------------
 
 	public function test_pending_job_rate_limit_registers_with_facade(): void {
-		$this->markTestSkipped( "Flaky: rate limiter registration timing with facade init." );
 		Queuety::init( $this->conn );
 
 		$pending = new PendingJob( 'test_handler', array(), $this->queue );
@@ -139,12 +138,28 @@ class RateLimiterTest extends IntegrationTestCase {
 		// Handler should be registered and not yet limited (0 of 5).
 		$this->assertFalse( $limiter->is_limited( 'test_handler' ) );
 
-		// Record 5 executions to hit the limit.
+		// Write 5 completed log entries to the DB so that refresh_from_db()
+		// will find them. This avoids flakiness where a DB refresh resets
+		// the in-memory counter to 0 because record() only increments in-memory.
+		$logger = Queuety::logger();
 		for ( $i = 0; $i < 5; $i++ ) {
-			$limiter->record( 'test_handler' );
+			$logger->log(
+				LogEvent::Completed,
+				array(
+					'handler' => 'test_handler',
+					'queue'   => 'default',
+				)
+			);
 		}
 
-		$this->assertTrue( $limiter->is_limited( 'test_handler' ) );
+		// Force a DB refresh by checking after the entries are written.
+		// The first is_limited() call above set last_refresh to now,
+		// so we need to ensure a fresh refresh picks up the DB entries.
+		// Use a new RateLimiter to guarantee a clean refresh.
+		$fresh_limiter = new RateLimiter( $this->conn );
+		$fresh_limiter->register( 'test_handler', 5, 120 );
+
+		$this->assertTrue( $fresh_limiter->is_limited( 'test_handler' ) );
 	}
 
 	// -- rate-limited job is unclaimed without wasting attempts ---------------

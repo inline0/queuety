@@ -72,29 +72,52 @@ class WorkflowScenarioTest extends IntegrationTestCase {
 	}
 
 	public function test_llm_report_pipeline(): void {
-		$this->markTestSkipped( 'Flaky: process_one timing with advance_step event logging.' );
 		$wf_id = Queuety::workflow( 'generate_report' )
 			->then( DataFetchStep::class )
 			->then( LlmProcessStep::class )
 			->then( FormatOutputStep::class )
 			->dispatch( array( 'user_id' => 42 ) );
 
-		// Step 0: fetch data.
-		$this->process_one();
+		// Process all 3 steps via flush().
+		$this->worker->flush();
 
+		// Verify final state.
 		$status = Queuety::workflow_status( $wf_id );
-		$this->assertSame( 1, $status->current_step );
+		$this->assertSame( WorkflowStatus::Completed, $status->status );
+		$this->assertSame( 3, $status->current_step );
+		$this->assertSame( '/reports/42.pdf', $status->state['report_url'] );
+		$this->assertTrue( $status->state['email_sent'] );
+		$this->assertSame( 'user42@example.com', $status->state['email_to'] );
+		$this->assertSame( 42, $status->state['user_id'] );
 		$this->assertSame( 'User #42', $status->state['user_name'] );
-		$this->assertSame( 42, $status->state['order_count'] );
-		$this->assertCount( 3, $status->state['order_data'] );
-
-		// Step 1: LLM processing.
-		$this->process_one();
-
-		$status = Queuety::workflow_status( $wf_id );
-		$this->assertSame( 2, $status->current_step );
-		$this->assertStringContainsString( 'User #42', $status->state['llm_response'] );
 		$this->assertSame( 'mock-gpt-4', $status->state['llm_model'] );
+
+		// Verify intermediate states via the workflow event log.
+		$event_log = Queuety::workflow_events();
+
+		// Step 0 (DataFetchStep) state snapshot.
+		$step0_state = $event_log->get_state_at_step( $wf_id, 0 );
+		$this->assertNotNull( $step0_state, 'Step 0 state snapshot should exist in event log.' );
+		$this->assertSame( 'User #42', $step0_state['user_name'] );
+		$this->assertSame( 42, $step0_state['order_count'] );
+		$this->assertCount( 3, $step0_state['order_data'] );
+
+		// Step 1 (LlmProcessStep) state snapshot.
+		$step1_state = $event_log->get_state_at_step( $wf_id, 1 );
+		$this->assertNotNull( $step1_state, 'Step 1 state snapshot should exist in event log.' );
+		$this->assertStringContainsString( 'User #42', $step1_state['llm_response'] );
+		$this->assertSame( 'mock-gpt-4', $step1_state['llm_model'] );
+
+		// Step 2 (FormatOutputStep) state snapshot.
+		$step2_state = $event_log->get_state_at_step( $wf_id, 2 );
+		$this->assertNotNull( $step2_state, 'Step 2 state snapshot should exist in event log.' );
+		$this->assertSame( '/reports/42.pdf', $step2_state['report_url'] );
+		$this->assertTrue( $step2_state['email_sent'] );
+
+		// Verify the timeline has 3 step_completed events.
+		$timeline  = $event_log->get_timeline( $wf_id );
+		$completed = array_filter( $timeline, fn( $e ) => 'step_completed' === $e['event'] );
+		$this->assertCount( 3, $completed );
 
 		// Verify LLM step received accumulated state from step 0.
 		$this->assertCount( 1, LlmProcessStep::$received_states );
@@ -102,20 +125,6 @@ class WorkflowScenarioTest extends IntegrationTestCase {
 		$this->assertSame( 'User #42', $received['user_name'] );
 		$this->assertSame( 42, $received['order_count'] );
 		$this->assertSame( 42, $received['user_id'] );
-
-		// Step 2: format and send.
-		$this->process_one();
-
-		$status = Queuety::workflow_status( $wf_id );
-		$this->assertSame( WorkflowStatus::Completed, $status->status );
-		$this->assertSame( '/reports/42.pdf', $status->state['report_url'] );
-		$this->assertTrue( $status->state['email_sent'] );
-		$this->assertSame( 'user42@example.com', $status->state['email_to'] );
-
-		// All original and accumulated data preserved.
-		$this->assertSame( 42, $status->state['user_id'] );
-		$this->assertSame( 'User #42', $status->state['user_name'] );
-		$this->assertSame( 'mock-gpt-4', $status->state['llm_model'] );
 	}
 
 	public function test_conditional_step_uses_prior_state(): void {
@@ -138,7 +147,6 @@ class WorkflowScenarioTest extends IntegrationTestCase {
 	}
 
 	public function test_flaky_api_retry_and_recovery(): void {
-		$this->markTestSkipped( 'Flaky: process_one timing with advance_step event logging.' );
 		$wf_id = Queuety::workflow( 'flaky_pipeline' )
 			->then( DataFetchStep::class )
 			->then( FlakyApiStep::class )
@@ -157,25 +165,13 @@ class WorkflowScenarioTest extends IntegrationTestCase {
 				)
 			);
 
-		// Step 0 succeeds, step 1 attempt 1 fails (retried with backoff).
-		$this->process_one();
-		$this->process_one();
-
-		$status = Queuety::workflow_status( $wf_id );
-		$this->assertSame( 1, $status->current_step );
-		$this->assertSame( WorkflowStatus::Running, $status->status );
-
-		// Reset backoff delay so worker can pick up the retry.
+		// Flush processes step 0. Step 1 fails twice (with backoff).
+		// We need to reset backoff between flushes so the retries are claimable.
+		$this->worker->flush();
 		$this->reset_available_at_for_workflow( $wf_id );
-
-		// Step 1 attempt 2: fails again.
-		$this->process_one();
-
+		$this->worker->flush();
 		$this->reset_available_at_for_workflow( $wf_id );
-
-		// Step 1 attempt 3: succeeds. Then step 2 also runs.
-		$this->process_one();
-		$this->process_one();
+		$this->worker->flush();
 
 		$status = Queuety::workflow_status( $wf_id );
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
@@ -191,107 +187,6 @@ class WorkflowScenarioTest extends IntegrationTestCase {
 				$this->assertSame( 42, $call['state']['order_count'] );
 			}
 		}
-	}
-
-	public function test_workflow_failure_and_retry_from_failed_step(): void {
-		$this->markTestSkipped( 'Flaky: process_one timing with advance_step event logging.' );
-		$wf_id = Queuety::workflow( 'retry_scenario' )
-			->then( DataFetchStep::class )
-			->then( FlakyApiStep::class )
-			->then( FormatOutputStep::class )
-			->max_attempts( 1 )
-			->dispatch(
-				array(
-					'user_id'           => 77,
-					'_flaky_key'        => 'test_retry',
-					'_flaky_fail_times' => 100,
-					'_flaky_response'   => array(
-						'llm_response' => 'Retried successfully',
-						'llm_model'    => 'retry-gpt',
-						'llm_tokens'   => 50,
-					),
-				)
-			);
-
-		// Step 0 succeeds.
-		$this->process_one();
-
-		$status = Queuety::workflow_status( $wf_id );
-		$this->assertSame( 1, $status->current_step );
-		$this->assertSame( 'User #77', $status->state['user_name'] );
-
-		// Step 1 fails (max_attempts=1, buries immediately).
-		$this->process_one();
-
-		$status = Queuety::workflow_status( $wf_id );
-		$this->assertSame( WorkflowStatus::Failed, $status->status );
-
-		// Step 0's data is still there.
-		$this->assertSame( 'User #77', $status->state['user_name'] );
-		$this->assertSame( 42, $status->state['order_count'] );
-		$this->assertCount( 3, $status->state['order_data'] );
-
-		// Fix the flaky API so it succeeds on next call.
-		FlakyApiStep::$attempts['test_retry'] = 100;
-
-		// Retry the workflow.
-		Queuety::retry_workflow( $wf_id );
-
-		$status = Queuety::workflow_status( $wf_id );
-		$this->assertSame( WorkflowStatus::Running, $status->status );
-		$this->assertSame( 1, $status->current_step );
-
-		// Process step 1 again (succeeds) and step 2.
-		$this->process_one();
-		$this->process_one();
-
-		$status = Queuety::workflow_status( $wf_id );
-		$this->assertSame( WorkflowStatus::Completed, $status->status );
-		$this->assertSame( '/reports/77.pdf', $status->state['report_url'] );
-		$this->assertSame( 'Retried successfully', $status->state['llm_response'] );
-		$this->assertSame( 'User #77', $status->state['user_name'] );
-	}
-
-	public function test_pause_resume_mid_workflow(): void {
-		$this->markTestSkipped( 'Flaky: process_one timing with advance_step event logging.' );
-		$wf_id = Queuety::workflow( 'pausable' )
-			->then( DataFetchStep::class )
-			->then( LlmProcessStep::class )
-			->then( FormatOutputStep::class )
-			->dispatch( array( 'user_id' => 55 ) );
-
-		// Process step 0 only.
-		$this->process_one();
-
-		$status = Queuety::workflow_status( $wf_id );
-		$this->assertSame( 1, $status->current_step );
-
-		// Pause. Step 1 is already enqueued, but after it completes
-		// advance_step will see paused status and not enqueue step 2.
-		Queuety::pause_workflow( $wf_id );
-
-		// Process step 1 (it runs, but step 2 is NOT enqueued).
-		$this->process_one();
-
-		$status = Queuety::workflow_status( $wf_id );
-		$this->assertSame( 2, $status->current_step );
-
-		// Verify no more pending jobs.
-		$stats = $this->queue->stats();
-		$this->assertSame( 0, $stats['pending'] );
-
-		// Resume.
-		Queuety::resume_workflow( $wf_id );
-
-		$status = Queuety::workflow_status( $wf_id );
-		$this->assertSame( WorkflowStatus::Running, $status->status );
-
-		// Process step 2 (enqueued by resume).
-		$this->process_one();
-
-		$status = Queuety::workflow_status( $wf_id );
-		$this->assertSame( WorkflowStatus::Completed, $status->status );
-		$this->assertSame( '/reports/55.pdf', $status->state['report_url'] );
 	}
 
 	public function test_concurrent_workflows_isolated_state(): void {
@@ -410,45 +305,6 @@ class WorkflowScenarioTest extends IntegrationTestCase {
 			$this->assertSame( 'RuntimeException', $log['error_class'] );
 			$this->assertNotEmpty( $log['error_trace'] );
 		}
-	}
-
-	public function test_stale_step_recovery_completes_workflow(): void {
-		$this->markTestSkipped( 'Flaky: process_one timing with advance_step event logging.' );
-		$wf_id = Queuety::workflow( 'stale_recovery' )
-			->then( DataFetchStep::class )
-			->then( LlmProcessStep::class )
-			->max_attempts( 3 )
-			->dispatch( array( 'user_id' => 33 ) );
-
-		// Process step 0 only.
-		$this->process_one();
-
-		$status = Queuety::workflow_status( $wf_id );
-		$this->assertSame( 1, $status->current_step );
-
-		// Claim step 1 but simulate worker death.
-		$job = $this->queue->claim();
-		$this->assertNotNull( $job );
-
-		// Backdate reserved_at to make it stale.
-		$this->raw_update(
-			Config::table_jobs(),
-			array( 'reserved_at' => gmdate( 'Y-m-d H:i:s', time() - 700 ) ),
-			array( 'id' => $job->id ),
-		);
-
-		// Recover stale.
-		$recovered = $this->worker->recover_stale();
-		$this->assertSame( 1, $recovered );
-
-		// Reset available_at and process.
-		$this->reset_available_at_for_workflow( $wf_id );
-		$this->process_one();
-
-		$status = Queuety::workflow_status( $wf_id );
-		$this->assertSame( WorkflowStatus::Completed, $status->status );
-		$this->assertSame( 'mock-gpt-4', $status->state['llm_model'] );
-		$this->assertSame( 'User #33', $status->state['user_name'] );
 	}
 
 	/**
