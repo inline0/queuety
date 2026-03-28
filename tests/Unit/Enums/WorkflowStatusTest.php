@@ -12,10 +12,11 @@ class WorkflowStatusTest extends TestCase {
 		$this->assertSame( 'completed', WorkflowStatus::Completed->value );
 		$this->assertSame( 'failed', WorkflowStatus::Failed->value );
 		$this->assertSame( 'paused', WorkflowStatus::Paused->value );
+		$this->assertSame( 'waiting_signal', WorkflowStatus::WaitingSignal->value );
 	}
 
 	public function test_all_cases(): void {
-		$this->assertCount( 4, WorkflowStatus::cases() );
+		$this->assertCount( 5, WorkflowStatus::cases() );
 	}
 
 	public function test_from_valid_value(): void {
@@ -23,6 +24,7 @@ class WorkflowStatusTest extends TestCase {
 		$this->assertSame( WorkflowStatus::Completed, WorkflowStatus::from( 'completed' ) );
 		$this->assertSame( WorkflowStatus::Failed, WorkflowStatus::from( 'failed' ) );
 		$this->assertSame( WorkflowStatus::Paused, WorkflowStatus::from( 'paused' ) );
+		$this->assertSame( WorkflowStatus::WaitingSignal, WorkflowStatus::from( 'waiting_signal' ) );
 	}
 
 	public function test_from_invalid_value_throws(): void {
@@ -54,5 +56,6 @@ class WorkflowStatusTest extends TestCase {
 		$this->assertContains( 'Completed', $names );
 		$this->assertContains( 'Failed', $names );
 		$this->assertContains( 'Paused', $names );
+		$this->assertContains( 'WaitingSignal', $names );
 	}
 }

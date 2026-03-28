@@ -7,6 +7,7 @@
 
 namespace Queuety;
 
+use Queuety\Contracts\Job as JobContract;
 use Queuety\Enums\ExpressionType;
 use Queuety\Enums\Priority;
 use Queuety\Enums\WorkflowStatus;
@@ -133,14 +134,26 @@ class Queuety {
 	}
 
 	/**
-	 * Dispatch a simple job.
+	 * Dispatch a simple job or a dispatchable Job instance.
 	 *
-	 * @param string $handler Handler name or class.
-	 * @param array  $payload Job payload.
+	 * When $handler is a Contracts\Job instance, the serializer extracts the
+	 * FQCN and public properties as the handler name and payload respectively.
+	 * The original instance is stored on the PendingJob for middleware extraction.
+	 *
+	 * @param string|JobContract $handler Handler name, class, or Job instance.
+	 * @param array              $payload Job payload (ignored when $handler is a Job instance).
 	 * @return PendingJob Fluent builder for additional options.
 	 */
-	public static function dispatch( string $handler, array $payload = array() ): PendingJob {
+	public static function dispatch( string|JobContract $handler, array $payload = array() ): PendingJob {
 		self::ensure_initialized();
+
+		if ( $handler instanceof JobContract ) {
+			$serialized   = JobSerializer::serialize( $handler );
+			$handler_name = $serialized['handler'];
+			$payload      = $serialized['payload'];
+			return new PendingJob( $handler_name, $payload, self::$queue, $handler );
+		}
+
 		return new PendingJob( $handler, $payload, self::$queue );
 	}
 
@@ -280,6 +293,22 @@ class Queuety {
 	public static function workflow_status( int $workflow_id ): ?WorkflowState {
 		self::ensure_initialized();
 		return self::$workflow->status( $workflow_id );
+	}
+
+	/**
+	 * Send a signal to a workflow.
+	 *
+	 * If the workflow is currently waiting for this signal, it resumes
+	 * immediately. Otherwise, the signal is stored and will be picked up
+	 * when the workflow reaches the corresponding wait_for_signal step.
+	 *
+	 * @param int    $workflow_id The workflow ID.
+	 * @param string $name        The signal name.
+	 * @param array  $data        Optional payload data to merge into workflow state.
+	 */
+	public static function signal( int $workflow_id, string $name, array $data = array() ): void {
+		self::ensure_initialized();
+		self::$workflow->handle_signal( $workflow_id, $name, $data );
 	}
 
 	/**

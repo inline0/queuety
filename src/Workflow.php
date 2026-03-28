@@ -50,7 +50,7 @@ class Workflow {
 	 * Resolve the step type from a step definition.
 	 *
 	 * @param array|string $step_def Step definition.
-	 * @return string Step type: 'single', 'parallel', or 'sub_workflow'.
+	 * @return string Step type: 'single', 'parallel', 'sub_workflow', 'timer', or 'signal'.
 	 */
 	private function resolve_step_type( array|string $step_def ): string {
 		if ( is_string( $step_def ) ) {
@@ -122,6 +122,19 @@ class Workflow {
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 			);
+		} elseif ( 'timer' === $type ) {
+			$this->queue->dispatch(
+				handler: '__queuety_timer',
+				payload: array( 'step_index' => $step_index ),
+				queue: $queue_name,
+				priority: $priority,
+				delay: $step_def['delay_seconds'] ?? 0,
+				max_attempts: $max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
+		} elseif ( 'signal' === $type ) {
+			$this->enqueue_signal_step( $step_def, $workflow_id, $step_index );
 		} else {
 			$handler = $this->resolve_step_handler( $step_def );
 			$this->queue->dispatch(
@@ -133,6 +146,284 @@ class Workflow {
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 			);
+		}
+	}
+
+	/**
+	 * Handle a signal step: check for pre-existing signals or pause the workflow.
+	 *
+	 * When a workflow reaches a signal step, it checks whether the signal has
+	 * already been sent. If so, the signal data is merged into state and the
+	 * workflow advances. If not, the workflow is set to 'waiting_signal' status.
+	 *
+	 * @param array $step_def    Signal step definition.
+	 * @param int   $workflow_id Workflow ID.
+	 * @param int   $step_index  Step index.
+	 */
+	private function enqueue_signal_step( array $step_def, int $workflow_id, int $step_index ): void {
+		$pdo         = $this->conn->pdo();
+		$wf_tbl      = $this->conn->table( Config::table_workflows() );
+		$sig_tbl     = $this->conn->table( Config::table_signals() );
+		$signal_name = $step_def['signal_name'] ?? '';
+
+		// Check for a pre-existing signal matching this workflow and signal name.
+		$stmt = $pdo->prepare(
+			"SELECT payload FROM {$sig_tbl}
+			WHERE workflow_id = :workflow_id AND signal_name = :signal_name
+			ORDER BY id ASC LIMIT 1"
+		);
+		$stmt->execute(
+			array(
+				'workflow_id' => $workflow_id,
+				'signal_name' => $signal_name,
+			)
+		);
+		$signal_row = $stmt->fetch();
+
+		if ( $signal_row ) {
+			// Signal already exists: merge data into state and advance.
+			$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+			$wf_stmt->execute( array( 'id' => $workflow_id ) );
+			$wf_row = $wf_stmt->fetch();
+
+			if ( ! $wf_row ) {
+				return;
+			}
+
+			$state       = json_decode( $wf_row['state'], true ) ?: array();
+			$signal_data = json_decode( $signal_row['payload'], true ) ?: array();
+			$steps       = $state['_steps'] ?? array();
+			$total_steps = (int) $wf_row['total_steps'];
+
+			// Merge signal data into state.
+			foreach ( $signal_data as $key => $value ) {
+				if ( ! str_starts_with( $key, '_' ) ) {
+					$state[ $key ] = $value;
+				}
+			}
+
+			$next_step = $step_index + 1;
+			$is_last   = $next_step >= $total_steps;
+
+			if ( $is_last ) {
+				$upd = $pdo->prepare(
+					"UPDATE {$wf_tbl}
+					SET state = :state, current_step = :step, status = 'completed', completed_at = NOW()
+					WHERE id = :id"
+				);
+				$upd->execute(
+					array(
+						'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
+						'step'  => $next_step,
+						'id'    => $workflow_id,
+					)
+				);
+
+				$this->logger->log(
+					LogEvent::WorkflowCompleted,
+					array(
+						'workflow_id' => $workflow_id,
+						'handler'     => $wf_row['name'],
+						'queue'       => $state['_queue'] ?? 'default',
+					)
+				);
+
+				$this->on_workflow_completed( $workflow_id, $state, $pdo );
+			} else {
+				$upd = $pdo->prepare(
+					"UPDATE {$wf_tbl} SET state = :state, current_step = :step WHERE id = :id"
+				);
+				$upd->execute(
+					array(
+						'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
+						'step'  => $next_step,
+						'id'    => $workflow_id,
+					)
+				);
+
+				// Enqueue the next step after the signal wait.
+				if ( isset( $steps[ $next_step ] ) ) {
+					$queue_name   = $state['_queue'] ?? 'default';
+					$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
+					$max_attempts = $state['_max_attempts'] ?? 3;
+
+					$this->enqueue_step_def(
+						$steps[ $next_step ],
+						$workflow_id,
+						$next_step,
+						$queue_name,
+						$priority,
+						$max_attempts,
+					);
+				}
+			}
+		} else {
+			// No pre-existing signal: pause the workflow and wait.
+			$wf_stmt = $pdo->prepare( "SELECT state FROM {$wf_tbl} WHERE id = :id" );
+			$wf_stmt->execute( array( 'id' => $workflow_id ) );
+			$wf_row = $wf_stmt->fetch();
+
+			$state                    = $wf_row ? ( json_decode( $wf_row['state'], true ) ?: array() ) : array();
+			$state['_waiting_signal'] = $signal_name;
+
+			$upd = $pdo->prepare(
+				"UPDATE {$wf_tbl}
+				SET status = :status, state = :state, current_step = :step
+				WHERE id = :id"
+			);
+			$upd->execute(
+				array(
+					'status' => WorkflowStatus::WaitingSignal->value,
+					'state'  => json_encode( $state, JSON_THROW_ON_ERROR ),
+					'step'   => $step_index,
+					'id'     => $workflow_id,
+				)
+			);
+		}
+	}
+
+	/**
+	 * Handle a signal step dispatched via the worker.
+	 *
+	 * Called by the Worker when it encounters a __queuety_signal placeholder.
+	 * Delegates to the private enqueue_signal_step method.
+	 *
+	 * @param int   $workflow_id The workflow ID.
+	 * @param array $step_def    The signal step definition.
+	 * @param int   $step_index  The step index.
+	 */
+	public function handle_signal_step( int $workflow_id, array $step_def, int $step_index ): void {
+		$this->enqueue_signal_step( $step_def, $workflow_id, $step_index );
+	}
+
+	/**
+	 * Handle an external signal sent to a workflow.
+	 *
+	 * Inserts the signal into the queuety_signals table for audit purposes.
+	 * If the workflow is currently waiting for this signal, it resumes the
+	 * workflow by merging the signal data into state and advancing to the
+	 * next step.
+	 *
+	 * @param int    $workflow_id The workflow ID.
+	 * @param string $signal_name The signal name.
+	 * @param array  $data        Signal payload data.
+	 * @throws \Throwable If the database transaction fails.
+	 */
+	public function handle_signal( int $workflow_id, string $signal_name, array $data = array() ): void {
+		$pdo     = $this->conn->pdo();
+		$wf_tbl  = $this->conn->table( Config::table_workflows() );
+		$sig_tbl = $this->conn->table( Config::table_signals() );
+
+		$pdo->beginTransaction();
+		try {
+			// Insert signal for audit trail.
+			$ins = $pdo->prepare(
+				"INSERT INTO {$sig_tbl} (workflow_id, signal_name, payload)
+				VALUES (:workflow_id, :signal_name, :payload)"
+			);
+			$ins->execute(
+				array(
+					'workflow_id' => $workflow_id,
+					'signal_name' => $signal_name,
+					'payload'     => json_encode( $data, JSON_THROW_ON_ERROR ),
+				)
+			);
+
+			// Lock and check if the workflow is waiting for this signal.
+			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+			$stmt->execute( array( 'id' => $workflow_id ) );
+			$wf_row = $stmt->fetch();
+
+			if ( ! $wf_row ) {
+				$pdo->commit();
+				return;
+			}
+
+			$state          = json_decode( $wf_row['state'], true ) ?: array();
+			$waiting_signal = $state['_waiting_signal'] ?? null;
+
+			if (
+				WorkflowStatus::WaitingSignal->value === $wf_row['status']
+				&& $waiting_signal === $signal_name
+			) {
+				// Merge signal data into state.
+				foreach ( $data as $key => $value ) {
+					if ( ! str_starts_with( $key, '_' ) ) {
+						$state[ $key ] = $value;
+					}
+				}
+
+				// Clear the waiting signal marker.
+				unset( $state['_waiting_signal'] );
+
+				$current_step = (int) $wf_row['current_step'];
+				$total_steps  = (int) $wf_row['total_steps'];
+				$steps        = $state['_steps'] ?? array();
+				$next_step    = $current_step + 1;
+				$is_last      = $next_step >= $total_steps;
+
+				if ( $is_last ) {
+					$upd = $pdo->prepare(
+						"UPDATE {$wf_tbl}
+						SET status = 'completed', state = :state, current_step = :step, completed_at = NOW()
+						WHERE id = :id"
+					);
+					$upd->execute(
+						array(
+							'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
+							'step'  => $next_step,
+							'id'    => $workflow_id,
+						)
+					);
+
+					$this->logger->log(
+						LogEvent::WorkflowCompleted,
+						array(
+							'workflow_id' => $workflow_id,
+							'handler'     => $wf_row['name'],
+							'queue'       => $state['_queue'] ?? 'default',
+						)
+					);
+
+					$this->on_workflow_completed( $workflow_id, $state, $pdo );
+				} else {
+					$upd = $pdo->prepare(
+						"UPDATE {$wf_tbl}
+						SET status = 'running', state = :state, current_step = :step
+						WHERE id = :id"
+					);
+					$upd->execute(
+						array(
+							'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
+							'step'  => $next_step,
+							'id'    => $workflow_id,
+						)
+					);
+
+					// Enqueue the next step.
+					if ( isset( $steps[ $next_step ] ) ) {
+						$queue_name   = $state['_queue'] ?? 'default';
+						$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
+						$max_attempts = $state['_max_attempts'] ?? 3;
+
+						$this->enqueue_step_def(
+							$steps[ $next_step ],
+							$workflow_id,
+							$next_step,
+							$queue_name,
+							$priority,
+							$max_attempts,
+						);
+					}
+				}
+			}
+
+			$pdo->commit();
+		} catch ( \Throwable $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+			throw $e;
 		}
 	}
 

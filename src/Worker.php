@@ -7,6 +7,7 @@
 
 namespace Queuety;
 
+use Queuety\Contracts\Job as JobContract;
 use Queuety\Enums\BackoffStrategy;
 use Queuety\Enums\LogEvent;
 use Queuety\Exceptions\TimeoutException;
@@ -263,6 +264,117 @@ class Worker {
 						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
 					)
 				);
+			} elseif ( $job->is_workflow_step() && '__queuety_timer' === $job->handler ) {
+				// Handle durable timer: the delay already happened via available_at.
+				// Mark the timer job as complete and advance the workflow.
+				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
+
+				$this->workflow->advance_step(
+					workflow_id: $job->workflow_id,
+					completed_job_id: $job->id,
+					step_output: array(),
+					duration_ms: $duration_ms,
+				);
+
+				$this->logger->log(
+					LogEvent::Completed,
+					array(
+						'job_id'         => $job->id,
+						'workflow_id'    => $job->workflow_id,
+						'step_index'     => $job->step_index,
+						'handler'        => $job->handler,
+						'queue'          => $job->queue,
+						'duration_ms'    => $duration_ms,
+						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
+					)
+				);
+			} elseif ( $job->is_workflow_step() && '__queuety_signal' === $job->handler ) {
+				// Handle signal step placeholder: trigger signal step processing in the workflow.
+				$wf_state = $this->workflow->get_state( $job->workflow_id ) ?? array();
+				$steps    = $wf_state['_steps'] ?? array();
+				$step_def = $steps[ $job->step_index ] ?? null;
+
+				// Mark the placeholder job as completed.
+				$this->queue->complete( $job->id );
+
+				if ( $step_def && 'signal' === ( $step_def['type'] ?? '' ) ) {
+					// Delegate to the workflow's signal step handling.
+					$this->workflow->handle_signal_step(
+						workflow_id: $job->workflow_id,
+						step_def: $step_def,
+						step_index: $job->step_index,
+					);
+				}
+
+				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
+
+				$this->logger->log(
+					LogEvent::Completed,
+					array(
+						'job_id'         => $job->id,
+						'workflow_id'    => $job->workflow_id,
+						'step_index'     => $job->step_index,
+						'handler'        => $job->handler,
+						'queue'          => $job->queue,
+						'duration_ms'    => $duration_ms,
+						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
+					)
+				);
+			} elseif ( $this->registry->is_job_class( $job->handler ) ) {
+				// Contracts\Job class: deserialize, run through middleware pipeline.
+				$this->debug_log( "Deserializing job class: {$job->handler}", $job->queue );
+				$job_instance = JobSerializer::deserialize( $job->handler, $job->payload );
+
+				// Collect middleware from the job if it defines a middleware() method.
+				$middleware = array();
+				if ( method_exists( $job_instance, 'middleware' ) ) {
+					$middleware = $job_instance->middleware();
+				}
+
+				// Build the core closure that calls handle().
+				$queue_ref   = $this->queue;
+				$logger_ref  = $this->logger;
+				$webhook_ref = $this;
+				$job_record  = $job;
+				$start_ref   = $start_time;
+				$core        = function ( object $job_obj ) use ( $queue_ref, $logger_ref, $job_record, $start_ref ): void {
+					$job_obj->handle();
+
+					$duration_ms = (int) ( ( hrtime( true ) - $start_ref ) / 1_000_000 );
+
+					$queue_ref->complete( $job_record->id );
+
+					$logger_ref->log(
+						LogEvent::Completed,
+						array(
+							'job_id'         => $job_record->id,
+							'handler'        => $job_record->handler,
+							'queue'          => $job_record->queue,
+							'attempt'        => $job_record->attempts,
+							'duration_ms'    => $duration_ms,
+							'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
+						)
+					);
+				};
+
+				if ( ! empty( $middleware ) ) {
+					$pipeline = new MiddlewarePipeline();
+					$pipeline->run( $job_instance, $middleware, $core );
+				} else {
+					$core( $job_instance );
+				}
+
+				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
+
+				$this->notify_webhook(
+					'job.completed',
+					array(
+						'job_id'      => $job->id,
+						'handler'     => $job->handler,
+						'queue'       => $job->queue,
+						'duration_ms' => $duration_ms,
+					)
+				);
 			} else {
 
 				$this->debug_log( "Resolving handler: {$job->handler}", $job->queue );
@@ -323,7 +435,7 @@ class Worker {
 						)
 					);
 				}
-			} // End of sub-workflow else block.
+			} // End of handler/step else block.
 
 			// Record successful execution for rate limiting.
 			if ( null !== $this->rate_limiter ) {

@@ -144,6 +144,24 @@ class Config {
 	}
 
 	/**
+	 * Get the signals table name.
+	 *
+	 * @return string
+	 */
+	public static function table_signals(): string {
+		return defined( 'QUEUETY_TABLE_SIGNALS' ) ? QUEUETY_TABLE_SIGNALS : 'queuety_signals';
+	}
+
+	/**
+	 * Get the locks table name.
+	 *
+	 * @return string
+	 */
+	public static function table_locks(): string {
+		return defined( 'QUEUETY_TABLE_LOCKS' ) ? QUEUETY_TABLE_LOCKS : 'queuety_locks';
+	}
+
+	/**
 	 * Check if debug mode is enabled.
 	 *
 	 * @return bool

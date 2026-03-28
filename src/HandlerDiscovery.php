@@ -9,6 +9,7 @@ namespace Queuety;
 
 use Queuety\Attributes\QueuetyHandler;
 use Queuety\Attributes\QueuetyStep;
+use Queuety\Contracts\Job as JobContract;
 
 /**
  * Scans directories for PHP classes implementing Handler or Step,
@@ -64,14 +65,22 @@ class HandlerDiscovery {
 
 			$is_handler = $reflection->implementsInterface( Handler::class );
 			$is_step    = $reflection->implementsInterface( Step::class );
+			$is_job     = $reflection->implementsInterface( JobContract::class );
 
-			if ( ! $is_handler && ! $is_step ) {
+			if ( ! $is_handler && ! $is_step && ! $is_job ) {
 				continue;
+			}
+
+			$type = 'handler';
+			if ( $is_step ) {
+				$type = 'step';
+			} elseif ( $is_job && ! $is_handler ) {
+				$type = 'job';
 			}
 
 			$entry = array(
 				'class'     => $class_name,
-				'type'      => $is_handler ? 'handler' : 'step',
+				'type'      => $type,
 				'name'      => null,
 				'attribute' => null,
 			);

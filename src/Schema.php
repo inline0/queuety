@@ -25,6 +25,8 @@ class Schema {
 		$schedules    = $conn->table( Config::table_schedules() );
 		$queue_states = $conn->table( Config::table_queue_states() );
 		$webhooks     = $conn->table( Config::table_webhooks() );
+		$signals      = $conn->table( Config::table_signals() );
+		$locks        = $conn->table( Config::table_locks() );
 
 		$pdo->exec(
 			"CREATE TABLE IF NOT EXISTS {$jobs} (
@@ -59,7 +61,7 @@ class Schema {
 			"CREATE TABLE IF NOT EXISTS {$wf} (
 				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 				name VARCHAR(255) NOT NULL,
-				status ENUM('running', 'completed', 'failed', 'paused') NOT NULL DEFAULT 'running',
+				status ENUM('running', 'completed', 'failed', 'paused', 'waiting_signal') NOT NULL DEFAULT 'running',
 				state LONGTEXT NOT NULL,
 				current_step TINYINT UNSIGNED NOT NULL DEFAULT 0,
 				total_steps TINYINT UNSIGNED NOT NULL,
@@ -133,6 +135,26 @@ class Schema {
 				INDEX idx_event (event)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$signals} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				workflow_id BIGINT UNSIGNED NOT NULL,
+				signal_name VARCHAR(255) NOT NULL,
+				payload LONGTEXT NOT NULL,
+				received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				INDEX idx_workflow_signal (workflow_id, signal_name)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$locks} (
+				lock_key VARCHAR(255) NOT NULL PRIMARY KEY,
+				owner VARCHAR(64) NOT NULL,
+				acquired_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				expires_at DATETIME DEFAULT NULL
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
 	}
 
 	/**
@@ -148,13 +170,48 @@ class Schema {
 		$schedules    = $conn->table( Config::table_schedules() );
 		$queue_states = $conn->table( Config::table_queue_states() );
 		$webhooks     = $conn->table( Config::table_webhooks() );
+		$signals      = $conn->table( Config::table_signals() );
+		$locks        = $conn->table( Config::table_locks() );
 
+		$pdo->exec( "DROP TABLE IF EXISTS {$locks}" );
+		$pdo->exec( "DROP TABLE IF EXISTS {$signals}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$webhooks}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$logs}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$schedules}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$queue_states}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$jobs}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$wf}" );
+	}
+
+	/**
+	 * Migrate from v0.5.x to v0.6.0.
+	 *
+	 * Adds the 'waiting_signal' value to the workflows status ENUM and
+	 * creates the queuety_signals table for workflow signal support.
+	 *
+	 * @param Connection $conn Database connection.
+	 */
+	public static function migrate_060( Connection $conn ): void {
+		$pdo     = $conn->pdo();
+		$wf      = $conn->table( Config::table_workflows() );
+		$signals = $conn->table( Config::table_signals() );
+
+		$pdo->exec(
+			"ALTER TABLE {$wf} MODIFY COLUMN status
+			ENUM('running', 'completed', 'failed', 'paused', 'waiting_signal')
+			NOT NULL DEFAULT 'running'"
+		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$signals} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				workflow_id BIGINT UNSIGNED NOT NULL,
+				signal_name VARCHAR(255) NOT NULL,
+				payload LONGTEXT NOT NULL,
+				received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				INDEX idx_workflow_signal (workflow_id, signal_name)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
 	}
 
 	/**

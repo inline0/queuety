@@ -7,6 +7,7 @@
 
 namespace Queuety;
 
+use Queuety\Contracts\Job as JobContract;
 use Queuety\Enums\Priority;
 
 /**
@@ -86,17 +87,39 @@ class PendingJob {
 	private ?int $job_id = null;
 
 	/**
+	 * The original Contracts\Job instance, if dispatched as a job class.
+	 *
+	 * Stored for middleware extraction during worker processing.
+	 *
+	 * @var JobContract|null
+	 */
+	private ?JobContract $job_instance = null;
+
+	/**
 	 * Constructor.
 	 *
-	 * @param string $handler   Handler name or class.
-	 * @param array  $payload   Job payload.
-	 * @param Queue  $queue_ops Queue operations instance.
+	 * @param string           $handler      Handler name or class.
+	 * @param array            $payload      Job payload.
+	 * @param Queue            $queue_ops    Queue operations instance.
+	 * @param JobContract|null $job_instance Optional original Job instance for middleware.
 	 */
 	public function __construct(
 		private readonly string $handler,
 		private readonly array $payload,
 		private readonly Queue $queue_ops,
-	) {}
+		?JobContract $job_instance = null,
+	) {
+		$this->job_instance = $job_instance;
+	}
+
+	/**
+	 * Get the original Job instance, if available.
+	 *
+	 * @return JobContract|null
+	 */
+	public function get_job_instance(): ?JobContract {
+		return $this->job_instance;
+	}
 
 	/**
 	 * Auto-dispatch on destruction if not already dispatched.

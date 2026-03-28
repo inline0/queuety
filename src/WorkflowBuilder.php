@@ -126,6 +126,54 @@ class WorkflowBuilder {
 	}
 
 	/**
+	 * Add a durable timer step to the workflow.
+	 *
+	 * The workflow will pause for the specified duration before continuing
+	 * to the next step. The delay is implemented via the job's available_at
+	 * column, making it durable across worker restarts.
+	 *
+	 * @param int $seconds Seconds to wait.
+	 * @param int $minutes Minutes to wait.
+	 * @param int $hours   Hours to wait.
+	 * @param int $days    Days to wait.
+	 * @return self
+	 */
+	public function sleep( int $seconds = 0, int $minutes = 0, int $hours = 0, int $days = 0 ): self {
+		$total       = $seconds + ( $minutes * 60 ) + ( $hours * 3600 ) + ( $days * 86400 );
+		$timer_count = 0;
+		foreach ( $this->steps as $step ) {
+			if ( 'timer' === $step['type'] ) {
+				++$timer_count;
+			}
+		}
+		$this->steps[] = array(
+			'type'          => 'timer',
+			'delay_seconds' => $total,
+			'name'          => 'timer_' . $timer_count,
+		);
+		return $this;
+	}
+
+	/**
+	 * Add a signal wait step to the workflow.
+	 *
+	 * When the workflow reaches this step, it pauses and waits for an
+	 * external signal with the given name. If the signal has already been
+	 * sent before the step is reached, the workflow continues immediately.
+	 *
+	 * @param string $name The signal name to wait for.
+	 * @return self
+	 */
+	public function wait_for_signal( string $name ): self {
+		$this->steps[] = array(
+			'type'        => 'signal',
+			'signal_name' => $name,
+			'name'        => 'wait_for_' . $name,
+		);
+		return $this;
+	}
+
+	/**
 	 * Set the queue for all steps.
 	 *
 	 * @param string $queue Queue name.
@@ -216,6 +264,18 @@ class WorkflowBuilder {
 					'sub_queue'        => $builder->get_queue(),
 					'sub_priority'     => $builder->get_priority()->value,
 					'sub_max_attempts' => $builder->get_max_attempts(),
+				);
+			} elseif ( 'timer' === $step['type'] ) {
+				$result[] = array(
+					'type'          => 'timer',
+					'name'          => $step['name'],
+					'delay_seconds' => $step['delay_seconds'],
+				);
+			} elseif ( 'signal' === $step['type'] ) {
+				$result[] = array(
+					'type'        => 'signal',
+					'name'        => $step['name'],
+					'signal_name' => $step['signal_name'],
 				);
 			} else {
 				$entry = array(
@@ -320,6 +380,30 @@ class WorkflowBuilder {
 			// Actually, for the first step, if it's a sub_workflow, we handle it in Workflow.
 			$this->queue_ops->dispatch(
 				handler: '__queuety_sub_workflow',
+				payload: array( 'step_index' => $step_index ),
+				queue: $this->queue,
+				priority: $this->priority,
+				max_attempts: $this->max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
+		} elseif ( 'timer' === $step_def['type'] ) {
+			$this->queue_ops->dispatch(
+				handler: '__queuety_timer',
+				payload: array( 'step_index' => $step_index ),
+				queue: $this->queue,
+				priority: $this->priority,
+				delay: $step_def['delay_seconds'] ?? 0,
+				max_attempts: $this->max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
+		} elseif ( 'signal' === $step_def['type'] ) {
+			// Signal steps are handled by Workflow::enqueue_step_def.
+			// When dispatched from the builder (first step), delegate to Workflow logic
+			// by dispatching a placeholder that Workflow will interpret.
+			$this->queue_ops->dispatch(
+				handler: '__queuety_signal',
 				payload: array( 'step_index' => $step_index ),
 				queue: $this->queue,
 				priority: $this->priority,
