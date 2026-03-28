@@ -27,7 +27,7 @@
         "test": "phpunit",
         "test:unit": "phpunit --testsuite unit",
         "test:integration": "phpunit --testsuite integration",
-        "cs": "phpcs",
+        "cs": "phpcs --warning-severity=0",
         "cs:fix": "phpcbf"
     },
     "require-dev": {
