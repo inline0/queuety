@@ -1,11 +1,12 @@
 import { defineConfig } from "onedocs/config";
 import { Zap, GitBranch, Layers, Shield, Clock, Split, BarChart3, Code } from "lucide-react";
+import { HeroLeft } from "./src/components/hero-left";
 
 const iconClass = "h-5 w-5 text-fd-primary";
 
 export default defineConfig({
   title: "Queuety",
-  description: "A job queue and durable workflow engine for WordPress that doesn't boot WordPress.",
+  description: "The WordPress job queue and workflow engine.",
   logo: {
     light: "/logo-light.svg",
     dark: "/logo-dark.svg",
@@ -18,53 +19,56 @@ export default defineConfig({
     links: [{ label: "Inline0.com", href: "https://inline0.com" }],
   },
   homepage: {
+    hero: {
+      left: HeroLeft,
+    },
     features: [
       {
-        title: "Fast",
+        title: "Fast Execution",
         description:
-          "Workers process jobs from a minimal PHP bootstrap. No WordPress boot. Direct PDO database access.",
+          "Workers skip the WordPress boot, connecting to MySQL directly via PDO. ~5ms overhead per batch.",
         icon: <Zap className={iconClass} />,
       },
       {
         title: "Durable Workflows",
         description:
-          "Multi-step processes that survive PHP timeouts, retries, and crashes. State persists across steps.",
+          "Multi-step processes with persistent state that survive PHP timeouts, crashes, and retries.",
         icon: <GitBranch className={iconClass} />,
       },
       {
         title: "Priority Queues",
         description:
-          "Four priority levels with type-safe PHP 8.2 enums. Higher priority jobs are processed first.",
+          "Four priority levels via type-safe enums. Higher priority jobs are always processed first.",
         icon: <Layers className={iconClass} />,
       },
       {
         title: "Rate Limiting",
         description:
-          "Per-handler rate limits to protect external APIs and control throughput.",
+          "Per-handler execution limits with sliding window. Workers skip rate-limited handlers automatically.",
         icon: <Shield className={iconClass} />,
       },
       {
         title: "Recurring Jobs",
         description:
-          "Cron expressions and interval-based scheduling. Built-in scheduler with automatic job dispatch.",
+          "Interval and cron-based scheduling. Built-in cron parser with no external dependencies.",
         icon: <Clock className={iconClass} />,
       },
       {
         title: "Parallel Steps",
         description:
-          "Run workflow steps concurrently. The workflow advances when all parallel jobs complete.",
+          "Run workflow steps concurrently and wait for all to complete before advancing.",
         icon: <Split className={iconClass} />,
       },
       {
-        title: "Metrics",
+        title: "Metrics & Logging",
         description:
-          "Throughput, latency percentiles, and error rates per handler. Query via PHP API or CLI.",
+          "Permanent database log with throughput, latency percentiles, and error rates per handler.",
         icon: <BarChart3 className={iconClass} />,
       },
       {
         title: "PHP 8.2+",
         description:
-          "Enums, readonly classes, match expressions, named arguments. Modern PHP throughout.",
+          "Enums, readonly classes, match expressions, constructor promotion, and PHP attributes.",
         icon: <Code className={iconClass} />,
       },
     ],

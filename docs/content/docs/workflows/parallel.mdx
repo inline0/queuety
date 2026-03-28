@@ -1,55 +1,48 @@
 ---
 title: Parallel Steps
-description: Run workflow steps concurrently and merge their results.
+description: Running multiple step handlers concurrently within a workflow.
 ---
 
 # Parallel Steps
 
-Workflows can run multiple steps concurrently using `->parallel()`. All handlers in a parallel group execute as independent jobs. The workflow advances to the next step only when every parallel job has completed.
+Sometimes multiple steps can run at the same time. The `->parallel()` method dispatches a group of handlers concurrently. The workflow only advances when all parallel handlers have completed.
 
-## The parallel() API
-
-Pass an array of step handler classes to `->parallel()`:
+## The `->parallel()` method
 
 ```php
 use Queuety\Queuety;
 
-$workflow_id = Queuety::workflow('enrich_profile')
-    ->then(FetchUserHandler::class)
-    ->parallel([
-        FetchSocialDataHandler::class,
-        FetchOrderHistoryHandler::class,
-        FetchSupportTicketsHandler::class,
-    ])
-    ->then(MergeAndScoreHandler::class)
-    ->dispatch(['user_id' => 42]);
+Queuety::workflow( 'enrich_profile' )
+    ->then( FetchUserHandler::class )
+    ->parallel( [
+        FetchSocialProfileHandler::class,
+        FetchPaymentHistoryHandler::class,
+        FetchActivityLogHandler::class,
+    ] )
+    ->then( MergeAndSaveHandler::class )
+    ->dispatch( [ 'user_id' => 42 ] );
 ```
 
-In this workflow:
+In this example:
+1. `FetchUserHandler` runs first (sequential)
+2. Three handlers run concurrently (parallel)
+3. `MergeAndSaveHandler` runs after all three complete (sequential)
 
-1. `FetchUserHandler` runs first (sequential).
-2. Three handlers run concurrently: social data, order history, and support tickets.
-3. `MergeAndScoreHandler` runs after all three parallel handlers complete.
+## How it works
 
-## How parallel execution works
+When a parallel step is reached, Queuety dispatches one job per handler in the group. Each job receives the current workflow state and runs independently. The workflow tracks how many parallel jobs are outstanding and only advances to the next step once all have completed.
 
-When the workflow engine reaches a parallel step, it dispatches one job per handler in the group. Each job receives the current workflow state and runs independently. Workers can process these jobs on different threads or machines.
+Each parallel handler's return value is merged into the workflow state. If multiple handlers return the same key, the last one to complete wins.
 
-The workflow tracks how many parallel jobs are outstanding. Each time a parallel job completes, its return data is merged into the workflow state. When the last parallel job finishes, the workflow advances to the next step.
+## State merging
 
-## State merging from parallel steps
-
-Each parallel handler returns data that is merged into the workflow state. If two handlers return the same key, the last one to complete wins. To avoid conflicts, use distinct keys:
+Each parallel handler returns data that gets merged into the shared workflow state:
 
 ```php
-class FetchSocialDataHandler implements Step {
+class FetchSocialProfileHandler implements Step {
     public function handle( array $state ): array {
-        return [
-            'social' => [
-                'twitter_followers' => 1200,
-                'linkedin_connections' => 500,
-            ],
-        ];
+        $profile = fetch_social_api( $state['user_id'] );
+        return [ 'social_profile' => $profile ];
     }
 
     public function config(): array {
@@ -57,29 +50,10 @@ class FetchSocialDataHandler implements Step {
     }
 }
 
-class FetchOrderHistoryHandler implements Step {
+class FetchPaymentHistoryHandler implements Step {
     public function handle( array $state ): array {
-        return [
-            'orders' => [
-                'total_orders' => 47,
-                'total_revenue' => 12500.00,
-            ],
-        ];
-    }
-
-    public function config(): array {
-        return [];
-    }
-}
-
-class FetchSupportTicketsHandler implements Step {
-    public function handle( array $state ): array {
-        return [
-            'support' => [
-                'open_tickets' => 2,
-                'avg_resolution_hours' => 4.5,
-            ],
-        ];
+        $payments = fetch_payment_api( $state['user_id'] );
+        return [ 'payment_history' => $payments ];
     }
 
     public function config(): array {
@@ -88,37 +62,22 @@ class FetchSupportTicketsHandler implements Step {
 }
 ```
 
-After all three complete, the next step receives:
-
-```php
-[
-    'user_id' => 42,
-    // from FetchUserHandler:
-    'user_name' => 'Alice',
-    // from parallel steps:
-    'social'  => ['twitter_followers' => 1200, 'linkedin_connections' => 500],
-    'orders'  => ['total_orders' => 47, 'total_revenue' => 12500.00],
-    'support' => ['open_tickets' => 2, 'avg_resolution_hours' => 4.5],
-]
-```
+After the parallel step completes, the state contains both `social_profile` and `payment_history`, and the next sequential step can access all of it.
 
 ## Mixing sequential and parallel
 
-You can freely mix `->then()` and `->parallel()` in a single workflow:
+You can freely mix `->then()` and `->parallel()` calls:
 
 ```php
-Queuety::workflow('process_upload')
-    ->then(ValidateFileHandler::class)           // Sequential
-    ->parallel([                                  // Parallel
-        GenerateThumbnailHandler::class,
-        ExtractMetadataHandler::class,
-        ScanForVirusesHandler::class,
-    ])
-    ->then(StoreResultsHandler::class)           // Sequential
-    ->then(NotifyUserHandler::class)             // Sequential
-    ->dispatch(['file_id' => 99]);
+Queuety::workflow( 'complex_pipeline' )
+    ->then( SetupHandler::class )               // sequential
+    ->parallel( [ TaskA::class, TaskB::class ] ) // parallel
+    ->then( IntermediateHandler::class )         // sequential
+    ->parallel( [ TaskC::class, TaskD::class ] ) // parallel
+    ->then( FinalizeHandler::class )             // sequential
+    ->dispatch( $payload );
 ```
 
-## Failure handling
+## Error handling
 
-If any parallel job fails and exhausts its retries (becomes buried), the entire workflow is marked as `failed`. The state bag preserves the outputs from parallel jobs that completed successfully. When you retry the workflow, only the failed parallel job is re-run.
+If any handler in a parallel group fails, the workflow follows the normal retry logic for that handler. Other parallel handlers that have already completed are not re-run. Once the failed handler succeeds (or is buried), the workflow proceeds.

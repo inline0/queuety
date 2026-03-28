@@ -1,88 +1,38 @@
 ---
 title: Metrics
-description: Query throughput, latency, and error rates from the Queuety Metrics API.
+description: Per-handler throughput, latency, and error rate metrics.
 ---
 
 # Metrics
 
-Queuety provides a Metrics API that calculates throughput, latency percentiles, and error rates from the logs table. Metrics are computed on the fly from log data, so there is no separate metrics storage.
+Queuety provides a metrics API that computes per-handler statistics from the log table. Use it for monitoring, dashboards, and alerting.
 
-## Throughput
+## Handler statistics
 
-Jobs completed per minute in a given time window:
-
-```php
-$metrics = Queuety::metrics();
-
-// Overall throughput in the last 60 minutes
-$jobs_per_min = $metrics->throughput(minutes: 60);
-
-// Per-handler throughput
-$jobs_per_min = $metrics->throughput(handler: 'SendEmailHandler', minutes: 60);
-```
-
-## Average duration
-
-Average execution time in milliseconds:
+Get metrics for all handlers within a time window:
 
 ```php
-$avg_ms = $metrics->average_duration(minutes: 60);
-$avg_ms = $metrics->average_duration(handler: 'ProcessImageHandler', minutes: 60);
+$stats = Queuety::metrics()->handler_stats( 60 ); // last 60 minutes
 ```
 
-## P95 latency
+Each entry in the returned array contains:
 
-95th percentile execution time in milliseconds:
+| Field | Description |
+|---|---|
+| `handler` | Handler name |
+| `completed` | Number of successful executions |
+| `failed` | Number of failed executions |
+| `avg_ms` | Average execution duration in milliseconds |
+| `p95_ms` | 95th percentile execution duration |
+| `error_rate` | Failure rate as a percentage |
 
-```php
-$p95_ms = $metrics->p95_duration(minutes: 60);
-$p95_ms = $metrics->p95_duration(handler: 'CallLLMHandler', minutes: 60);
-```
-
-## Error rate
-
-Ratio of failed/buried jobs to total jobs (0.0 to 1.0):
-
-```php
-$rate = $metrics->error_rate(minutes: 60);
-$rate = $metrics->error_rate(handler: 'ChargePaymentHandler', minutes: 60);
-```
-
-## Per-handler breakdown
-
-Get a complete breakdown of all handlers in a single call:
-
-```php
-$stats = $metrics->handler_stats(minutes: 60);
-
-foreach ($stats as $entry) {
-    echo "{$entry['handler']}: ";
-    echo "{$entry['completed']} completed, ";
-    echo "{$entry['failed']} failed, ";
-    echo "avg {$entry['avg_ms']}ms, ";
-    echo "p95 {$entry['p95_ms']}ms, ";
-    echo "error rate {$entry['error_rate']}\n";
-}
-```
-
-Returns an array of associative arrays with keys:
-
-| Key | Type | Description |
-|---|---|---|
-| `handler` | `string` | Handler name |
-| `completed` | `int` | Number of completed jobs |
-| `failed` | `int` | Number of failed/buried jobs |
-| `avg_ms` | `float` | Average execution time (ms) |
-| `p95_ms` | `float` | 95th percentile execution time (ms) |
-| `error_rate` | `float` | Ratio of failures to total (0.0 to 1.0) |
-
-## CLI metrics
+## CLI
 
 ```bash
-# Show per-handler metrics for the last 60 minutes
+# Metrics for the last 60 minutes (default)
 wp queuety metrics
 
-# Custom time window
+# Metrics for the last 24 hours
 wp queuety metrics --minutes=1440
 
 # JSON output
@@ -92,28 +42,18 @@ wp queuety metrics --format=json
 Example output:
 
 ```
-$ wp queuety metrics
-
-Handler               Completed  Failed  Avg (ms)  P95 (ms)  Error Rate
-SendEmailHandler          342       2     23.50     45.00     0.0058
-ProcessImageHandler       156       1     847.20    1200.00   0.0064
-CallLLMHandler             47       5     1847.00   3200.00   0.0962
++------------------+-----------+--------+--------+--------+------------+
+| handler          | completed | failed | avg_ms | p95_ms | error_rate |
++------------------+-----------+--------+--------+--------+------------+
+| send_email       | 142       | 3      | 45     | 120    | 2.07%      |
+| process_image    | 87        | 0      | 230    | 450    | 0.00%      |
+| call_openai      | 31        | 5      | 2100   | 4500   | 13.89%     |
++------------------+-----------+--------+--------+--------+------------+
 ```
 
-## Building dashboards
+## Use cases
 
-Combine the Metrics API with WordPress hooks to build monitoring dashboards:
-
-```php
-add_action('wp_dashboard_setup', function () {
-    wp_add_dashboard_widget('queuety_metrics', 'Queuety Metrics', function () {
-        $metrics = Queuety::metrics();
-        $stats   = Queuety::stats();
-
-        echo "<p>Throughput: " . round($metrics->throughput(), 1) . " jobs/min</p>";
-        echo "<p>Avg latency: " . round($metrics->average_duration(), 1) . " ms</p>";
-        echo "<p>Pending: {$stats['pending']}</p>";
-        echo "<p>Buried: {$stats['buried']}</p>";
-    });
-});
-```
+- **Dashboard widgets.** Display throughput and error rates in the WordPress admin.
+- **Health checks.** Alert when a handler's error rate exceeds a threshold.
+- **Performance tuning.** Identify slow handlers using `p95_ms` and optimize them.
+- **Capacity planning.** Track throughput trends to size your worker pool.

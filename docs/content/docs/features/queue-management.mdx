@@ -1,121 +1,106 @@
 ---
 title: Queue Management
-description: Pause, resume, and manage named queues.
+description: Pausing, resuming, and monitoring queues.
 ---
 
 # Queue Management
 
-Queuety supports named queues for organizing jobs. You can pause and resume queues to control when jobs are processed.
+Queuety supports multiple named queues. Workers process one queue at a time, and queues can be paused and resumed independently.
 
 ## Named queues
 
-Jobs are dispatched to a queue by name. The default queue is `'default'`. You can use any string as a queue name:
+Dispatch jobs to specific queues:
 
 ```php
 use Queuety\Queuety;
 
-Queuety::dispatch('process_image', $payload)->on_queue('media');
-Queuety::dispatch('send_email', $payload)->on_queue('emails');
-Queuety::dispatch('sync_data', $payload)->on_queue('sync');
+Queuety::dispatch( 'send_email', $payload )->on_queue( 'emails' );
+Queuety::dispatch( 'process_image', $payload )->on_queue( 'media' );
+Queuety::dispatch( 'sync_data', $payload )->on_queue( 'sync' );
 ```
 
-Workers process a specific queue:
+Run workers for each queue:
 
 ```bash
 wp queuety work --queue=emails
 wp queuety work --queue=media
+wp queuety work --queue=sync
 ```
 
-A worker with no `--queue` flag processes the `default` queue.
+The default queue is `default`. If you don't specify a queue, jobs go there.
 
-## Pausing a queue
+## Pause and resume
 
-Pause a queue to stop workers from claiming new jobs from it. Jobs already in `processing` state will finish, but no new jobs will be claimed:
+Pause a queue to stop workers from claiming new jobs. Jobs already being processed will finish, but no new jobs will be picked up.
 
 ```php
-Queuety::pause('emails');
+Queuety::pause( 'emails' );
+Queuety::resume( 'emails' );
 ```
 
-```bash
-wp queuety pause emails
-```
-
-## Resuming a queue
+Check if a queue is paused:
 
 ```php
-Queuety::resume('emails');
-```
-
-```bash
-wp queuety resume emails
-```
-
-## Checking queue state
-
-```php
-if ( Queuety::is_paused('emails') ) {
+if ( Queuety::is_paused( 'emails' ) ) {
     // Queue is paused
 }
 ```
 
+Via CLI:
+
+```bash
+wp queuety pause emails
+wp queuety resume emails
+```
+
+This is useful during deployments or maintenance windows when you want to temporarily stop processing without killing the worker.
+
 ## Queue statistics
 
-Get job counts grouped by status for a specific queue or all queues:
+Get job counts grouped by status:
 
 ```php
-// All queues
-$stats = Queuety::stats();
-// ['pending' => 42, 'processing' => 3, 'completed' => 1200, 'failed' => 5, 'buried' => 1]
+$stats = Queuety::stats(); // all queues
+$stats = Queuety::stats( 'emails' ); // specific queue
 
-// Specific queue
-$stats = Queuety::stats('emails');
+// Returns: ['pending' => 12, 'processing' => 3, 'completed' => 150, 'failed' => 2, 'buried' => 1]
 ```
+
+Via CLI:
 
 ```bash
 wp queuety status
 wp queuety status --queue=emails
 ```
 
-## Purging completed jobs
+## Buried jobs
 
-Remove completed jobs older than the configured retention period:
+List all buried jobs (failed after exhausting retries):
 
 ```php
-// Use default retention (QUEUETY_RETENTION_DAYS, default 7)
-$count = Queuety::purge();
-
-// Custom threshold
-$count = Queuety::purge(30); // Purge jobs completed more than 30 days ago
+$buried = Queuety::buried(); // all queues
+$buried = Queuety::buried( 'emails' ); // specific queue
 ```
+
+Retry them:
+
+```php
+Queuety::retry( $job_id );       // retry a specific job
+Queuety::retry_buried();         // retry all buried jobs
+```
+
+## Purging completed jobs
+
+Remove old completed jobs to keep the database clean:
+
+```php
+$count = Queuety::purge();     // uses QUEUETY_RETENTION_DAYS (default: 7)
+$count = Queuety::purge( 30 ); // purge jobs older than 30 days
+```
+
+Via CLI:
 
 ```bash
 wp queuety purge
 wp queuety purge --older-than=30
-```
-
-## Use cases for multiple queues
-
-**Priority separation.** Run dedicated workers for high-priority queues to ensure they are always processed quickly:
-
-```bash
-# High-priority worker
-wp queuety work --queue=payments
-
-# Background worker
-wp queuety work --queue=reports
-```
-
-**Resource isolation.** Keep CPU-heavy jobs on a separate queue so they do not block lightweight jobs:
-
-```bash
-wp queuety work --queue=image-processing --workers=2
-wp queuety work --queue=emails --workers=1
-```
-
-**Maintenance windows.** Pause a queue during deployments or maintenance:
-
-```bash
-wp queuety pause emails
-# ... deploy ...
-wp queuety resume emails
 ```

@@ -1,89 +1,79 @@
 ---
 title: Conditional Branching
-description: Skip steps or branch workflow execution based on step output.
+description: Using named steps and _goto to branch workflow execution.
 ---
 
 # Conditional Branching
 
-Workflows support conditional logic through named steps and the `_goto` mechanism. A step can control which step runs next by including a `_goto` key in its return data.
+Workflows can skip to a named step based on the output of a previous step. This is done by returning a special `_goto` key in the step's return value.
 
 ## Named steps
 
-Give steps a name by passing a second argument to `->then()`:
+Give steps a name using the second argument to `->then()`:
 
 ```php
-Queuety::workflow('process_payment')
-    ->then(ValidateOrderHandler::class, 'validate')
-    ->then(CheckInventoryHandler::class, 'inventory')
-    ->then(ChargePaymentHandler::class, 'charge')
-    ->then(FulfillOrderHandler::class, 'fulfill')
-    ->then(SendReceiptHandler::class, 'receipt')
-    ->dispatch(['order_id' => 123]);
+use Queuety\Queuety;
+
+Queuety::workflow( 'process_order' )
+    ->then( ValidateOrderHandler::class, 'validate' )
+    ->then( ChargePaymentHandler::class, 'charge' )
+    ->then( FulfillOrderHandler::class, 'fulfill' )
+    ->then( SendConfirmationHandler::class, 'confirm' )
+    ->then( HandleFailureHandler::class, 'failure' )
+    ->dispatch( [ 'order_id' => 123 ] );
 ```
 
-Without branching, these steps run in order: validate, inventory, charge, fulfill, receipt.
+Without an explicit name, steps are named by their index (`'0'`, `'1'`, `'2'`, etc.).
 
-## Skipping steps with _goto
+## The `_goto` key
 
-A step can skip ahead by returning `_goto` with the name of the target step:
+A step can return `_goto` to jump to a named step, skipping everything in between:
 
 ```php
-class CheckInventoryHandler implements Step {
+use Queuety\Step;
+
+class ValidateOrderHandler implements Step {
     public function handle( array $state ): array {
-        $in_stock = $this->checkStock( $state['order_id'] );
+        $order = wc_get_order( $state['order_id'] );
 
-        if ( ! $in_stock ) {
+        if ( ! $order || $order->get_status() === 'cancelled' ) {
             return [
-                'inventory_status' => 'out_of_stock',
-                '_goto' => 'receipt', // Skip charge and fulfill
-            ];
-        }
-
-        return ['inventory_status' => 'in_stock'];
-    }
-
-    public function config(): array {
-        return [];
-    }
-}
-```
-
-When `_goto` is present in the step output:
-
-1. The `_goto` value is removed from the state (it is not persisted).
-2. The workflow skips ahead to the named step.
-3. Steps between the current step and the target are not executed.
-4. The target step receives the accumulated state from all steps that did run.
-
-## Example: conditional approval workflow
-
-```php
-Queuety::workflow('content_review')
-    ->then(AnalyzeContentHandler::class, 'analyze')
-    ->then(ManualReviewHandler::class, 'review')
-    ->then(PublishContentHandler::class, 'publish')
-    ->then(NotifyAuthorHandler::class, 'notify')
-    ->dispatch(['post_id' => 456]);
-```
-
-```php
-class AnalyzeContentHandler implements Step {
-    public function handle( array $state ): array {
-        $score = $this->runContentAnalysis( $state['post_id'] );
-
-        if ( $score > 0.9 ) {
-            // High confidence: skip manual review, go straight to publish
-            return [
-                'analysis_score' => $score,
-                'auto_approved'  => true,
-                '_goto'          => 'publish',
+                'error'  => 'Order is invalid or cancelled',
+                '_goto'  => 'failure',
             ];
         }
 
         return [
-            'analysis_score' => $score,
-            'auto_approved'  => false,
+            'order_total' => $order->get_total(),
+            'customer_id' => $order->get_customer_id(),
         ];
+    }
+
+    public function config(): array {
+        return [ 'needs_wordpress' => true ];
+    }
+}
+```
+
+When `ValidateOrderHandler` returns `_goto => 'failure'`, the workflow skips `charge`, `fulfill`, and `confirm`, jumping directly to the `failure` step. The `_goto` key is consumed by the workflow engine and not persisted in the state.
+
+## Branching patterns
+
+### Skip on condition
+
+```php
+class CheckInventoryHandler implements Step {
+    public function handle( array $state ): array {
+        $in_stock = check_inventory( $state['sku'] );
+
+        if ( ! $in_stock ) {
+            return [
+                'reason' => 'Out of stock',
+                '_goto'  => 'notify_backorder',
+            ];
+        }
+
+        return [ 'inventory_reserved' => true ];
     }
 
     public function config(): array {
@@ -92,12 +82,41 @@ class AnalyzeContentHandler implements Step {
 }
 ```
 
-If the content scores above 0.9, the workflow skips `ManualReviewHandler` and goes directly to `PublishContentHandler`. The `publish` step sees `analysis_score` and `auto_approved` in its state but no output from `review`.
+### Early completion
 
-## Branching to earlier steps
+Jump to the final step to skip unnecessary processing:
 
-The `_goto` mechanism supports forward jumps only. It cannot loop back to earlier steps. This is by design: workflows are acyclic to guarantee termination.
+```php
+class CheckCacheHandler implements Step {
+    public function handle( array $state ): array {
+        $cached = get_transient( "report_{$state['user_id']}" );
 
-## Combining with parallel steps
+        if ( $cached ) {
+            return [
+                'report_url' => $cached,
+                '_goto'      => 'done',
+            ];
+        }
 
-Named steps work with parallel groups too. A parallel group itself can have a name, and steps can skip over a parallel group by targeting the step after it.
+        return [ 'cache_miss' => true ];
+    }
+
+    public function config(): array {
+        return [ 'needs_wordpress' => true ];
+    }
+}
+```
+
+## Complete example
+
+```php
+Queuety::workflow( 'content_pipeline' )
+    ->then( CheckCacheHandler::class, 'check_cache' )
+    ->then( FetchDataHandler::class, 'fetch' )
+    ->then( CallLLMHandler::class, 'generate' )
+    ->then( SaveResultHandler::class, 'save' )
+    ->then( ReturnCachedHandler::class, 'done' )
+    ->dispatch( [ 'user_id' => 42 ] );
+```
+
+If the cache check finds a hit, the workflow jumps from `check_cache` directly to `done`, skipping `fetch`, `generate`, and `save`.

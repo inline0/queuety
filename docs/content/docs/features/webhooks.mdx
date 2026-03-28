@@ -1,105 +1,89 @@
 ---
 title: Webhooks
-description: Receive HTTP notifications when jobs or workflows complete or fail.
+description: HTTP notifications on job and workflow events.
 ---
 
 # Webhooks
 
-Queuety can send HTTP POST notifications to registered URLs when specific events occur. Webhooks are stored in the `queuety_webhooks` table and are fire-and-forget: the worker does not wait for a response.
+Queuety can send HTTP POST notifications to external URLs when specific events occur. Use webhooks to integrate with monitoring systems, Slack, or custom dashboards.
 
 ## Supported events
 
-| Event | Description |
+| Event | Fired when |
 |---|---|
-| `job.completed` | A job finished successfully |
-| `job.failed` | A job failed (before retry) |
-| `job.buried` | A job exceeded max attempts |
-| `workflow.completed` | All workflow steps finished |
-| `workflow.failed` | A workflow step was buried |
+| `job.completed` | A job finishes successfully |
+| `job.failed` | A job throws an exception |
+| `job.buried` | A job exhausts all retry attempts |
+| `workflow.completed` | A workflow finishes all steps |
+| `workflow.failed` | A workflow step fails permanently |
 
 ## Registering webhooks
 
-### Via CLI
-
-```bash
-# Register a webhook for job failures
-wp queuety webhook add job.failed https://hooks.slack.com/services/T.../B.../xxx
-
-# Register a webhook for buried jobs
-wp queuety webhook add job.buried https://your-app.com/api/queuety-alerts
-
-# Register a webhook for workflow completion
-wp queuety webhook add workflow.completed https://your-app.com/api/workflow-done
-```
-
-### Via PHP
+Via PHP:
 
 ```php
-$id = Queuety::webhook_notifier()->register(
-    'job.failed',
-    'https://hooks.slack.com/services/T.../B.../xxx'
-);
+$id = Queuety::webhook_notifier()->register( 'job.buried', 'https://hooks.slack.com/services/...' );
+```
+
+Via CLI:
+
+```bash
+wp queuety webhook add job.buried https://hooks.slack.com/services/...
+wp queuety webhook add workflow.failed https://monitoring.example.com/queuety
 ```
 
 ## Listing webhooks
+
+```php
+$webhooks = Queuety::webhook_notifier()->list();
+```
 
 ```bash
 wp queuety webhook list
 ```
 
-```
-ID  Event              URL                                           Created At
-1   job.failed         https://hooks.slack.com/services/T.../B...   2025-03-28 14:00:00
-2   job.buried         https://your-app.com/api/queuety-alerts      2025-03-28 14:05:00
-3   workflow.completed https://your-app.com/api/workflow-done        2025-03-28 14:10:00
-```
-
 ## Removing webhooks
 
-```bash
-wp queuety webhook remove 1
-```
-
 ```php
-Queuety::webhook_notifier()->remove(1);
+Queuety::webhook_notifier()->remove( $webhook_id );
 ```
 
-## Webhook payload
+```bash
+wp queuety webhook remove 3
+```
 
-Each webhook POST request sends a JSON body:
+## Payload format
+
+When an event fires, Queuety sends an HTTP POST request with a JSON body:
 
 ```json
 {
-  "event": "job.failed",
-  "data": {
-    "job_id": 123,
-    "handler": "SendEmailHandler",
+    "event": "job.buried",
+    "job_id": 42,
+    "handler": "send_email",
     "queue": "emails",
-    "attempts": 3,
-    "error_message": "Connection timeout"
-  },
-  "timestamp": "2025-03-28T14:23:00Z"
+    "error_message": "Connection timed out",
+    "timestamp": "2025-03-15T14:30:00+00:00"
 }
 ```
 
-The `data` object varies by event type. For workflow events, it includes `workflow_id`, `name`, `current_step`, and `total_steps`.
+For workflow events:
 
-## Delivery behavior
-
-Webhooks use a 1-second HTTP timeout. If the target URL does not respond in time, the notification is silently dropped. Workers are never blocked by webhook delivery.
-
-Multiple webhooks can be registered for the same event. All matching webhooks are called for each event occurrence.
+```json
+{
+    "event": "workflow.failed",
+    "workflow_id": 7,
+    "workflow_name": "generate_report",
+    "current_step": 2,
+    "total_steps": 4,
+    "error_message": "API rate limit exceeded",
+    "timestamp": "2025-03-15T14:30:00+00:00"
+}
+```
 
 ## Use cases
 
-### Slack alerts on failure
-
-Register a Slack incoming webhook URL for `job.buried` events to get notified when jobs permanently fail.
-
-### External monitoring
-
-POST to your monitoring service (Datadog, PagerDuty, etc.) on `workflow.failed` events to trigger incident alerts.
-
-### Workflow orchestration
-
-Use `workflow.completed` webhooks to trigger downstream systems when a workflow finishes.
+- **Slack alerts.** Get notified when jobs are buried or workflows fail.
+- **PagerDuty integration.** Trigger incidents for critical job failures.
+- **Custom dashboards.** Stream events to your own monitoring infrastructure.
+- **Audit trail.** Forward events to an external logging service.

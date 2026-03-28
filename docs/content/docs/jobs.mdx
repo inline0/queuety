@@ -1,230 +1,249 @@
 ---
 title: Jobs
-description: Dispatching, configuring, and managing jobs in Queuety.
+description: Dispatching, handling, and managing background jobs.
 ---
 
 # Jobs
 
-A job is a unit of work dispatched to a queue and processed by a worker. Simple jobs have no workflow context. They are claimed atomically, executed, and marked as completed or failed.
+Jobs are the core unit of work in Queuety. Dispatch a job with a handler name and payload, and a worker picks it up and executes it in the background.
 
 ## Dispatching jobs
 
-Use `Queuety::dispatch()` to create a job. It returns a `PendingJob` builder for fluent configuration:
-
 ```php
 use Queuety\Queuety;
-use Queuety\Enums\Priority;
 
-Queuety::dispatch('process_image', ['image_id' => 42]);
+Queuety::dispatch( 'send_email', [ 'to' => 'user@example.com' ] );
 ```
 
-The job is auto-dispatched when the `PendingJob` goes out of scope, or you can call `->id()` to force immediate dispatch and get the job ID:
+`dispatch()` returns a `PendingJob` builder. You can chain options before it auto-dispatches:
 
 ```php
-$job_id = Queuety::dispatch('process_image', ['image_id' => 42])->id();
+use Queuety\Enums\Priority;
+
+Queuety::dispatch( 'send_email', [ 'to' => 'user@example.com' ] )
+    ->on_queue( 'emails' )
+    ->with_priority( Priority::High )
+    ->delay( 300 )
+    ->max_attempts( 5 );
 ```
 
-## Job handlers
+To get the job ID immediately, call `->id()`:
 
-A handler is a class that implements `Queuety\Handler`. It defines what the job does and how it should be configured:
+```php
+$job_id = Queuety::dispatch( 'send_email', $payload )->id();
+```
+
+## Writing handlers
+
+A handler is any class that implements the `Queuety\Handler` interface:
 
 ```php
 use Queuety\Handler;
 
-class ProcessImageHandler implements Handler {
+class SendEmailHandler implements Handler {
     public function handle( array $payload ): void {
-        $image_id = $payload['image_id'];
-        // Resize, optimize, upload...
+        wp_mail( $payload['to'], $payload['subject'], $payload['body'] );
     }
 
     public function config(): array {
         return [
-            'queue'           => 'media',
-            'max_attempts'    => 3,
-            'needs_wordpress' => false,
+            'queue'           => 'emails',
+            'max_attempts'    => 5,
+            'needs_wordpress' => true,
             'backoff'         => 'exponential',
-            'rate_limit'      => [20, 60], // 20 per 60 seconds
         ];
     }
 }
 ```
 
-Register handlers by name:
+The `handle()` method receives the job payload and performs the work. The `config()` method returns optional defaults:
+
+| Key | Type | Description |
+|---|---|---|
+| `queue` | `string` | Default queue name |
+| `max_attempts` | `int` | Maximum retry attempts |
+| `needs_wordpress` | `bool` | Whether to boot WordPress before executing |
+| `backoff` | `string` | Retry backoff strategy: `exponential`, `linear`, or `fixed` |
+| `rate_limit` | `array` | Rate limit as `[max_executions, window_seconds]` |
+
+Register the handler:
 
 ```php
-Queuety::register('process_image', ProcessImageHandler::class);
+Queuety::register( 'send_email', SendEmailHandler::class );
 ```
 
-### Handler config options
+Or use [PHP attributes](/docs/features/attributes) for auto-registration.
 
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `queue` | `string` | `'default'` | Default queue for this handler |
-| `max_attempts` | `int` | `3` | Maximum retry attempts |
-| `needs_wordpress` | `bool` | `false` | Whether to boot WordPress before execution |
-| `backoff` | `string` | `'exponential'` | Retry backoff: `fixed`, `linear`, `exponential` |
-| `rate_limit` | `array` | `null` | `[max_executions, window_seconds]` |
+## Priority
 
-## Priority levels
-
-Queuety uses a backed PHP enum with four priority levels. Higher priority jobs are processed first within the same queue:
+Jobs have four priority levels. Higher priority jobs are claimed first by workers.
 
 ```php
 use Queuety\Enums\Priority;
 
-Queuety::dispatch('urgent_task', $payload)
-    ->with_priority(Priority::Urgent);
+Queuety::dispatch( 'handler', $payload )->with_priority( Priority::Urgent );
 ```
 
-| Priority | Value | Description |
+| Level | Value | Description |
 |---|---|---|
-| `Priority::Low` | `0` | Default. Background tasks. |
-| `Priority::Normal` | `1` | Standard processing. |
-| `Priority::High` | `2` | Time-sensitive work. |
-| `Priority::Urgent` | `3` | Processed before everything else. |
+| `Priority::Low` | `0` | Default. Background work that can wait. |
+| `Priority::Normal` | `1` | Standard priority. |
+| `Priority::High` | `2` | Processed before Low and Normal. |
+| `Priority::Urgent` | `3` | Processed first. Use sparingly. |
 
-Workers claim jobs ordered by `priority DESC, id ASC`, so urgent jobs always run first.
+## Delay
 
-## Delayed jobs
-
-Schedule a job for future execution by setting a delay in seconds:
+Delay a job so it becomes available only after the specified number of seconds:
 
 ```php
-Queuety::dispatch('send_reminder', ['user_id' => 42])
-    ->delay(3600); // Available in 1 hour
+Queuety::dispatch( 'send_reminder', $payload )->delay( 3600 ); // 1 hour
 ```
 
-This sets the `available_at` column to a future timestamp. Workers skip jobs where `available_at > NOW()`.
+The job is inserted immediately but workers will not claim it until the delay has elapsed.
 
 ## Unique jobs
 
-Prevent duplicate dispatch for the same handler and payload. If a matching job already exists in `pending` or `processing` state, the existing job ID is returned instead of creating a new one:
+Prevent duplicate dispatches for the same handler and payload. If a pending or processing job already exists with the same handler and payload, the existing job ID is returned instead of creating a new one.
 
 ```php
-Queuety::dispatch('sync_inventory', ['sku' => 'ABC-123'])
-    ->unique();
+Queuety::dispatch( 'sync_inventory', [ 'sku' => 'ABC-123' ] )->unique();
 ```
 
 ## Job dependencies
 
-Make a job wait for another job to complete before it becomes available:
+A job can depend on another job. It will not be claimed by a worker until the dependency has completed.
 
 ```php
-$first_id = Queuety::dispatch('step_a', $payload)->id();
+$first_id = Queuety::dispatch( 'import_data', $payload )->id();
 
-Queuety::dispatch('step_b', $payload)
-    ->after($first_id); // Won't be claimed until step_a completes
+Queuety::dispatch( 'send_notification', [ 'import_id' => $first_id ] )
+    ->after( $first_id );
 ```
 
 ## Batch dispatch
 
-Dispatch multiple jobs in a single multi-row INSERT for better performance:
+Dispatch multiple jobs in a single multi-row INSERT for maximum throughput:
 
 ```php
-$job_ids = Queuety::batch([
-    ['handler' => 'process_image', 'payload' => ['id' => 1]],
-    ['handler' => 'process_image', 'payload' => ['id' => 2]],
-    ['handler' => 'process_image', 'payload' => ['id' => 3]],
-]);
+$job_ids = Queuety::batch( [
+    [ 'handler' => 'send_email', 'payload' => [ 'to' => 'a@example.com' ] ],
+    [ 'handler' => 'send_email', 'payload' => [ 'to' => 'b@example.com' ] ],
+    [ 'handler' => 'send_email', 'payload' => [ 'to' => 'c@example.com' ] ],
+] );
 ```
 
-Each item in the array supports optional keys: `queue`, `priority`, `delay`, `max_attempts`.
+Each item can include optional keys: `queue`, `priority`, `delay`, `max_attempts`.
 
 ## Retry and backoff
 
-When a job throws an exception, it is marked as `failed` and scheduled for retry with a backoff delay. The backoff strategy is configured globally via `QUEUETY_RETRY_BACKOFF` or per-handler in the `config()` method.
+When a job throws an exception, Queuety retries it up to `max_attempts` times. The delay between retries is determined by the backoff strategy:
 
-| Strategy | Delay formula | Example (attempts 1, 2, 3) |
+| Strategy | Delay formula | Example (attempt 2, 3, 4) |
 |---|---|---|
-| `fixed` | 60 seconds | 60s, 60s, 60s |
-| `linear` | `attempt * 60` seconds | 60s, 120s, 180s |
-| `exponential` | `2^attempt * 30` seconds | 60s, 120s, 240s |
+| `exponential` | `2^attempt` seconds | 4s, 8s, 16s |
+| `linear` | `attempt * 5` seconds | 10s, 15s, 20s |
+| `fixed` | `5` seconds | 5s, 5s, 5s |
 
-You can also retry jobs manually:
+Set the global default in `wp-config.php`:
 
 ```php
-// Retry a specific job
-Queuety::retry(123);
-
-// Retry all buried jobs
-Queuety::retry_buried();
+define( 'QUEUETY_RETRY_BACKOFF', 'linear' );
 ```
 
-## Buried (dead letter) state
-
-When a job exceeds its `max_attempts`, it moves to the `buried` state. Buried jobs are not retried automatically. They remain in the database for inspection.
+Or per handler in `config()`:
 
 ```php
-// List buried jobs
-$buried = Queuety::buried();
-$buried = Queuety::buried('emails'); // Filter by queue
+public function config(): array {
+    return [ 'backoff' => 'exponential', 'max_attempts' => 5 ];
+}
+```
+
+Or per dispatch:
+
+```php
+Queuety::dispatch( 'handler', $payload )->max_attempts( 10 );
+```
+
+## Buried jobs
+
+After exhausting all retry attempts, a job is marked as **buried**. Buried jobs stay in the database for inspection but are not processed. You can retry them manually:
+
+```php
+// Retry a specific buried job
+Queuety::retry( $job_id );
 
 // Retry all buried jobs
 $count = Queuety::retry_buried();
 ```
 
-You can also bury a job manually via CLI:
+Or via CLI:
 
 ```bash
-wp queuety bury 123
+wp queuety retry 42
+wp queuety retry-buried
 ```
 
-## Job timeout
+## Timeout
 
-Jobs that stay in `processing` state longer than `QUEUETY_STALE_TIMEOUT` (default: 600 seconds) are considered stale. The worker periodically checks for stale jobs and either retries them (if attempts remain) or buries them.
+Jobs that exceed the max execution time are killed and retried. Configure the timeout globally:
 
-You can also trigger stale recovery manually:
+```php
+define( 'QUEUETY_MAX_EXECUTION_TIME', 300 ); // 5 minutes
+```
+
+Jobs that are stuck in `processing` status longer than `QUEUETY_STALE_TIMEOUT` seconds are automatically recovered:
+
+```php
+define( 'QUEUETY_STALE_TIMEOUT', 600 ); // 10 minutes
+```
+
+Recover stale jobs manually:
 
 ```bash
 wp queuety recover
 ```
 
+## Queues
+
+Jobs are dispatched to named queues. Workers process one queue at a time:
+
+```php
+Queuety::dispatch( 'handler', $payload )->on_queue( 'emails' );
+```
+
+```bash
+wp queuety work --queue=emails
+```
+
+The default queue is `default`. You can run separate worker processes for each queue to isolate workloads.
+
+## Rate limiting
+
+Limit how often a handler can execute within a time window:
+
+```php
+Queuety::dispatch( 'call_api', $payload )
+    ->rate_limit( 10, 60 ); // max 10 executions per 60 seconds
+```
+
+See [Rate Limiting](/docs/features/rate-limiting) for details.
+
 ## Job lifecycle
 
 ```
-pending -> processing -> completed
-                     \-> failed (retry) -> pending
-                     \-> buried (max attempts reached)
+dispatch() -> pending -> processing -> completed
+                  |           |
+                  |           +-> failed -> retry -> pending
+                  |                           |
+                  |                           +-> buried (max attempts exceeded)
+                  |
+                  +-> delayed (available_at in the future)
 ```
 
 | Status | Description |
 |---|---|
-| `pending` | Waiting to be picked up by a worker |
-| `processing` | Claimed by a worker, `reserved_at` is set |
-| `completed` | Finished successfully, auto-purged after retention period |
-| `failed` | Threw an exception, will be retried after backoff delay |
-| `buried` | Exceeded max attempts, held for manual inspection |
-
-## Dispatch from WordPress hooks
-
-```php
-add_action('woocommerce_order_status_completed', function ($order_id) {
-    Queuety::dispatch('process_order', ['order_id' => $order_id])
-        ->on_queue('orders')
-        ->with_priority(Priority::High);
-});
-```
-
-## Full example
-
-```php
-use Queuety\Queuety;
-use Queuety\Enums\Priority;
-
-// Register handler
-Queuety::register('send_email', SendEmailHandler::class);
-
-// Dispatch with all options
-$job_id = Queuety::dispatch('send_email', [
-    'to'      => 'user@example.com',
-    'subject' => 'Order Confirmation',
-    'body'    => 'Your order has shipped.',
-])
-    ->on_queue('emails')
-    ->with_priority(Priority::High)
-    ->delay(60)
-    ->max_attempts(5)
-    ->rate_limit(10, 60)
-    ->unique()
-    ->id();
-```
+| `pending` | Waiting to be claimed by a worker |
+| `processing` | Currently being executed |
+| `completed` | Successfully finished |
+| `failed` | Threw an exception, will be retried |
+| `buried` | All retry attempts exhausted |

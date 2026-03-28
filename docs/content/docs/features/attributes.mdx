@@ -1,19 +1,19 @@
 ---
 title: PHP Attributes
-description: Auto-register handlers using PHP 8.2 attributes and directory scanning.
+description: Auto-register handlers using PHP 8 attributes.
 ---
 
 # PHP Attributes
 
-Queuety supports PHP 8.2 attributes for handler registration metadata. The `#[QueuetyHandler]` attribute marks a class as a handler and provides its registration name, queue, and other defaults. Combined with auto-discovery, you can skip manual `Queuety::register()` calls entirely.
+Queuety supports PHP 8 attributes for zero-config handler registration. Annotate your handler classes with `#[QueuetyHandler]` and use auto-discovery to register them all at once.
 
-## The QueuetyHandler attribute
+## The `#[QueuetyHandler]` attribute
 
 ```php
-use Queuety\Attributes\QueuetyHandler;
 use Queuety\Handler;
+use Queuety\Attributes\QueuetyHandler;
 
-#[QueuetyHandler(name: 'send_email', queue: 'emails', needs_wordpress: true)]
+#[QueuetyHandler( name: 'send_email', queue: 'emails', needs_wordpress: true )]
 class SendEmailHandler implements Handler {
     public function handle( array $payload ): void {
         wp_mail( $payload['to'], $payload['subject'], $payload['body'] );
@@ -25,7 +25,7 @@ class SendEmailHandler implements Handler {
 }
 ```
 
-### Attribute parameters
+The attribute parameters:
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -34,89 +34,67 @@ class SendEmailHandler implements Handler {
 | `max_attempts` | `int` | `3` | Maximum retry attempts |
 | `needs_wordpress` | `bool` | `false` | Whether the handler requires WordPress |
 
-When the attribute is present, its values serve as defaults. Values set in the handler's `config()` method or at dispatch time take precedence.
-
 ## Auto-discovery
 
-Scan a directory to find and register all classes with the `#[QueuetyHandler]` attribute:
+Scan a directory for annotated handler classes and register them all:
 
 ```php
 use Queuety\Queuety;
 
 $count = Queuety::discover_handlers(
-    directory: __DIR__ . '/handlers',
-    namespace: 'MyPlugin\\Handlers',
+    __DIR__ . '/handlers',  // directory to scan
+    'MyPlugin\\Handlers'    // PSR-4 namespace prefix
 );
-// Returns the number of handlers registered
+// $count = number of handlers registered
 ```
 
-This scans all PHP files in the directory, checks for classes implementing `Handler` or `Step` that have the `#[QueuetyHandler]` attribute, and registers them automatically.
+This scans every `.php` file in the directory, loads each class, checks for the `#[QueuetyHandler]` attribute, and registers matching classes in the handler registry.
 
-## CLI discovery
-
-List discovered handlers without registering them:
+## Auto-discovery via CLI
 
 ```bash
-wp queuety discover /path/to/handlers "MyPlugin\\Handlers"
+# Preview discovered handlers
+wp queuety discover /path/to/handlers MyPlugin\\Handlers
+
+# Discover and register
+wp queuety discover /path/to/handlers MyPlugin\\Handlers --register
 ```
 
-Output:
+Example output:
 
 ```
-Class                              Type     Name
-MyPlugin\Handlers\SendEmail        handler  send_email
-MyPlugin\Handlers\ProcessImage     handler  process_image
-MyPlugin\Handlers\FetchData        step     fetch_data
++-----------------------------------+----------+------------+
+| class                             | type     | name       |
++-----------------------------------+----------+------------+
+| MyPlugin\Handlers\SendEmailHandler | handler  | send_email |
+| MyPlugin\Handlers\SyncDataHandler  | handler  | sync_data  |
+| MyPlugin\Handlers\BuildPromptStep  | step     | (none)     |
++-----------------------------------+----------+------------+
 ```
 
-Register discovered handlers:
+## Best practice
 
-```bash
-wp queuety discover /path/to/handlers "MyPlugin\\Handlers" --register
-```
-
-## Practical pattern
-
-Set up auto-discovery in your plugin's entry point:
+Register handlers in your plugin's initialization:
 
 ```php
-add_action('plugins_loaded', function () {
+add_action( 'plugins_loaded', function () {
     Queuety::discover_handlers(
-        directory: __DIR__ . '/src/Handlers',
-        namespace: 'MyPlugin\\Handlers',
+        __DIR__ . '/src/Handlers',
+        'MyPlugin\\Handlers'
     );
-});
+} );
 ```
 
-Then create handler files with the attribute. They are automatically registered on every request:
-
-```php
-// src/Handlers/ProcessImageHandler.php
-namespace MyPlugin\Handlers;
-
-use Queuety\Attributes\QueuetyHandler;
-use Queuety\Handler;
-
-#[QueuetyHandler(name: 'process_image', queue: 'media')]
-class ProcessImageHandler implements Handler {
-    public function handle( array $payload ): void {
-        // ...
-    }
-
-    public function config(): array {
-        return [];
-    }
-}
-```
+This replaces manual `Queuety::register()` calls for every handler. New handlers are automatically picked up when you add a class with the attribute to the directory.
 
 ## Combining with manual registration
 
-Auto-discovery and manual registration can coexist. Manually registered handlers take precedence if there is a name conflict:
+Auto-discovered handlers and manually registered handlers coexist in the same registry. You can use both approaches in the same project:
 
 ```php
-// Auto-discover most handlers
-Queuety::discover_handlers(__DIR__ . '/src/Handlers', 'MyPlugin\\Handlers');
+// Auto-discover the bulk of handlers
+Queuety::discover_handlers( __DIR__ . '/handlers', 'MyPlugin\\Handlers' );
 
-// Override a specific handler with a custom implementation
-Queuety::register('send_email', CustomSendEmailHandler::class);
+// Manually register a handler without the attribute
+Queuety::register( 'legacy_handler', LegacyHandler::class );
 ```

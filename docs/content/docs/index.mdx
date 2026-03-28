@@ -5,32 +5,30 @@ description: Welcome to the Queuety documentation.
 
 # Introduction
 
-Queuety is a job queue and durable workflow engine for WordPress. Workers process jobs from a minimal PHP bootstrap that connects directly to the database via PDO. WordPress is not booted unless a specific handler needs it.
+Queuety is a WordPress plugin that provides a fast job queue and durable workflow engine. Workers process jobs from a minimal PHP bootstrap without booting WordPress, connecting to MySQL directly via PDO for maximum throughput.
 
-## The problem
+## Why Queuety?
 
-WordPress has no real background job system. `wp_cron` only fires when someone visits the site. Action Scheduler (used by WooCommerce) fills the gap but boots the entire WordPress stack to process every batch. That means loading hundreds of PHP files, initializing plugins, parsing themes, and connecting through `$wpdb` for a job that might just send an email or update a row.
+WordPress has no real background job system. `wp_cron` only fires on page visits. Action Scheduler boots the entire WordPress stack for every batch. An LLM API call that takes 60 seconds gets killed by PHP's 30-second timeout. There's no way to run multi-step processes that survive crashes and resume where they left off.
 
-There is a deeper problem: WordPress has no way to run workflows. Multi-step processes that survive PHP timeouts, retries, and crashes. An LLM API call that takes 60 seconds gets killed by PHP's 30-second timeout. There is no built-in way to break long-running work into durable steps that persist state and resume where they left off.
+Queuety solves this with two primitives:
 
-## What Queuety provides
+1. **Jobs** for fire-and-forget background work
+2. **Workflows** for durable multi-step processes with persistent state
 
-Queuety is two things in one:
+## Quick example
 
-**A fast job queue** that processes jobs from a minimal PHP bootstrap. It connects to the database directly, claims jobs atomically with `FOR UPDATE SKIP LOCKED`, executes them, and moves on. A typical WordPress page load adds 50-200ms of overhead. Queuety adds 1-5ms.
-
-**A durable workflow engine** that breaks long-running processes into steps. Each step persists its output to a shared state bag. If PHP dies, the worker resumes at the failed step with all prior state intact. The step boundary is a single database transaction: state advancement, job completion, next step enqueue, and log write all happen atomically.
+Dispatch a job:
 
 ```php
 use Queuety\Queuety;
-use Queuety\Enums\Priority;
 
-// Simple job
-Queuety::dispatch('send_email', ['to' => 'user@example.com'])
-    ->on_queue('emails')
-    ->with_priority(Priority::High);
+Queuety::dispatch('send_email', ['to' => 'user@example.com']);
+```
 
-// Durable workflow
+Run a durable workflow:
+
+```php
 Queuety::workflow('generate_report')
     ->then(FetchDataHandler::class)
     ->then(CallLLMHandler::class)
@@ -38,19 +36,44 @@ Queuety::workflow('generate_report')
     ->dispatch(['user_id' => 42]);
 ```
 
+Start a worker:
+
+```bash
+wp queuety work
+```
+
 ## Key differentiators
 
-**No WordPress boot.** Workers parse `wp-config.php` via regex for database credentials and connect directly via PDO. Handlers that need WordPress context opt in with `'needs_wordpress' => true` in their config.
+- **Fast execution.** Workers skip the WordPress boot, connecting to MySQL directly via PDO. ~5ms overhead per batch vs ~200ms when loading WordPress.
+- **Durable workflows.** Multi-step processes with persistent state that survive PHP timeouts, crashes, and retries. Each step boundary is an atomic MySQL transaction.
+- **Parallel steps.** Run steps concurrently and wait for all to complete before advancing.
+- **Conditional branching.** Skip to named steps based on prior state using `_goto`.
+- **Sub-workflows.** Spawn child workflows that feed results back to the parent.
+- **Priority queues.** Four levels (Low, Normal, High, Urgent) via type-safe PHP enums.
+- **Rate limiting.** Per-handler execution limits with sliding window.
+- **Recurring jobs.** Interval-based and cron-based scheduling built in.
+- **Worker concurrency.** `--workers=N` forks multiple processes with automatic restart on crash.
+- **Full observability.** Database logging, per-handler metrics, and event webhooks.
+- **PHP attributes.** `#[QueuetyHandler('name')]` for zero-config handler registration.
 
-**Durable workflows.** Each step is a normal job. When a step completes, its return data is merged into the workflow state, and the next step is enqueued. All of this happens in a single database transaction. There is no window where state can be lost.
+## How it works
 
-**PHP 8.2 enums for domain modeling.** Priority levels, job statuses, workflow statuses, and backoff strategies are all backed enums. No magic strings, no integer constants. Type-safe, IDE-autocompleted, and exhaustive with `match()`.
+Workers boot from a minimal bootstrap that parses `wp-config.php` via regex (not `require`) to extract database credentials, then connects directly via PDO. No plugins, themes, or hooks are loaded. For handlers that need WordPress (like `wp_mail`), Queuety can optionally boot it per-handler.
 
-**Permanent database logging.** All state changes are logged to the `queuety_logs` table. Queryable by job, workflow, handler, event type, and time range. Log writes are part of the same transaction as state changes.
+Workflows break long-running work into steps. Each step persists its output to a shared state bag in the database. If PHP dies mid-step, the worker retries that step with all prior state intact. The step boundary is a single MySQL transaction: state update, job completion, and next step enqueue all happen atomically.
+
+```
+Workflow: generate_report (3 steps)
+
+Step 0: fetch_data     -> state: {user_data: {...}}
+Step 1: call_llm       -> PHP dies -> retry -> state: {user_data: {...}, llm_response: "..."}
+Step 2: format_output  -> state: {user_data: {...}, llm_response: "...", report_url: "/reports/42.pdf"}
+
+Workflow: completed
+```
 
 ## Requirements
 
-- PHP 8.2+
-- WordPress 6.4+
-- MySQL 5.7+ or MariaDB 10.3+ (for `SKIP LOCKED`)
-- WP-CLI (for workers)
+- PHP 8.2 or later
+- WordPress 6.4 or later
+- MySQL 5.7+ or MariaDB 10.3+

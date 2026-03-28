@@ -1,32 +1,29 @@
 ---
 title: Debug Mode
-description: Enable verbose worker logging for development and troubleshooting.
+description: Verbose worker logging for development and troubleshooting.
 ---
 
 # Debug Mode
 
-Queuety includes a debug mode that enables verbose logging in the worker process. This is useful during development and when troubleshooting job failures.
+Enable debug mode for verbose worker output during development. When enabled, the worker logs additional information about every job claim, execution, and state transition.
 
 ## Enabling debug mode
 
-Define the `QUEUETY_DEBUG` constant in `wp-config.php`:
+Define the constant in `wp-config.php`:
 
 ```php
-define('QUEUETY_DEBUG', true);
+define( 'QUEUETY_DEBUG', true );
 ```
 
-## What debug mode does
+## What it does
 
-When enabled, the worker outputs additional information to STDOUT on each job processing cycle:
+With debug mode enabled:
 
-- Job ID and handler name when a job is claimed
-- Execution time for each job
-- State merges for workflow steps
-- Stale job recovery events
-- Scheduler tick results
-- Rate limit checks and skip events
+- The worker logs every job claim, execution start, and completion to the database with `LogEvent::Debug` entries
+- Additional context is written to the log table, including handler resolution, state transitions, and timing details
+- Worker loop activity (polling, sleeping, schedule ticks) is logged
 
-## Checking debug mode programmatically
+## Checking debug status
 
 ```php
 use Queuety\Config;
@@ -36,31 +33,10 @@ if ( Config::debug() ) {
 }
 ```
 
-## When to use debug mode
+## When to use it
 
-**During development.** Enable debug mode to see exactly what the worker is doing as you build and test handlers.
+- **During development.** Trace the full lifecycle of jobs and workflows to verify behavior.
+- **Troubleshooting failures.** Get detailed context around why a job failed or a workflow stalled.
+- **Performance investigation.** See timing details for each step in a pipeline.
 
-**When diagnosing failures.** If jobs are failing unexpectedly, debug mode shows the execution flow leading up to the failure.
-
-**When testing rate limits.** Debug mode logs when a job is skipped due to rate limiting, making it easier to verify your rate limit configuration.
-
-## Production considerations
-
-Debug mode adds overhead to every worker cycle. Disable it in production by removing or setting the constant to `false`:
-
-```php
-define('QUEUETY_DEBUG', false);
-```
-
-For production debugging, use the log query commands instead:
-
-```bash
-# Check recent failures
-wp queuety log --event=failed --limit=20
-
-# Check a specific job's history
-wp queuety log --job=123
-
-# Inspect a job's full details including payload
-wp queuety inspect 123
-```
+Disable debug mode in production to avoid filling the log table with high-volume debug entries. If you have `QUEUETY_LOG_RETENTION_DAYS` set, debug logs are purged automatically with other log entries.

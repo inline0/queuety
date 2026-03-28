@@ -1,159 +1,109 @@
 ---
 title: Logging
-description: Database logging for job and workflow events.
+description: Database logging of job and workflow events.
 ---
 
 # Logging
 
-All job and workflow state changes are logged to the `queuety_logs` database table. No log files. Every entry is queryable by job, workflow, handler, event type, and time range.
+Queuety logs every job and workflow event to the `queuety_logs` database table. There are no log files. All entries are queryable via the PHP API and CLI.
 
-## Why database logging?
+## Event types
 
-- **Queryable.** Filter by workflow, handler, event type, or time range with SQL.
-- **Permanent.** Workflow history survives forever by default. Log retention is independent of job/workflow purging.
-- **Atomic.** Log writes are part of the same database transaction as state changes. They are always consistent.
-- **No file permissions.** No writable directories needed outside the database.
-
-## What gets logged
-
-Every state transition produces a log entry:
+Every log entry has an event type from the `LogEvent` enum:
 
 | Event | Description |
 |---|---|
-| `started` | Job/step execution began |
-| `completed` | Job/step finished successfully |
-| `failed` | Job/step threw an exception |
-| `buried` | Job exceeded max attempts |
+| `started` | Job execution started |
+| `completed` | Job completed successfully |
+| `failed` | Job threw an exception |
+| `buried` | Job exhausted all retry attempts |
 | `retried` | Job was scheduled for retry |
 | `workflow_started` | Workflow was dispatched |
 | `workflow_completed` | All workflow steps finished |
-| `workflow_failed` | A workflow step was buried |
+| `workflow_failed` | Workflow step failed permanently |
 | `workflow_paused` | Workflow was paused |
 | `workflow_resumed` | Workflow was resumed |
+| `debug` | Debug-level message (when `QUEUETY_DEBUG` is enabled) |
 
-Each log entry includes:
+## Log fields
 
-| Column | Description |
+Each log entry contains:
+
+| Field | Description |
 |---|---|
-| `job_id` | Associated job ID |
-| `workflow_id` | Associated workflow ID |
-| `step_index` | Step position in workflow |
+| `id` | Auto-increment ID |
+| `event` | Event type string |
 | `handler` | Handler name or class |
-| `queue` | Queue name |
-| `event` | Event type |
+| `job_id` | Associated job ID (nullable) |
+| `workflow_id` | Associated workflow ID (nullable) |
+| `step_index` | Workflow step index (nullable) |
 | `attempt` | Attempt number |
-| `duration_ms` | Execution time in milliseconds |
-| `memory_peak_kb` | Peak memory usage in KB |
-| `error_message` | Error message (for failures) |
-| `error_class` | Exception class name (for failures) |
-| `error_trace` | Stack trace (for failures) |
-| `context` | Additional JSON metadata |
+| `duration_ms` | Execution duration in milliseconds |
+| `error_message` | Error message if failed |
 | `created_at` | Timestamp |
 
-## Querying logs via CLI
-
-```bash
-# Show all logs from the last 24 hours
-wp queuety log
-
-# Filter by job ID
-wp queuety log --job=123
-
-# Filter by workflow ID (shows the full workflow history)
-wp queuety log --workflow=42
-
-# Filter by handler
-wp queuety log --handler=SendEmailHandler
-
-# Filter by event type
-wp queuety log --event=failed
-
-# Filter by time
-wp queuety log --since="2025-03-28 14:00:00"
-
-# Combine with limit
-wp queuety log --handler=SendEmailHandler --limit=100
-
-# JSON output
-wp queuety log --workflow=42 --format=json
-```
-
-## Example output
-
-```
-$ wp queuety log --workflow=42
-
-id    event                handler              job_id  workflow_id  step_index  attempt  duration_ms  created_at
-1201  workflow_started      generate_report      -       42           -           -        -            2025-03-28 14:23:00
-1202  started              FetchDataHandler      789     42           0           1        -            2025-03-28 14:23:00
-1203  completed            FetchDataHandler      789     42           0           1        230          2025-03-28 14:23:01
-1204  started              CallLLMHandler        790     42           1           1        -            2025-03-28 14:23:01
-1205  failed               CallLLMHandler        790     42           1           1        30012        2025-03-28 14:23:05
-1206  retried              CallLLMHandler        790     42           1           2        -            2025-03-28 14:23:09
-1207  completed            CallLLMHandler        790     42           1           2        1847         2025-03-28 14:23:11
-1208  started              FormatOutputHandler   791     42           2           1        -            2025-03-28 14:23:11
-1209  completed            FormatOutputHandler   791     42           2           1        120          2025-03-28 14:23:11
-1210  workflow_completed   generate_report       -       42           -           -        -            2025-03-28 14:23:11
-```
-
-## Log retention
-
-By default, logs are kept forever (`QUEUETY_LOG_RETENTION_DAYS = 0`). To enable automatic pruning:
-
-```php
-define('QUEUETY_LOG_RETENTION_DAYS', 90); // Keep 90 days of logs
-```
-
-Manual pruning via CLI:
-
-```bash
-wp queuety log purge --older-than=90
-```
-
-## PHP API
+## Querying logs via PHP
 
 ```php
 $logger = Queuety::logger();
 
-// Query by job
-$entries = $logger->for_job(123);
+// Logs for a specific job
+$logs = $logger->for_job( 42 );
 
-// Query by workflow
-$entries = $logger->for_workflow(42);
+// Logs for a specific workflow
+$logs = $logger->for_workflow( 7 );
 
-// Query by handler
-$entries = $logger->for_handler('SendEmailHandler', 50);
+// Logs for a specific handler
+$logs = $logger->for_handler( 'send_email', 50 );
 
-// Query by event type
-$entries = $logger->for_event(LogEvent::Failed, 50);
+// Logs for a specific event type
+$logs = $logger->for_event( \Queuety\Enums\LogEvent::Failed, 50 );
 
-// Query by time
-$entries = $logger->since(new DateTimeImmutable('-24 hours'), 100);
-
-// Purge old entries
-$count = $logger->purge(90); // Delete entries older than 90 days
+// Logs since a datetime
+$logs = $logger->since( new \DateTimeImmutable( '-1 hour' ), 100 );
 ```
 
-## WordPress hooks
+## Querying logs via CLI
 
-Queuety also fires WordPress action hooks at key lifecycle points. These hooks only fire when WordPress is loaded:
+```bash
+# Recent logs (last 24 hours)
+wp queuety log
+
+# Logs for a specific job
+wp queuety log --job=42
+
+# Logs for a specific workflow
+wp queuety log --workflow=7
+
+# Logs for a handler
+wp queuety log --handler=send_email
+
+# Logs for an event type
+wp queuety log --event=failed
+
+# Logs since a datetime
+wp queuety log --since="2025-01-01 00:00:00"
+
+# Custom limit and format
+wp queuety log --limit=100 --format=json
+```
+
+## Log retention
+
+By default, logs are kept forever. To auto-purge old entries, set `QUEUETY_LOG_RETENTION_DAYS`:
 
 ```php
-// Job lifecycle
-do_action('queuety_job_started', int $job_id, string $handler);
-do_action('queuety_job_completed', int $job_id, string $handler, int $duration_ms);
-do_action('queuety_job_failed', int $job_id, string $handler, Throwable $exception);
-do_action('queuety_job_buried', int $job_id, string $handler, Throwable $exception);
-
-// Workflow lifecycle
-do_action('queuety_workflow_started', int $workflow_id, string $name, int $total_steps);
-do_action('queuety_workflow_step_completed', int $workflow_id, int $step_index, string $handler, int $duration_ms);
-do_action('queuety_workflow_completed', int $workflow_id, string $name, array $final_state);
-do_action('queuety_workflow_failed', int $workflow_id, string $name, int $failed_step, Throwable $exception);
-
-// Worker lifecycle
-do_action('queuety_worker_started', int $pid);
-do_action('queuety_worker_stopped', int $pid, string $reason);
+define( 'QUEUETY_LOG_RETENTION_DAYS', 30 ); // purge logs older than 30 days
 ```
 
-Use these hooks to build dashboards, Slack alerts, or external monitoring integrations.
+Purge manually via CLI:
+
+```bash
+wp queuety log purge --older-than=30
+```
+
+Or via PHP:
+
+```php
+$count = Queuety::logger()->purge( 30 );
+```

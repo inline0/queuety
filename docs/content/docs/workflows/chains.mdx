@@ -1,113 +1,80 @@
 ---
-title: Chains
-description: Define sequential workflow steps with state flow between them.
+title: Sequential Chains
+description: Building sequential step chains with the Step interface and state flow.
 ---
 
-# Chains
+# Sequential Chains
 
-The simplest workflow is a chain: a sequence of steps that run one after another. Each step receives the accumulated state from all previous steps and returns data that gets merged in.
+The most common workflow pattern is a linear chain of steps. Each step runs after the previous one completes, with the accumulated state passed forward.
 
-## Defining steps with ->then()
+## The `->then()` method
 
-Use `Queuety::workflow()` to start a builder, then chain steps with `->then()`:
+Use `->then()` to add sequential steps to a workflow:
 
 ```php
 use Queuety\Queuety;
 
-$workflow_id = Queuety::workflow('generate_report')
-    ->then(FetchDataHandler::class)
-    ->then(CallLLMHandler::class)
-    ->then(FormatOutputHandler::class)
-    ->dispatch(['user_id' => 42]);
+Queuety::workflow( 'onboarding' )
+    ->then( CreateAccountHandler::class )
+    ->then( SendWelcomeEmailHandler::class )
+    ->then( NotifyAdminHandler::class )
+    ->dispatch( [ 'email' => 'user@example.com' ] );
 ```
 
-When dispatched, only the first step is enqueued as a job. When it completes, the next step is enqueued, and so on. The workflow is complete when the last step finishes.
+Steps execute in the order they are added. The workflow only advances when the current step completes successfully.
 
-## Step handlers
+## The Step interface
 
-Step handlers implement the `Queuety\Step` interface. They receive the accumulated state and return an array of data to merge:
+Workflow step handlers implement the `Queuety\Step` interface:
 
 ```php
 use Queuety\Step;
 
-class FetchDataHandler implements Step {
+class CreateAccountHandler implements Step {
     public function handle( array $state ): array {
-        // $state starts with the dispatch payload: ['user_id' => 42]
-        $user   = get_user_by( 'ID', $state['user_id'] );
-        $orders = wc_get_orders( ['customer_id' => $user->ID, 'limit' => 50] );
-
-        return [
-            'user_name'   => $user->display_name,
-            'order_count' => count( $orders ),
-            'order_data'  => array_map( fn( $o ) => $o->get_data(), $orders ),
-        ];
-    }
-
-    public function config(): array {
-        return ['needs_wordpress' => true];
-    }
-}
-```
-
-### The Step interface
-
-```php
-interface Step {
-    /**
-     * Execute the step.
-     *
-     * @param array $state Accumulated workflow state from all previous steps.
-     * @return array Data to merge into the workflow state.
-     */
-    public function handle( array $state ): array;
-
-    /**
-     * Optional step configuration.
-     *
-     * Supported keys: needs_wordpress, max_attempts, backoff.
-     *
-     * @return array Configuration array.
-     */
-    public function config(): array;
-}
-```
-
-### Step config options
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `needs_wordpress` | `bool` | `false` | Boot WordPress before executing this step |
-| `max_attempts` | `int` | `3` | Per-step retry limit (overrides workflow setting) |
-| `backoff` | `string` | `'exponential'` | Retry backoff strategy |
-
-## State flow between steps
-
-State accumulates across the chain. Each step's return value is merged (with `array_merge`) into the workflow state before the next step runs:
-
-```php
-class CallLLMHandler implements Step {
-    public function handle( array $state ): array {
-        // $state now includes everything FetchDataHandler returned:
-        // user_name, order_count, order_data
-        $prompt   = "Summarize {$state['order_count']} orders for {$state['user_name']}";
-        $response = $this->callOpenAI( $prompt, $state['order_data'] );
-
-        return ['llm_response' => $response];
+        $user_id = wp_create_user( $state['email'], wp_generate_password() );
+        return [ 'user_id' => $user_id ];
     }
 
     public function config(): array {
         return [
-            'needs_wordpress' => false,
-            'max_attempts'    => 5,
+            'needs_wordpress' => true,
+            'max_attempts'    => 3,
         ];
     }
 }
+```
 
-class FormatOutputHandler implements Step {
+Key differences from the `Handler` interface:
+
+| | `Handler` (jobs) | `Step` (workflows) |
+|---|---|---|
+| Method signature | `handle(array $payload): void` | `handle(array $state): array` |
+| Input | Job payload | Accumulated workflow state |
+| Output | Nothing (void) | Data to merge into state |
+
+## State flow
+
+Each step receives the full accumulated state and returns an array of new key-value pairs. The returned data is merged into the state for subsequent steps:
+
+```php
+class FetchUserHandler implements Step {
     public function handle( array $state ): array {
-        // $state includes user_name, order_count, order_data, llm_response
-        $pdf_path = $this->generatePDF( $state );
-        return ['report_url' => $pdf_path];
+        // $state contains: ['user_id' => 42]
+        $user = get_user_by( 'ID', $state['user_id'] );
+        return [ 'user_name' => $user->display_name, 'user_email' => $user->user_email ];
+    }
+
+    public function config(): array {
+        return [ 'needs_wordpress' => true ];
+    }
+}
+
+class GenerateReportHandler implements Step {
+    public function handle( array $state ): array {
+        // $state contains: ['user_id' => 42, 'user_name' => 'Alice', 'user_email' => 'alice@example.com']
+        $report = build_report( $state['user_name'] );
+        return [ 'report_url' => $report->url ];
     }
 
     public function config(): array {
@@ -116,44 +83,88 @@ class FormatOutputHandler implements Step {
 }
 ```
 
-## Workflow options
+## Step configuration
 
-The builder supports queue, priority, and max attempts settings that apply to all steps:
+The `config()` method supports the following keys:
 
-```php
-Queuety::workflow('process_order')
-    ->then(ValidateOrderHandler::class)
-    ->then(ChargePaymentHandler::class)
-    ->then(FulfillOrderHandler::class)
-    ->on_queue('orders')
-    ->with_priority(Priority::High)
-    ->max_attempts(5)
-    ->dispatch(['order_id' => 123]);
-```
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `needs_wordpress` | `bool` | `false` | Boot WordPress before executing this step |
+| `max_attempts` | `int` | `3` | Maximum retry attempts for this step |
+| `backoff` | `string` | `exponential` | Backoff strategy for retries |
 
-## Full example: LLM pipeline
+## LLM pipeline example
 
-A real-world workflow that fetches data from WordPress, calls an LLM API, and generates a report:
+A common use case is chaining LLM API calls with data processing:
 
 ```php
-use Queuety\Queuety;
-use Queuety\Enums\Priority;
+use Queuety\Step;
 
-// Dispatch
-$workflow_id = Queuety::workflow('weekly_report')
-    ->then(FetchDataHandler::class)        // Needs WP, fast
-    ->then(CallLLMHandler::class)          // No WP, slow (but durable)
-    ->then(FormatOutputHandler::class)     // No WP, fast
-    ->then(SendReportEmailHandler::class)  // Needs WP, fast
-    ->on_queue('reports')
-    ->with_priority(Priority::Normal)
-    ->max_attempts(5)
-    ->dispatch(['user_id' => 42]);
+class BuildPromptHandler implements Step {
+    public function handle( array $state ): array {
+        $user = get_user_by( 'ID', $state['user_id'] );
+        $posts = get_posts( [ 'author' => $user->ID, 'numberposts' => 10 ] );
+        $context = implode( "\n", array_map( fn( $p ) => $p->post_content, $posts ) );
 
-// Check progress later
-$status = Queuety::workflow_status($workflow_id);
-echo "{$status->name}: step {$status->current_step}/{$status->total_steps}";
-echo " ({$status->status->value})";
+        return [
+            'prompt' => "Summarize this author's recent work:\n\n{$context}",
+        ];
+    }
+
+    public function config(): array {
+        return [ 'needs_wordpress' => true ];
+    }
+}
+
+class CallOpenAIHandler implements Step {
+    public function handle( array $state ): array {
+        $response = wp_remote_post( 'https://api.openai.com/v1/chat/completions', [
+            'timeout' => 120,
+            'headers' => [
+                'Authorization' => 'Bearer ' . OPENAI_API_KEY,
+                'Content-Type'  => 'application/json',
+            ],
+            'body' => json_encode( [
+                'model'    => 'gpt-4',
+                'messages' => [ [ 'role' => 'user', 'content' => $state['prompt'] ] ],
+            ] ),
+        ] );
+
+        $body = json_decode( wp_remote_retrieve_body( $response ), true );
+        return [ 'summary' => $body['choices'][0]['message']['content'] ];
+    }
+
+    public function config(): array {
+        return [ 'needs_wordpress' => true, 'max_attempts' => 5 ];
+    }
+}
+
+class SaveSummaryHandler implements Step {
+    public function handle( array $state ): array {
+        $post_id = wp_insert_post( [
+            'post_title'   => "Summary for user #{$state['user_id']}",
+            'post_content' => $state['summary'],
+            'post_status'  => 'publish',
+        ] );
+        return [ 'summary_post_id' => $post_id ];
+    }
+
+    public function config(): array {
+        return [ 'needs_wordpress' => true ];
+    }
+}
 ```
 
-If `CallLLMHandler` fails on attempt 1 due to a timeout, the worker retries it. The state from `FetchDataHandler` is preserved. No work is repeated. If the LLM call eventually succeeds on attempt 3, the workflow continues to `FormatOutputHandler` with the complete state.
+Dispatch the pipeline:
+
+```php
+Queuety::workflow( 'summarize_author' )
+    ->then( BuildPromptHandler::class )
+    ->then( CallOpenAIHandler::class )
+    ->then( SaveSummaryHandler::class )
+    ->on_queue( 'llm' )
+    ->max_attempts( 5 )
+    ->dispatch( [ 'user_id' => 42 ] );
+```
+
+If the OpenAI call times out, the worker retries only that step. The prompt built in step 0 is already safely stored in the workflow state.

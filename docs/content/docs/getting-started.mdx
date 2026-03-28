@@ -1,6 +1,6 @@
 ---
 title: Getting Started
-description: Install Queuety and dispatch your first job.
+description: Install Queuety, configure it, and run your first job and workflow.
 ---
 
 # Getting Started
@@ -13,41 +13,39 @@ description: Install Queuety and dispatch your first job.
 composer require queuety/queuety
 ```
 
-### Manual Installation
-
-Download the latest release from GitHub, upload the zip to your WordPress plugins directory, and activate:
+### Activate the plugin
 
 ```bash
-wp plugin install queuety.zip --activate
+wp plugin activate queuety
 ```
 
-On activation, Queuety creates four database tables (`queuety_jobs`, `queuety_workflows`, `queuety_logs`, `queuety_schedules`) and registers its WP-CLI commands.
+On activation, Queuety creates its database tables (`queuety_jobs`, `queuety_workflows`, `queuety_logs`, `queuety_schedules`) and installs a bootstrap file that allows workers to run without booting WordPress.
 
 ## Configuration
 
-Queuety works out of the box with sensible defaults. All constants are optional. Define them in `wp-config.php` before the plugin loads:
+All constants are optional. Define them in `wp-config.php` before the plugin loads:
 
 | Constant | Default | Description |
 |---|---|---|
+| `QUEUETY_RETENTION_DAYS` | `7` | Auto-purge completed jobs after N days |
+| `QUEUETY_LOG_RETENTION_DAYS` | `0` | Auto-purge logs after N days (0 = keep forever) |
+| `QUEUETY_MAX_EXECUTION_TIME` | `300` | Max seconds per job before timeout |
+| `QUEUETY_WORKER_SLEEP` | `1` | Seconds to sleep when queue is empty |
+| `QUEUETY_WORKER_MAX_JOBS` | `1000` | Max jobs before worker restarts |
+| `QUEUETY_WORKER_MAX_MEMORY` | `128` | Max MB before worker restarts |
+| `QUEUETY_RETRY_BACKOFF` | `exponential` | Backoff strategy: `exponential`, `linear`, or `fixed` |
+| `QUEUETY_STALE_TIMEOUT` | `600` | Seconds before stuck jobs are recovered |
+| `QUEUETY_DEBUG` | `false` | Enable verbose worker logging |
 | `QUEUETY_TABLE_JOBS` | `queuety_jobs` | Jobs table name |
 | `QUEUETY_TABLE_WORKFLOWS` | `queuety_workflows` | Workflows table name |
 | `QUEUETY_TABLE_LOGS` | `queuety_logs` | Logs table name |
 | `QUEUETY_TABLE_SCHEDULES` | `queuety_schedules` | Schedules table name |
 | `QUEUETY_TABLE_QUEUE_STATES` | `queuety_queue_states` | Queue states table name |
 | `QUEUETY_TABLE_WEBHOOKS` | `queuety_webhooks` | Webhooks table name |
-| `QUEUETY_RETENTION_DAYS` | `7` | Auto-purge completed jobs/workflows after N days |
-| `QUEUETY_LOG_RETENTION_DAYS` | `0` | Auto-purge logs after N days (0 = keep forever) |
-| `QUEUETY_MAX_EXECUTION_TIME` | `300` | Max seconds per job/step before timeout |
-| `QUEUETY_WORKER_SLEEP` | `1` | Seconds to sleep when queue is empty |
-| `QUEUETY_WORKER_MAX_JOBS` | `1000` | Max jobs before worker restarts (memory safety) |
-| `QUEUETY_WORKER_MAX_MEMORY` | `128` | Max MB before worker restarts |
-| `QUEUETY_RETRY_BACKOFF` | `exponential` | Backoff strategy: `fixed`, `linear`, or `exponential` |
-| `QUEUETY_STALE_TIMEOUT` | `600` | Seconds before a processing job is considered stale |
-| `QUEUETY_DEBUG` | `false` | Enable verbose worker logging |
 
-## Dispatch your first job
+## Your first job
 
-Create a handler class that implements `Queuety\Handler`:
+Create a handler class that implements the `Handler` interface:
 
 ```php
 use Queuety\Handler;
@@ -67,92 +65,91 @@ class SendEmailHandler implements Handler {
 }
 ```
 
-Register the handler and dispatch a job:
+Register it and dispatch:
 
 ```php
 use Queuety\Queuety;
-use Queuety\Enums\Priority;
 
-// Register the handler
 Queuety::register( 'send_email', SendEmailHandler::class );
 
-// Dispatch
 Queuety::dispatch( 'send_email', [
     'to'      => 'user@example.com',
     'subject' => 'Welcome',
-    'body'    => 'Thanks for signing up.',
-] )->with_priority( Priority::High );
+    'body'    => 'Hello from Queuety!',
+] );
 ```
 
-## Create your first workflow
+## Your first workflow
 
-Workflows break long-running processes into durable steps. Each step implements `Queuety\Step` and returns data that is merged into the workflow state:
+Define step handlers that implement the `Step` interface:
 
 ```php
 use Queuety\Step;
 
 class FetchDataHandler implements Step {
     public function handle( array $state ): array {
-        // $state contains the initial payload and all prior step outputs
-        return ['user_name' => 'Alice', 'order_count' => 12];
+        $user = get_user_by( 'ID', $state['user_id'] );
+        return [ 'user_name' => $user->display_name ];
     }
 
     public function config(): array {
-        return ['needs_wordpress' => true];
+        return [ 'needs_wordpress' => true ];
     }
 }
 
-class GenerateSummaryHandler implements Step {
+class CallLLMHandler implements Step {
     public function handle( array $state ): array {
-        // $state now includes user_name and order_count from the previous step
-        $summary = "Report for {$state['user_name']}: {$state['order_count']} orders";
-        return ['summary' => $summary];
+        $response = wp_remote_post( 'https://api.openai.com/v1/chat/completions', [
+            'body' => json_encode( [ 'prompt' => "Generate report for {$state['user_name']}" ] ),
+        ] );
+        return [ 'llm_response' => wp_remote_retrieve_body( $response ) ];
     }
 
     public function config(): array {
-        return [];
+        return [ 'needs_wordpress' => true, 'max_attempts' => 5 ];
+    }
+}
+
+class FormatOutputHandler implements Step {
+    public function handle( array $state ): array {
+        $url = save_report( $state['user_name'], $state['llm_response'] );
+        return [ 'report_url' => $url ];
+    }
+
+    public function config(): array {
+        return [ 'needs_wordpress' => true ];
     }
 }
 ```
 
-Define and dispatch the workflow:
+Dispatch the workflow:
 
 ```php
-$workflow_id = Queuety::workflow('weekly_report')
-    ->then(FetchDataHandler::class)
-    ->then(GenerateSummaryHandler::class)
-    ->on_queue('reports')
-    ->dispatch(['user_id' => 42]);
+$workflow_id = Queuety::workflow( 'generate_report' )
+    ->then( FetchDataHandler::class )
+    ->then( CallLLMHandler::class )
+    ->then( FormatOutputHandler::class )
+    ->dispatch( [ 'user_id' => 42 ] );
 ```
 
 ## Start a worker
 
-Workers are long-running PHP processes started via WP-CLI:
-
 ```bash
-# Start a worker on the default queue
 wp queuety work
-
-# Start a worker on a specific queue
-wp queuety work --queue=emails
-
-# Process one batch and exit (for cron)
-wp queuety work --once
-
-# Process all pending jobs and exit
-wp queuety flush
 ```
 
-Verify everything is working:
+The worker polls for pending jobs, executes them, advances workflows, and sleeps when the queue is empty. Press `Ctrl+C` to stop.
+
+For production, run multiple workers:
 
 ```bash
-wp queuety status
+wp queuety work --workers=4
 ```
 
-## Next steps
+## What's next
 
-- [Jobs](/docs/jobs) for the full dispatch API, priorities, retries, and more
-- [Workflows](/docs/workflows) for chains, parallel steps, and conditional branching
-- [Features](/docs/features) for scheduling, rate limiting, metrics, and webhooks
-- [CLI Reference](/docs/cli) for all WP-CLI commands
-- [PHP API](/docs/api) for the complete `Queuety\Queuety` facade reference
+- [Jobs](/docs/jobs) for the complete dispatch and handler guide
+- [Workflows](/docs/workflows) for chains, parallel steps, conditional branching, and sub-workflows
+- [Scheduling](/docs/features/scheduling) for recurring jobs
+- [CLI Reference](/docs/cli) for all available commands
+- [PHP API](/docs/api) for programmatic access
