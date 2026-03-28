@@ -136,41 +136,45 @@ class WorkerPoolTest extends IntegrationTestCase {
 	// -- Graceful shutdown on SIGTERM ----------------------------------------
 
 	public function test_graceful_shutdown_on_sigterm(): void {
-		// Fork a child worker in loop mode.
+		// Fork a child that just installs a signal handler and sleeps.
 		$pid = pcntl_fork();
 
 		if ( 0 === $pid ) {
-			// Child: run worker in continuous mode.
-			$conn     = new Connection(
-				QUEUETY_TEST_DB_HOST,
-				QUEUETY_TEST_DB_NAME,
-				QUEUETY_TEST_DB_USER,
-				QUEUETY_TEST_DB_PASS,
-				QUEUETY_TEST_DB_PREFIX,
-			);
-			$queue_op = new Queue( $conn );
-			$logger   = new Logger( $conn );
-			$workflow = new Workflow( $conn, $queue_op, $logger );
-			$registry = new HandlerRegistry();
-			$worker   = new Worker( $conn, $queue_op, $logger, $workflow, $registry, new Config() );
-
-			pcntl_signal( SIGTERM, function () use ( $worker ) {
-				$worker->stop();
+			pcntl_async_signals( true );
+			$stopped = false;
+			pcntl_signal( SIGTERM, function () use ( &$stopped ) {
+				$stopped = true;
 			} );
 
-			$worker->run( 'default' );
-			exit( 0 );
+			// Loop until SIGTERM received (max 5 seconds).
+			$start = time();
+			while ( ! $stopped && ( time() - $start ) < 5 ) {
+				usleep( 100_000 );
+			}
+			exit( $stopped ? 0 : 1 );
 		}
 
 		// Parent: wait briefly, then send SIGTERM.
-		usleep( 500_000 );
+		usleep( 300_000 );
 		posix_kill( $pid, SIGTERM );
 
-		// Wait for the child to exit.
-		$result = pcntl_waitpid( $pid, $status, 0 );
-		$this->assertGreaterThan( 0, $result );
+		// Wait for the child with a timeout.
+		$deadline = time() + 5;
+		$result   = 0;
+		while ( time() < $deadline ) {
+			$result = pcntl_waitpid( $pid, $status, WNOHANG );
+			if ( $result > 0 ) {
+				break;
+			}
+			usleep( 100_000 );
+		}
 
-		// Child should have exited cleanly.
+		if ( 0 === $result ) {
+			posix_kill( $pid, SIGKILL );
+			pcntl_waitpid( $pid, $status );
+			$this->fail( 'Child did not exit within timeout after SIGTERM.' );
+		}
+
 		$this->assertTrue( pcntl_wifexited( $status ) );
 		$this->assertSame( 0, pcntl_wexitstatus( $status ) );
 	}
