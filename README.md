@@ -143,6 +143,20 @@ Queuety::workflow( 'editorial_run' )
     ->dispatch();
 ```
 
+Add workflow guardrails for agent runs:
+
+```php
+Queuety::workflow( 'agent_research' )
+    ->version( 'research.v2' )
+    ->idempotency_key( 'brief:42:research' )
+    ->max_transitions( 20 )
+    ->max_fan_out_items( 12 )
+    ->max_state_bytes( 32768 )
+    ->then( PlanResearchStep::class )
+    ->fan_out( 'tasks', ExecuteResearchTask::class, 'results' )
+    ->dispatch( [ 'brief_id' => 42 ] );
+```
+
 Dispatch a batch with callbacks:
 
 ```php
@@ -202,6 +216,7 @@ wp queuety work
 - **Signals and human gates** -- `wait_for_signal()`, `wait_for_signals()`, `await_approval()`, and `await_input()` pause workflows until external input arrives
 - **Workflow dependencies** -- `await_workflow()` and `await_workflows()` coordinate top-level workflows without forcing them into one workflow definition
 - **Dynamic fan-out** -- `fan_out()` expands runtime-discovered work with `All`, `FirstSuccess`, and `Quorum` join modes
+- **Workflow guardrails** -- `version()`, `idempotency_key()`, `max_transitions()`, `max_fan_out_items()`, and `max_state_bytes()` make long-running agent workflows easier to inspect and safer to operate
 - **Step compensation** -- `compensate_with()` and `compensate_on_failure()` provide saga-style rollback hooks for completed steps
 - **Streaming steps** -- `StreamingStep` interface with `ChunkStore` for persisting streamed data chunk by chunk
 - **Cache layer** -- pluggable cache with `MemoryCache` and `ApcuCache` backends, auto-detected via `CacheFactory`
@@ -400,6 +415,7 @@ All constants are optional. Define in `wp-config.php`:
 | `QUEUETY_TABLE_SCHEDULES` | `queuety_schedules` | Schedules table name |
 | `QUEUETY_TABLE_SIGNALS` | `queuety_signals` | Signals table name |
 | `QUEUETY_TABLE_WORKFLOW_DEPENDENCIES` | `queuety_workflow_dependencies` | Workflow dependency waits table name |
+| `QUEUETY_TABLE_WORKFLOW_DISPATCH_KEYS` | `queuety_workflow_dispatch_keys` | Durable workflow idempotency table name |
 | `QUEUETY_TABLE_CHUNKS` | `queuety_chunks` | Streaming chunks table name |
 | `QUEUETY_TABLE_QUEUE_STATES` | `queuety_queue_states` | Queue states table name |
 | `QUEUETY_TABLE_WEBHOOKS` | `queuety_webhooks` | Webhooks table name |

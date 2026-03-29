@@ -55,4 +55,28 @@ class WorkflowStateTest extends TestCase {
 		$this->assertSame( 'workflow', $state->wait_type );
 		$this->assertSame( array( '12', '18' ), $state->waiting_for );
 	}
+
+	public function test_exposes_definition_and_budget_metadata_when_present(): void {
+		$state = new WorkflowState(
+			workflow_id: 12,
+			name: 'agent_run',
+			status: WorkflowStatus::Running,
+			current_step: 1,
+			total_steps: 3,
+			state: array(),
+			definition_version: 'agents.v2',
+			idempotency_key: 'run:12',
+			budget: array(
+				'max_transitions'   => 10,
+				'max_state_bytes'   => 2048,
+				'transitions'       => 1,
+				'public_state_bytes' => 128,
+			),
+		);
+
+		$this->assertSame( 'agents.v2', $state->definition_version );
+		$this->assertSame( 'run:12', $state->idempotency_key );
+		$this->assertSame( 10, $state->budget['max_transitions'] );
+		$this->assertSame( 128, $state->budget['public_state_bytes'] );
+	}
 }

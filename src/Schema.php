@@ -15,7 +15,7 @@ class Schema {
 	/**
 	 * Current schema version for plugin-managed upgrades.
 	 */
-	public const CURRENT_VERSION = '0.13.0';
+	public const CURRENT_VERSION = '0.14.0';
 
 	/**
 	 * Create all Queuety tables.
@@ -32,6 +32,7 @@ class Schema {
 		$webhooks        = $conn->table( Config::table_webhooks() );
 		$signals         = $conn->table( Config::table_signals() );
 		$workflow_waits  = $conn->table( Config::table_workflow_dependencies() );
+		$workflow_keys   = $conn->table( Config::table_workflow_dispatch_keys() );
 		$locks           = $conn->table( Config::table_locks() );
 		$batches         = $conn->table( Config::table_batches() );
 		$chunks          = $conn->table( Config::table_chunks() );
@@ -177,6 +178,17 @@ class Schema {
 		);
 
 		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$workflow_keys} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				dispatch_key VARCHAR(191) NOT NULL,
+				workflow_id BIGINT UNSIGNED NOT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE INDEX idx_dispatch_key (dispatch_key),
+				UNIQUE INDEX idx_workflow_id (workflow_id)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
+
+		$pdo->exec(
 			"CREATE TABLE IF NOT EXISTS {$locks} (
 				lock_key VARCHAR(255) NOT NULL PRIMARY KEY,
 				owner VARCHAR(64) NOT NULL,
@@ -281,6 +293,11 @@ class Schema {
 
 		if ( version_compare( $version, '0.13.0', '<' ) ) {
 			self::migrate_0130( $conn );
+			$version = '0.13.0';
+		}
+
+		if ( version_compare( $version, '0.14.0', '<' ) ) {
+			self::migrate_0140( $conn );
 		}
 
 		return self::CURRENT_VERSION;
@@ -302,9 +319,14 @@ class Schema {
 		$schedules       = $conn->table( Config::table_schedules() );
 		$signals         = $conn->table( Config::table_signals() );
 		$workflow_waits  = $conn->table( Config::table_workflow_dependencies() );
+		$workflow_keys   = $conn->table( Config::table_workflow_dispatch_keys() );
 		$batches         = $conn->table( Config::table_batches() );
 		$chunks          = $conn->table( Config::table_chunks() );
 		$workflow_events = $conn->table( Config::table_workflow_events() );
+
+		if ( self::table_exists( $conn, $workflow_keys ) ) {
+			return '0.14.0';
+		}
 
 		if ( self::table_exists( $conn, $workflow_waits ) && self::enum_contains( $conn, $wf, 'status', 'waiting_workflow' ) ) {
 			return '0.13.0';
@@ -362,6 +384,7 @@ class Schema {
 		$webhooks        = $conn->table( Config::table_webhooks() );
 		$signals         = $conn->table( Config::table_signals() );
 		$workflow_waits  = $conn->table( Config::table_workflow_dependencies() );
+		$workflow_keys   = $conn->table( Config::table_workflow_dispatch_keys() );
 		$locks           = $conn->table( Config::table_locks() );
 		$batches         = $conn->table( Config::table_batches() );
 		$chunks          = $conn->table( Config::table_chunks() );
@@ -370,6 +393,7 @@ class Schema {
 		$pdo->exec( "DROP TABLE IF EXISTS {$workflow_events}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$chunks}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$batches}" );
+		$pdo->exec( "DROP TABLE IF EXISTS {$workflow_keys}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$locks}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$workflow_waits}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$signals}" );
@@ -591,6 +615,30 @@ class Schema {
 				UNIQUE INDEX idx_waiting_dependency (waiting_workflow_id, step_index, dependency_workflow_id),
 				INDEX idx_dependency (dependency_workflow_id, satisfied_at),
 				INDEX idx_waiting (waiting_workflow_id, step_index, satisfied_at)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
+	}
+
+	/**
+	 * Migrate from v0.13.x to v0.14.0.
+	 *
+	 * Creates the workflow dispatch key table used for durable idempotent
+	 * workflow dispatches.
+	 *
+	 * @param Connection $conn Database connection.
+	 */
+	public static function migrate_0140( Connection $conn ): void {
+		$pdo           = $conn->pdo();
+		$workflow_keys = $conn->table( Config::table_workflow_dispatch_keys() );
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$workflow_keys} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				dispatch_key VARCHAR(191) NOT NULL,
+				workflow_id BIGINT UNSIGNED NOT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE INDEX idx_dispatch_key (dispatch_key),
+				UNIQUE INDEX idx_workflow_id (workflow_id)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 	}

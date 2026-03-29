@@ -13,6 +13,7 @@ use Queuety\Contracts\StreamingStep;
 use Queuety\Enums\BackoffStrategy;
 use Queuety\Enums\LogEvent;
 use Queuety\Exceptions\TimeoutException;
+use Queuety\Exceptions\WorkflowConstraintViolationException;
 
 /**
  * Worker process loop. Claims jobs, executes handlers, manages lifecycle.
@@ -625,7 +626,9 @@ class Worker {
 				$custom_backoff = $custom_backoff[ max( 0, $attempt_index ) ];
 			}
 
-			if ( $job->attempts >= $effective_max ) {
+			$workflow_constraint_violation = $job->is_workflow_step() && $e instanceof WorkflowConstraintViolationException;
+
+			if ( $workflow_constraint_violation || $job->attempts >= $effective_max ) {
 				$is_fan_out_terminal = $job->is_workflow_step() && $this->is_fan_out_workflow_job( $job );
 
 				if ( ! $is_fan_out_terminal ) {

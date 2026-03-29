@@ -36,7 +36,7 @@ composer install
 wp plugin activate queuety
 ```
 
-On activation, Queuety creates or upgrades its database tables (`queuety_jobs`, `queuety_workflows`, `queuety_logs`, `queuety_schedules`, `queuety_queue_states`, `queuety_webhooks`, `queuety_locks`, `queuety_signals`, `queuety_workflow_dependencies`, `queuety_batches`, `queuety_chunks`, `queuety_workflow_events`) so workers can claim jobs directly from MySQL.
+On activation, Queuety creates or upgrades its database tables (`queuety_jobs`, `queuety_workflows`, `queuety_logs`, `queuety_schedules`, `queuety_queue_states`, `queuety_webhooks`, `queuety_locks`, `queuety_signals`, `queuety_workflow_dependencies`, `queuety_workflow_dispatch_keys`, `queuety_batches`, `queuety_chunks`, `queuety_workflow_events`) so workers can claim jobs directly from MySQL.
 
 By default, the plugin also schedules a one-shot worker through WordPress cron every minute. That gives you a no-shell baseline that can still process jobs and workflows. For heavier workloads, move to dedicated `wp queuety work` processes.
 
@@ -62,6 +62,7 @@ All constants are optional. Define them in `wp-config.php` before the plugin loa
 | `QUEUETY_TABLE_SCHEDULES` | `queuety_schedules` | Schedules table name |
 | `QUEUETY_TABLE_SIGNALS` | `queuety_signals` | Signals table name |
 | `QUEUETY_TABLE_WORKFLOW_DEPENDENCIES` | `queuety_workflow_dependencies` | Workflow dependency waits table name |
+| `QUEUETY_TABLE_WORKFLOW_DISPATCH_KEYS` | `queuety_workflow_dispatch_keys` | Durable workflow idempotency table name |
 | `QUEUETY_TABLE_CHUNKS` | `queuety_chunks` | Streaming chunks table name |
 | `QUEUETY_TABLE_QUEUE_STATES` | `queuety_queue_states` | Queue states table name |
 | `QUEUETY_TABLE_WEBHOOKS` | `queuety_webhooks` | Webhooks table name |

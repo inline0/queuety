@@ -35,7 +35,10 @@ class WorkflowExportTest extends IntegrationTestCase {
 
 	private function create_and_complete_workflow(): int {
 		$builder = new WorkflowBuilder( 'test_export', $this->conn, $this->queue, $this->logger );
-		$builder->then( 'StepA' )
+		$builder->version( 'export.v1' )
+			->idempotency_key( 'export:123' )
+			->max_transitions( 5 )
+			->then( 'StepA' )
 			->then( 'StepB' );
 		$wf_id = $builder->dispatch( array( 'input' => 'data' ) );
 
@@ -68,6 +71,8 @@ class WorkflowExportTest extends IntegrationTestCase {
 		$this->assertSame( 'test_export', $wf['name'] );
 		$this->assertSame( 'completed', $wf['status'] );
 		$this->assertSame( 2, $wf['total_steps'] );
+		$this->assertSame( 'export.v1', $wf['definition_version'] );
+		$this->assertSame( 'export:123', $wf['idempotency_key'] );
 	}
 
 	public function test_export_includes_events_logs_jobs(): void {

@@ -1,0 +1,91 @@
+---
+title: Guardrails
+description: Versioning, idempotent dispatch, and workflow budgets.
+---
+
+# Workflow guardrails
+
+Agent-style workflows are flexible, but they also make it easier to create duplicate runs or let a planner produce more work than intended. Queuety provides lightweight guardrails at the workflow level so you can keep that flexibility without giving up control.
+
+## Version a workflow definition
+
+Use `version()` to attach an application-level version label to a workflow definition:
+
+```php
+Queuety::workflow( 'research_run' )
+    ->version( 'research.v2' )
+    ->then( PlanResearchStep::class )
+    ->then( DraftResearchSummaryStep::class )
+    ->dispatch();
+```
+
+The version is stored with the workflow state, exposed through `workflow_status()`, printed by `wp queuety workflow status`, and included in workflow exports.
+
+## Make dispatch idempotent
+
+Use `idempotency_key()` when callers may retry the same request:
+
+```php
+Queuety::workflow( 'research_run' )
+    ->idempotency_key( 'brief:42:research' )
+    ->then( PlanResearchStep::class )
+    ->dispatch( [ 'brief_id' => 42 ] );
+```
+
+If the same workflow is dispatched again with the same key, Queuety returns the original workflow ID instead of creating a duplicate run.
+
+This is especially useful for:
+
+- API endpoints that may be retried by clients or gateways
+- webhook consumers that can receive duplicate deliveries
+- planner steps that should only create one orchestration run per external entity
+
+Idempotency keys are stored in the `queuety_workflow_dispatch_keys` table.
+
+## Set workflow budgets
+
+Use workflow budgets to fail runs that exceed the envelope you planned for:
+
+```php
+Queuety::workflow( 'research_run' )
+    ->max_transitions( 20 )
+    ->max_fan_out_items( 12 )
+    ->max_state_bytes( 32768 )
+    ->then( PlanResearchStep::class )
+    ->fan_out( 'tasks', ExecuteResearchTask::class, 'results' )
+    ->dispatch();
+```
+
+### `max_transitions()`
+
+Limits how many workflow steps may complete before the run fails. This is useful for protecting workflows that branch dynamically or can revisit the same area via `_goto`.
+
+### `max_fan_out_items()`
+
+Limits how many runtime-discovered items a single `fan_out()` step may expand. This is useful for planner/executor systems where an agent might discover far more branch work than intended.
+
+### `max_state_bytes()`
+
+Limits the encoded size of the public workflow state. This helps keep long-running workflows from growing into large blobs that are slow to inspect, export, or retry.
+
+When a budget is exceeded, Queuety fails the workflow immediately instead of retrying the step.
+
+## Observing guardrails
+
+Workflow status exposes:
+
+- `definition_version`
+- `idempotency_key`
+- `budget`
+
+The `budget` payload includes configured limits plus current usage, including the current public-state size in bytes.
+
+Example:
+
+```php
+$state = Queuety::workflow_status( $workflow_id );
+
+$state->definition_version; // 'research.v2'
+$state->idempotency_key;    // 'brief:42:research'
+$state->budget;             // [ 'max_transitions' => 20, ... ]
+```

@@ -129,11 +129,13 @@ The export contains the full workflow state, all associated jobs, workflow event
         }
     ],
     "exported_at": "2026-03-28T12:00:00+00:00",
-    "queuety_version": "0.12.0"
+    "queuety_version": "0.14.0"
 }
 ```
 
 Some fields are abbreviated in the example above. The actual export includes all columns from each table row.
+
+Workflow exports also preserve workflow metadata such as `definition_version` and `idempotency_key` when those were set on the original run.
 
 ## How replay works
 

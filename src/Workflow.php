@@ -16,6 +16,7 @@ use Queuety\Enums\LogEvent;
 use Queuety\Enums\Priority;
 use Queuety\Enums\WaitMode;
 use Queuety\Enums\WorkflowStatus;
+use Queuety\Exceptions\WorkflowConstraintViolationException;
 
 /**
  * Workflow orchestration: step advancement, state accumulation, pause/resume/retry.
@@ -131,6 +132,137 @@ class Workflow {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Resolve the configured workflow definition version from persisted state.
+	 *
+	 * @param array $state Workflow state.
+	 * @return string|null
+	 */
+	private function definition_version_from_state( array $state ): ?string {
+		$version = $state['_definition_version'] ?? null;
+		if ( ! is_string( $version ) ) {
+			return null;
+		}
+
+		$version = trim( $version );
+		return '' === $version ? null : $version;
+	}
+
+	/**
+	 * Resolve the configured workflow idempotency key from persisted state.
+	 *
+	 * @param array $state Workflow state.
+	 * @return string|null
+	 */
+	private function idempotency_key_from_state( array $state ): ?string {
+		$key = $state['_idempotency_key'] ?? null;
+		if ( ! is_string( $key ) ) {
+			return null;
+		}
+
+		$key = trim( $key );
+		return '' === $key ? null : $key;
+	}
+
+	/**
+	 * Compute the size of the public workflow state.
+	 *
+	 * @param array $state Workflow state.
+	 * @return int
+	 */
+	private function public_state_size_bytes( array $state ): int {
+		return strlen( json_encode( $this->public_state( $state ), JSON_THROW_ON_ERROR ) );
+	}
+
+	/**
+	 * Resolve the configured workflow budget from persisted state.
+	 *
+	 * @param array $state Workflow state.
+	 * @return array<string,int>
+	 */
+	private function workflow_budget_limits( array $state ): array {
+		$limits = $state['_workflow_budget'] ?? null;
+		if ( ! is_array( $limits ) ) {
+			return array();
+		}
+
+		$normalized = array();
+		foreach ( array( 'max_transitions', 'max_fan_out_items', 'max_state_bytes' ) as $key ) {
+			if ( isset( $limits[ $key ] ) && (int) $limits[ $key ] > 0 ) {
+				$normalized[ $key ] = (int) $limits[ $key ];
+			}
+		}
+
+		return $normalized;
+	}
+
+	/**
+	 * Build public budget metadata for workflow inspection.
+	 *
+	 * @param array $state Workflow state.
+	 * @return array<string,int>|null
+	 */
+	private function budget_summary_from_state( array $state ): ?array {
+		$limits = $this->workflow_budget_limits( $state );
+		if ( empty( $limits ) ) {
+			return null;
+		}
+
+		$counters = $state['_workflow_counters'] ?? array();
+		$summary  = $limits;
+		$summary['transitions']        = (int) ( $counters['transitions'] ?? 0 );
+		$summary['public_state_bytes'] = $this->public_state_size_bytes( $state );
+
+		return $summary;
+	}
+
+	/**
+	 * Increment the completed transition counter when budgets are enabled.
+	 *
+	 * @param array $state Workflow state.
+	 */
+	private function increment_transition_counter( array &$state ): void {
+		if ( empty( $this->workflow_budget_limits( $state ) ) ) {
+			return;
+		}
+
+		$state['_workflow_counters'] ??= array();
+		$state['_workflow_counters']['transitions'] = (int) ( $state['_workflow_counters']['transitions'] ?? 0 ) + 1;
+	}
+
+	/**
+	 * Throw when the workflow has exceeded a configured guardrail.
+	 *
+	 * @param array $state Workflow state.
+	 * @throws WorkflowConstraintViolationException If a configured guardrail is exceeded.
+	 */
+	private function assert_workflow_budget( array $state ): void {
+		$limits = $this->workflow_budget_limits( $state );
+		if ( empty( $limits ) ) {
+			return;
+		}
+
+		$transitions = (int) ( $state['_workflow_counters']['transitions'] ?? 0 );
+		if ( isset( $limits['max_transitions'] ) && $transitions > $limits['max_transitions'] ) {
+			throw new WorkflowConstraintViolationException(
+				sprintf(
+					'Workflow exceeded max_transitions budget of %d.',
+					$limits['max_transitions']
+				)
+			);
+		}
+
+		$state_size = $this->public_state_size_bytes( $state );
+		if ( isset( $limits['max_state_bytes'] ) && $state_size > $limits['max_state_bytes'] ) {
+			throw new WorkflowConstraintViolationException(
+				sprintf(
+					'Workflow exceeded max_state_bytes budget of %d.',
+					$limits['max_state_bytes']
+				)
+			);
+		}
 	}
 
 	/**
@@ -610,6 +742,8 @@ class Workflow {
 
 		$current_step_def = $steps[ $step_index ] ?? null;
 		$this->push_compensation_snapshot( $state, $current_step_def, $step_index );
+		$this->increment_transition_counter( $state );
+		$this->assert_workflow_budget( $state );
 
 		$next_step = $step_index + 1;
 		$is_last   = $next_step >= $total_steps;
@@ -1056,6 +1190,8 @@ class Workflow {
 
 		$current_step_def = $steps[ $current_step ] ?? null;
 		$this->push_compensation_snapshot( $state, $current_step_def, $current_step );
+		$this->increment_transition_counter( $state );
+		$this->assert_workflow_budget( $state );
 
 		$next_step = $current_step + 1;
 		if ( isset( $step_output['_goto'] ) ) {
@@ -1349,6 +1485,7 @@ class Workflow {
 	 * @param int   $step_index     Step index.
 	 * @param array $workflow_state Current workflow state.
 	 * @return bool True when the placeholder job should be logged as completed.
+	 * @throws WorkflowConstraintViolationException If the workflow exceeds a configured guardrail.
 	 * @throws \RuntimeException If the fan-out step definition or source state is invalid.
 	 * @throws \Throwable If the database transaction fails.
 	 */
@@ -1404,12 +1541,24 @@ class Workflow {
 				return true;
 			}
 
-			$runtime = $state['_fan_out_steps'][ $step_index ] ?? null;
+				$runtime = $state['_fan_out_steps'][ $step_index ] ?? null;
 			if ( ! is_array( $runtime ) || empty( $runtime['initialized'] ) ) {
 				$items = $state[ $step_def['items_key'] ] ?? array();
 				if ( ! is_array( $items ) ) {
 					throw new \RuntimeException(
 						"Fan-out step '{$step_def['name']}' expected state key '{$step_def['items_key']}' to contain an array."
+					);
+				}
+
+				$max_fan_out_items = $this->workflow_budget_limits( $state )['max_fan_out_items'] ?? null;
+				if ( null !== $max_fan_out_items && count( $items ) > $max_fan_out_items ) {
+					throw new WorkflowConstraintViolationException(
+						sprintf(
+							"Fan-out step '%s' planned %d items, exceeding max_fan_out_items budget of %d.",
+							$step_def['name'],
+							count( $items ),
+							$max_fan_out_items
+						)
 					);
 				}
 
@@ -2275,6 +2424,8 @@ class Workflow {
 				$is_last   = $next_step >= $total_steps;
 				$is_paused = WorkflowStatus::Paused->value === $wf_row['status'];
 				$this->push_compensation_snapshot( $state, $current_step_def, $current_step );
+				$this->increment_transition_counter( $state );
+				$this->assert_workflow_budget( $state );
 
 				if ( $is_last ) {
 					$upd_stmt = $pdo->prepare(
@@ -2407,6 +2558,8 @@ class Workflow {
 			$parent_steps     = $parent_state['_steps'] ?? array();
 			$current_step_def = $parent_steps[ $parent_step ] ?? null;
 			$this->push_compensation_snapshot( $parent_state, $current_step_def, $parent_step );
+			$this->increment_transition_counter( $parent_state );
+			$this->assert_workflow_budget( $parent_state );
 
 			$parent_total_steps = (int) $parent_row['total_steps'];
 			$next_step          = $parent_step + 1;
@@ -2791,6 +2944,9 @@ class Workflow {
 			parent_step_index: $row['parent_step_index'] !== null ? (int) $row['parent_step_index'] : null,
 			wait_type: $wait['type'] ?? null,
 			waiting_for: $wait['waiting_for'] ?? ( $wait['signal_names'] ?? null ),
+			definition_version: $this->definition_version_from_state( $state ),
+			idempotency_key: $this->idempotency_key_from_state( $state ),
+			budget: $this->budget_summary_from_state( $state ),
 		);
 
 		if ( null !== $this->cache ) {
@@ -3003,6 +3159,9 @@ class Workflow {
 				parent_step_index: $row['parent_step_index'] !== null ? (int) $row['parent_step_index'] : null,
 				wait_type: $wait['type'] ?? null,
 				waiting_for: $wait['waiting_for'] ?? ( $wait['signal_names'] ?? null ),
+				definition_version: $this->definition_version_from_state( $state ),
+				idempotency_key: $this->idempotency_key_from_state( $state ),
+				budget: $this->budget_summary_from_state( $state ),
 			);
 		}
 

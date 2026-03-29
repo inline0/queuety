@@ -84,6 +84,41 @@ class WorkflowBuilder {
 	private ?string $deadline_handler = null;
 
 	/**
+	 * Optional version identifier for the workflow definition.
+	 *
+	 * @var string|null
+	 */
+	private ?string $definition_version = null;
+
+	/**
+	 * Durable idempotency key for workflow dispatch.
+	 *
+	 * @var string|null
+	 */
+	private ?string $idempotency_key = null;
+
+	/**
+	 * Maximum number of completed step transitions allowed for this workflow.
+	 *
+	 * @var int|null
+	 */
+	private ?int $max_transitions = null;
+
+	/**
+	 * Maximum number of runtime-discovered fan-out items allowed in a single step.
+	 *
+	 * @var int|null
+	 */
+	private ?int $max_fan_out_items = null;
+
+	/**
+	 * Maximum size in bytes of the public workflow state.
+	 *
+	 * @var int|null
+	 */
+	private ?int $max_state_bytes = null;
+
+	/**
 	 * Whether to automatically run compensations when the workflow fails.
 	 *
 	 * @var bool
@@ -492,6 +527,91 @@ class WorkflowBuilder {
 	}
 
 	/**
+	 * Tag the workflow definition with an application-level version.
+	 *
+	 * @param string $version Version label.
+	 * @return self
+	 * @throws \InvalidArgumentException If the version is empty.
+	 */
+	public function version( string $version ): self {
+		$version = trim( $version );
+		if ( '' === $version ) {
+			throw new \InvalidArgumentException( 'Workflow version cannot be empty.' );
+		}
+
+		$this->definition_version = $version;
+		return $this;
+	}
+
+	/**
+	 * Make workflow dispatch idempotent for a caller-supplied key.
+	 *
+	 * Re-dispatching the same workflow builder with the same key returns the
+	 * original workflow ID instead of creating a duplicate run.
+	 *
+	 * @param string $key Durable idempotency key.
+	 * @return self
+	 * @throws \InvalidArgumentException If the key is empty.
+	 */
+	public function idempotency_key( string $key ): self {
+		$key = trim( $key );
+		if ( '' === $key ) {
+			throw new \InvalidArgumentException( 'Workflow idempotency key cannot be empty.' );
+		}
+
+		$this->idempotency_key = $key;
+		return $this;
+	}
+
+	/**
+	 * Limit how many step transitions a workflow may complete before failing.
+	 *
+	 * @param int $max Maximum completed transitions.
+	 * @return self
+	 * @throws \InvalidArgumentException If the limit is less than 1.
+	 */
+	public function max_transitions( int $max ): self {
+		if ( $max < 1 ) {
+			throw new \InvalidArgumentException( 'Workflow max_transitions must be at least 1.' );
+		}
+
+		$this->max_transitions = $max;
+		return $this;
+	}
+
+	/**
+	 * Limit how many fan-out items a single runtime expansion may create.
+	 *
+	 * @param int $max Maximum fan-out items.
+	 * @return self
+	 * @throws \InvalidArgumentException If the limit is less than 1.
+	 */
+	public function max_fan_out_items( int $max ): self {
+		if ( $max < 1 ) {
+			throw new \InvalidArgumentException( 'Workflow max_fan_out_items must be at least 1.' );
+		}
+
+		$this->max_fan_out_items = $max;
+		return $this;
+	}
+
+	/**
+	 * Limit the size of the public workflow state.
+	 *
+	 * @param int $bytes Maximum encoded public-state size in bytes.
+	 * @return self
+	 * @throws \InvalidArgumentException If the limit is less than 1.
+	 */
+	public function max_state_bytes( int $bytes ): self {
+		if ( $bytes < 1 ) {
+			throw new \InvalidArgumentException( 'Workflow max_state_bytes must be at least 1.' );
+		}
+
+		$this->max_state_bytes = $bytes;
+		return $this;
+	}
+
+	/**
 	 * Set the queue for all steps.
 	 *
 	 * @param string $queue Queue name.
@@ -648,6 +768,7 @@ class WorkflowBuilder {
 	 * @param array $initial_payload Starting state for the workflow.
 	 * @return int The workflow ID.
 	 * @throws \RuntimeException If the workflow has no steps.
+	 * @throws \PDOException If the idempotency key insert races with another dispatch.
 	 * @throws \Throwable If the database transaction fails.
 	 */
 	public function dispatch( array $initial_payload = array() ): int {
@@ -683,8 +804,41 @@ class WorkflowBuilder {
 			$state['_on_deadline'] = $this->deadline_handler;
 		}
 
+		if ( null !== $this->definition_version ) {
+			$state['_definition_version'] = $this->definition_version;
+		}
+
+		if ( null !== $this->idempotency_key ) {
+			$state['_idempotency_key'] = $this->idempotency_key;
+		}
+
+		$workflow_budget = array_filter(
+			array(
+				'max_transitions'  => $this->max_transitions,
+				'max_fan_out_items' => $this->max_fan_out_items,
+				'max_state_bytes'  => $this->max_state_bytes,
+			),
+			static fn( mixed $value ): bool => null !== $value
+		);
+		if ( ! empty( $workflow_budget ) ) {
+			$state['_workflow_budget']   = $workflow_budget;
+			$state['_workflow_counters'] = array( 'transitions' => 0 );
+		}
+
 		if ( $this->compensate_on_failure ) {
 			$state['_compensate_on_failure'] = true;
+		}
+
+		if (
+			null !== $this->max_state_bytes
+			&& strlen( json_encode( $initial_payload, JSON_THROW_ON_ERROR ) ) > $this->max_state_bytes
+		) {
+			throw new \RuntimeException(
+				sprintf(
+					'Workflow initial state exceeds configured max_state_bytes budget of %d.',
+					$this->max_state_bytes
+				)
+			);
 		}
 
 		$deadline_at = null;
@@ -694,6 +848,14 @@ class WorkflowBuilder {
 
 		$pdo->beginTransaction();
 		try {
+			if ( null !== $this->idempotency_key ) {
+				$existing_workflow_id = $this->find_existing_workflow_id_for_key( $this->idempotency_key, $pdo );
+				if ( null !== $existing_workflow_id ) {
+					$pdo->commit();
+					return $existing_workflow_id;
+				}
+			}
+
 			$stmt = $pdo->prepare(
 				"INSERT INTO {$wf_tbl} (name, status, state, current_step, total_steps, deadline_at)
 				VALUES (:name, 'running', :state, 0, :total_steps, :deadline_at)"
@@ -707,6 +869,20 @@ class WorkflowBuilder {
 				)
 			);
 			$workflow_id = (int) $pdo->lastInsertId();
+
+			if ( null !== $this->idempotency_key ) {
+				$key_tbl  = $this->conn->table( Config::table_workflow_dispatch_keys() );
+				$key_stmt = $pdo->prepare(
+					"INSERT INTO {$key_tbl} (dispatch_key, workflow_id)
+					VALUES (:dispatch_key, :workflow_id)"
+				);
+				$key_stmt->execute(
+					array(
+						'dispatch_key' => $this->idempotency_key,
+						'workflow_id'  => $workflow_id,
+					)
+				);
+			}
 
 			$first_step = $built_steps[0];
 			$this->enqueue_step( $first_step, $workflow_id, 0 );
@@ -722,10 +898,58 @@ class WorkflowBuilder {
 
 			$pdo->commit();
 			return $workflow_id;
+		} catch ( \PDOException $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+
+			if ( null !== $this->idempotency_key && $this->is_duplicate_key_error( $e ) ) {
+				$existing_workflow_id = $this->find_existing_workflow_id_for_key( $this->idempotency_key );
+				if ( null !== $existing_workflow_id ) {
+					return $existing_workflow_id;
+				}
+			}
+
+			throw $e;
 		} catch ( \Throwable $e ) {
-			$pdo->rollBack();
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
 			throw $e;
 		}
+	}
+
+	/**
+	 * Find an existing workflow ID for a durable idempotency key.
+	 *
+	 * @param string    $key Workflow idempotency key.
+	 * @param \PDO|null $pdo Optional PDO handle to reuse.
+	 * @return int|null
+	 */
+	private function find_existing_workflow_id_for_key( string $key, ?\PDO $pdo = null ): ?int {
+		$pdo     = $pdo ?? $this->conn->pdo();
+		$key_tbl = $this->conn->table( Config::table_workflow_dispatch_keys() );
+		$stmt    = $pdo->prepare(
+			"SELECT workflow_id FROM {$key_tbl} WHERE dispatch_key = :dispatch_key LIMIT 1"
+		);
+		$stmt->execute( array( 'dispatch_key' => $key ) );
+		$workflow_id = $stmt->fetchColumn();
+
+		return false === $workflow_id ? null : (int) $workflow_id;
+	}
+
+	/**
+	 * Whether the given database error represents a duplicate key violation.
+	 *
+	 * @param \PDOException $e Database exception.
+	 * @return bool
+	 */
+	private function is_duplicate_key_error( \PDOException $e ): bool {
+		$sql_state = (string) $e->getCode();
+		$error_info = $e->errorInfo; // phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase -- PDO exposes this property with a fixed name.
+		$driver     = $error_info[1] ?? null;
+
+		return '23000' === $sql_state || 1062 === $driver;
 	}
 
 	/**

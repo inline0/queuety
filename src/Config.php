@@ -162,6 +162,15 @@ class Config {
 	}
 
 	/**
+	 * Get the workflow dispatch idempotency table name.
+	 *
+	 * @return string
+	 */
+	public static function table_workflow_dispatch_keys(): string {
+		return defined( 'QUEUETY_TABLE_WORKFLOW_DISPATCH_KEYS' ) ? QUEUETY_TABLE_WORKFLOW_DISPATCH_KEYS : 'queuety_workflow_dispatch_keys';
+	}
+
+	/**
 	 * Get the locks table name.
 	 *
 	 * @return string

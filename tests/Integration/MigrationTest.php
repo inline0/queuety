@@ -33,6 +33,7 @@ class MigrationTest extends IntegrationTestCase {
 			'queuety_chunks',
 			'queuety_workflow_events',
 			'queuety_workflow_dependencies',
+			'queuety_workflow_dispatch_keys',
 		);
 
 		foreach ( $tables as $table ) {
@@ -191,6 +192,26 @@ class MigrationTest extends IntegrationTestCase {
 		);
 	}
 
+	public function test_migrate_0140_on_fresh_install(): void {
+		Schema::migrate_0140( $this->conn );
+
+		$keys_table = $this->conn->table( 'queuety_workflow_dispatch_keys' );
+		$this->assertTrue( Schema::table_exists( $this->conn, $keys_table ) );
+	}
+
+	public function test_migrate_0140_is_idempotent(): void {
+		Schema::migrate_0140( $this->conn );
+		Schema::migrate_0140( $this->conn );
+
+		$this->assertTrue(
+			Schema::index_exists(
+				$this->conn,
+				$this->conn->table( 'queuety_workflow_dispatch_keys' ),
+				'idx_dispatch_key'
+			)
+		);
+	}
+
 	// -- uninstall drops everything ------------------------------------------
 
 	public function test_uninstall_drops_all_tables(): void {
@@ -209,6 +230,7 @@ class MigrationTest extends IntegrationTestCase {
 			'queuety_chunks',
 			'queuety_workflow_events',
 			'queuety_workflow_dependencies',
+			'queuety_workflow_dispatch_keys',
 		);
 
 		foreach ( $tables as $table ) {

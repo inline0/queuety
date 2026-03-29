@@ -71,6 +71,18 @@ class WorkflowBuilderTest extends TestCase {
 		$this->assertSame( $builder, $result );
 	}
 
+	public function test_metadata_and_budget_methods_return_self_for_chaining(): void {
+		$builder = $this->make_builder();
+		$result  = $builder
+			->version( 'agents.v2' )
+			->idempotency_key( 'run:42' )
+			->max_transitions( 8 )
+			->max_fan_out_items( 16 )
+			->max_state_bytes( 4096 );
+
+		$this->assertSame( $builder, $result );
+	}
+
 	public function test_dispatch_throws_when_no_steps_defined(): void {
 		$builder = $this->make_builder();
 

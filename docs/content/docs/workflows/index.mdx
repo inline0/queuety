@@ -134,6 +134,8 @@ The `prune_state_after()` method enables automatic removal of old step outputs t
 
 Use `compensate_with()` to attach a per-step compensation handler. Use `compensate_on_failure()` when you want completed step compensations to run automatically after a workflow failure, not just on explicit cancellation. See [Compensation](/docs/workflows/compensation).
 
+Use workflow guardrails when you need safer long-running orchestration: `version()` tags a definition with an application-level version, `idempotency_key()` makes dispatch durable across retries or duplicate requests, and `max_transitions()`, `max_fan_out_items()`, and `max_state_bytes()` fail runaway runs before they spiral. See [Guardrails](/docs/workflows/guardrails).
+
 ## Step types
 
 Queuety supports nine types of steps within a workflow:

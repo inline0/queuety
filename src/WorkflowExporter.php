@@ -39,11 +39,13 @@ class WorkflowExporter {
 			throw new \RuntimeException( "Workflow {$workflow_id} not found." );
 		}
 
+		$workflow_state = json_decode( $wf_row['state'], true ) ?: array();
+
 		$wf_data = array(
 			'id'                 => (int) $wf_row['id'],
 			'name'               => $wf_row['name'],
 			'status'             => $wf_row['status'],
-			'state'              => json_decode( $wf_row['state'], true ) ?: array(),
+			'state'              => $workflow_state,
 			'current_step'       => (int) $wf_row['current_step'],
 			'total_steps'        => (int) $wf_row['total_steps'],
 			'parent_workflow_id' => $wf_row['parent_workflow_id'] ? (int) $wf_row['parent_workflow_id'] : null,
@@ -53,6 +55,8 @@ class WorkflowExporter {
 			'failed_at'          => $wf_row['failed_at'],
 			'error_message'      => $wf_row['error_message'],
 			'deadline_at'        => $wf_row['deadline_at'] ?? null,
+			'definition_version' => $workflow_state['_definition_version'] ?? null,
+			'idempotency_key'    => $workflow_state['_idempotency_key'] ?? null,
 		);
 
 		$stmt = $pdo->prepare(
@@ -135,7 +139,7 @@ class WorkflowExporter {
 			'events'          => $events,
 			'logs'            => $logs,
 			'exported_at'     => gmdate( 'c' ),
-			'queuety_version' => '0.12.0',
+			'queuety_version' => Schema::CURRENT_VERSION,
 		);
 	}
 

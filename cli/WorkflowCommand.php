@@ -35,8 +35,20 @@ class WorkflowCommand extends \WP_CLI_Command {
 		\WP_CLI::log( "Status:   {$state->status->value}" );
 		\WP_CLI::log( "Step:     {$state->current_step}/{$state->total_steps}" );
 
+		if ( null !== $state->definition_version ) {
+			\WP_CLI::log( "Version:  {$state->definition_version}" );
+		}
+
+		if ( null !== $state->idempotency_key ) {
+			\WP_CLI::log( "Key:      {$state->idempotency_key}" );
+		}
+
 		if ( null !== $state->wait_type && ! empty( $state->waiting_for ) ) {
 			\WP_CLI::log( 'Waiting:  ' . $state->wait_type . ' => ' . implode( ', ', array_map( 'strval', $state->waiting_for ) ) );
+		}
+
+		if ( null !== $state->budget ) {
+			\WP_CLI::log( 'Budget:   ' . json_encode( $state->budget, JSON_UNESCAPED_SLASHES ) );
 		}
 
 		if ( ! empty( $state->state ) ) {
@@ -133,15 +145,19 @@ class WorkflowCommand extends \WP_CLI_Command {
 
 		$items = array_map(
 			fn( $wf ) => array(
-				'ID'     => $wf->workflow_id,
-				'Name'   => $wf->name,
-				'Status' => $wf->status->value,
-				'Step'   => "{$wf->current_step}/{$wf->total_steps}",
+				'ID'      => $wf->workflow_id,
+				'Name'    => $wf->name,
+				'Version' => $wf->definition_version ?? '-',
+				'Status'  => $wf->status->value,
+				'Step'    => "{$wf->current_step}/{$wf->total_steps}",
+				'Waiting' => null !== $wf->wait_type && ! empty( $wf->waiting_for )
+					? $wf->wait_type . ':' . implode( ',', array_map( 'strval', $wf->waiting_for ) )
+					: '-',
 			),
 			$workflows
 		);
 
-		\WP_CLI\Utils\format_items( $format, $items, array( 'ID', 'Name', 'Status', 'Step' ) );
+		\WP_CLI\Utils\format_items( $format, $items, array( 'ID', 'Name', 'Version', 'Status', 'Step', 'Waiting' ) );
 	}
 
 	/**

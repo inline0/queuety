@@ -27,6 +27,9 @@ readonly class WorkflowState {
 	 * @param int|null       $parent_step_index  Parent step index, if this is a sub-workflow.
 	 * @param string|null    $wait_type          Wait primitive currently blocking the workflow, if any.
 	 * @param array|null     $waiting_for        Wait targets currently blocking the workflow, if any.
+	 * @param string|null    $definition_version Application-level workflow definition version, if set.
+	 * @param string|null    $idempotency_key    Durable dispatch key, if set.
+	 * @param array|null     $budget             Public budget summary for the run, if configured.
 	 */
 	public function __construct(
 		public int $workflow_id,
@@ -39,5 +42,8 @@ readonly class WorkflowState {
 		public ?int $parent_step_index = null,
 		public ?string $wait_type = null,
 		public ?array $waiting_for = null,
+		public ?string $definition_version = null,
+		public ?string $idempotency_key = null,
+		public ?array $budget = null,
 	) {}
 }
