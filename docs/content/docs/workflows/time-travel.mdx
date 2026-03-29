@@ -1,0 +1,106 @@
+---
+title: Time Travel
+description: Rewind a workflow to a previous step and re-run from there.
+---
+
+# Workflow Time Travel
+
+Queuety can rewind a workflow to a previous step and resume execution from that point. This is useful when a step produced bad output, when you want to retry with different configuration, or when you need to recover from corrupt data without restarting the entire workflow.
+
+Rewinding relies on the [Workflow Event Log](/docs/workflows/event-log). The event log must have state snapshots for the target step.
+
+## Rewinding a workflow
+
+### PHP API
+
+Call `Queuety::rewind_workflow()` with the workflow ID and the step index to rewind to:
+
+```php
+use Queuety\Queuety;
+
+// Rewind workflow 42 to step 1.
+// The state is restored to the snapshot taken after step 1 completed,
+// and step 2 is enqueued for re-execution.
+Queuety::rewind_workflow( $workflow_id, to_step: 1 );
+```
+
+The `to_step` parameter is the 0-based index of the step whose completed state snapshot should be restored. Execution resumes from the _next_ step (to_step + 1).
+
+### CLI
+
+```bash
+wp queuety workflow rewind <id> <step>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID (required) |
+| `<step>` | Step index to rewind to, 0-based (required) |
+
+```bash
+wp queuety workflow rewind 42 1
+```
+
+## How it works
+
+When you rewind a workflow to step N:
+
+1. The event log is queried for the state snapshot recorded after step N completed
+2. If no snapshot exists, a `RuntimeException` is thrown
+3. The workflow row is locked
+4. The workflow state is replaced with the snapshot, preserving all reserved keys (`_steps`, `_queue`, `_priority`, etc.) from the current workflow row
+5. `current_step` is set to N + 1 and `status` is set to `running`
+6. Any `error_message` and `failed_at` fields are cleared
+7. The step at index N + 1 is enqueued for processing
+8. A `workflow_rewound` log event is recorded
+
+The worker then picks up the enqueued step and the workflow continues as normal from that point forward.
+
+## Requirements
+
+Rewinding requires state snapshots in the event log. The event log records snapshots automatically for every `step_completed` event. If the event log has been pruned (via `WorkflowEventLog::prune()`) and the snapshot for the target step no longer exists, the rewind will fail.
+
+Make sure your event log retention covers the period you might need to rewind to.
+
+## Use cases
+
+### Fix a buggy step handler
+
+If a step handler had a bug that produced incorrect output, you can deploy the fix and rewind:
+
+```php
+// Step 2 (CallLLMHandler) produced garbled output due to a prompt bug.
+// After fixing CallLLMHandler, rewind to step 1 so step 2 runs again
+// with the corrected handler.
+Queuety::rewind_workflow( $workflow_id, to_step: 1 );
+```
+
+### Retry with different configuration
+
+When a step failed due to external factors (API rate limit, bad credentials), fix the configuration and rewind to re-run:
+
+```php
+// Step 3 failed because the API key was expired.
+// After updating the key, rewind to step 2 so step 3 retries.
+Queuety::rewind_workflow( $workflow_id, to_step: 2 );
+```
+
+### Recover from bad data
+
+If an earlier step injected bad data into the state, rewind to a known-good snapshot:
+
+```php
+// Step 0 fetched correct data, but step 1 corrupted it.
+// Rewind to step 0 to restore the good state and re-run step 1.
+Queuety::rewind_workflow( $workflow_id, to_step: 0 );
+```
+
+## Comparison with retry
+
+| Aspect | `retry_workflow()` | `rewind_workflow()` |
+|---|---|---|
+| Resumes from | The failed step | Any previous step |
+| State | Current workflow state | Restored from event log snapshot |
+| Requires | Workflow is in `failed` status | Event log snapshot at target step |
+| Status after | `running` | `running` |
+| Log event | `workflow_resumed` | `workflow_rewound` |

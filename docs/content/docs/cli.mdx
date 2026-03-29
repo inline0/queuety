@@ -352,6 +352,86 @@ wp queuety workflow state-at 42 0
 
 See [Workflow Event Log](/docs/workflows/event-log) for details on what gets recorded and use cases.
 
+### `wp queuety workflow rewind`
+
+Rewind a workflow to a previous step and re-run from there. The state is restored from the event log snapshot at the given step.
+
+```bash
+wp queuety workflow rewind <id> <step>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID (required) |
+| `<step>` | Step index to rewind to, 0-based (required) |
+
+```bash
+wp queuety workflow rewind 42 1
+```
+
+See [Time Travel](/docs/workflows/time-travel) for details.
+
+### `wp queuety workflow fork`
+
+Fork a running workflow into an independent copy at its current state. The forked workflow gets a new ID and proceeds independently.
+
+```bash
+wp queuety workflow fork <id>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID to fork (required) |
+
+```bash
+wp queuety workflow fork 42
+# Success: Workflow #42 forked. New workflow ID: 43.
+```
+
+See [Forking](/docs/workflows/forking) for details.
+
+### `wp queuety workflow export`
+
+Export a workflow's full execution history to JSON. Includes the workflow row, all jobs, events, and log entries.
+
+```bash
+wp queuety workflow export <id> [--output=<file>]
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID (required) |
+| `--output=<file>` | File path to write the JSON to. Defaults to stdout. |
+
+```bash
+# Print to stdout
+wp queuety workflow export 42
+
+# Write to a file
+wp queuety workflow export 42 --output=/tmp/workflow-42.json
+```
+
+See [Export and Replay](/docs/workflows/export-replay) for details on the JSON structure.
+
+### `wp queuety workflow replay`
+
+Replay an exported workflow from a JSON file. Creates a new workflow with the exported state and step definitions.
+
+```bash
+wp queuety workflow replay <file>
+```
+
+| Option | Description |
+|---|---|
+| `<file>` | Path to the exported JSON file (required) |
+
+```bash
+wp queuety workflow replay /tmp/workflow-42.json
+# Success: Workflow replayed. New workflow ID: 85.
+```
+
+See [Export and Replay](/docs/workflows/export-replay) for details.
+
 ## Schedule commands
 
 ### `wp queuety schedule list`
@@ -424,7 +504,7 @@ wp queuety log [--job=<id>] [--workflow=<id>] [--handler=<name>] [--event=<event
 | `--job=<id>` | Filter by job ID |
 | `--workflow=<id>` | Filter by workflow ID |
 | `--handler=<name>` | Filter by handler name |
-| `--event=<event>` | Filter by event type (`started`, `completed`, `failed`, `buried`, `retried`, `workflow_started`, `workflow_completed`, `workflow_failed`, `workflow_paused`, `workflow_resumed`, `workflow_cancelled`, `debug`) |
+| `--event=<event>` | Filter by event type (`started`, `completed`, `failed`, `buried`, `retried`, `workflow_started`, `workflow_completed`, `workflow_failed`, `workflow_paused`, `workflow_resumed`, `workflow_cancelled`, `workflow_rewound`, `workflow_forked`, `workflow_deadline_exceeded`, `debug`) |
 | `--since=<datetime>` | Show entries since this datetime |
 | `--limit=<n>` | Max entries to show (default: `50`) |
 | `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml` |

@@ -261,6 +261,8 @@ $workflow_id = Queuety::workflow( 'generate_report' )
 | `max_attempts( int $max )` | Set max retry attempts per step. |
 | `on_cancel( string $class )` | Register a cleanup handler class for cancellation. See [Cancellation](/docs/workflows/cancellation). |
 | `prune_state_after( int $steps = 2 )` | Enable automatic state pruning. Removes step outputs older than the threshold. See [State Pruning](/docs/features/state-pruning). |
+| `must_complete_within( int $seconds, int $minutes, int $hours, int $days )` | Set a deadline for the workflow. All durations are summed. See [Deadlines](/docs/workflows/deadlines). |
+| `on_deadline( string $class )` | Register a handler called when the workflow deadline is exceeded. See [Deadlines](/docs/workflows/deadlines). |
 | `dispatch( array $payload )` | Dispatch the workflow. Returns the workflow ID. |
 
 ### `Queuety::workflow_status( $workflow_id )`
@@ -309,6 +311,66 @@ Queuety::cancel_workflow( $workflow_id );
 ```
 
 Throws `RuntimeException` if the workflow is already `completed` or `cancelled`. See [Cancellation](/docs/workflows/cancellation) for details.
+
+### `Queuety::rewind_workflow( $workflow_id, $to_step )`
+
+Rewind a workflow to a previous step and re-run from there. The state is restored from the event log snapshot at the given step, and the next step is enqueued.
+
+```php
+Queuety::rewind_workflow( $workflow_id, to_step: 1 );
+```
+
+Throws `RuntimeException` if no state snapshot exists for the target step. Requires the [Workflow Event Log](/docs/workflows/event-log). See [Time Travel](/docs/workflows/time-travel) for details.
+
+### `Queuety::fork_workflow( $workflow_id )`
+
+Fork a running workflow into an independent copy at its current state. Returns the new workflow ID.
+
+```php
+$forked_id = Queuety::fork_workflow( $workflow_id );
+```
+
+The forked workflow gets its own ID and operates independently from the original. See [Forking](/docs/workflows/forking) for details.
+
+### `Queuety::export_workflow( $workflow_id )`
+
+Export a workflow's full execution history as a JSON-serializable array. Includes the workflow row, all jobs, workflow events, and log entries.
+
+```php
+$data = Queuety::export_workflow( $workflow_id );
+```
+
+See [Export and Replay](/docs/workflows/export-replay) for the JSON structure and use cases.
+
+### `Queuety::replay_workflow( $data )`
+
+Replay an exported workflow in the current environment. Creates a new workflow from the export data and returns the new workflow ID.
+
+```php
+$new_id = Queuety::replay_workflow( $data );
+```
+
+See [Export and Replay](/docs/workflows/export-replay) for details.
+
+### `Queuety::replace_wp_cron()`
+
+Replace the built-in WordPress cron system with Queuety's scheduler. Intercepts `wp_schedule_event()`, `wp_unschedule_event()`, and `wp_get_scheduled_event()` and routes recurring events through the Queuety worker.
+
+```php
+Queuety::replace_wp_cron();
+```
+
+Only works when WordPress is loaded. See [WP-Cron Replacement](/docs/features/wp-cron) for details.
+
+### `Queuety::restore_wp_cron()`
+
+Restore WordPress default cron behavior by removing the Queuety cron bridge hooks.
+
+```php
+Queuety::restore_wp_cron();
+```
+
+See [WP-Cron Replacement](/docs/features/wp-cron) for limitations.
 
 ### `Queuety::signal( $workflow_id, $name, $data )`
 
@@ -867,18 +929,21 @@ enum BackoffStrategy: string {
 
 ```php
 enum LogEvent: string {
-    case Started           = 'started';
-    case Completed         = 'completed';
-    case Failed            = 'failed';
-    case Buried            = 'buried';
-    case Retried           = 'retried';
-    case WorkflowStarted   = 'workflow_started';
-    case WorkflowCompleted = 'workflow_completed';
-    case WorkflowFailed    = 'workflow_failed';
-    case WorkflowPaused    = 'workflow_paused';
-    case WorkflowResumed   = 'workflow_resumed';
-    case WorkflowCancelled = 'workflow_cancelled';
-    case Debug             = 'debug';
+    case Started                  = 'started';
+    case Completed                = 'completed';
+    case Failed                   = 'failed';
+    case Buried                   = 'buried';
+    case Retried                  = 'retried';
+    case WorkflowStarted          = 'workflow_started';
+    case WorkflowCompleted        = 'workflow_completed';
+    case WorkflowFailed           = 'workflow_failed';
+    case WorkflowPaused           = 'workflow_paused';
+    case WorkflowResumed          = 'workflow_resumed';
+    case WorkflowCancelled        = 'workflow_cancelled';
+    case WorkflowRewound          = 'workflow_rewound';
+    case WorkflowForked           = 'workflow_forked';
+    case WorkflowDeadlineExceeded = 'workflow_deadline_exceeded';
+    case Debug                    = 'debug';
 }
 ```
 

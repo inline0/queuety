@@ -1,0 +1,106 @@
+---
+title: Forking
+description: Fork a running workflow into an independent copy at its current state.
+---
+
+# Workflow Forking
+
+Queuety can fork a running workflow into a fully independent copy. The forked workflow starts at the same step and with the same state as the original, but the two workflows proceed independently from that point. Changes to one do not affect the other.
+
+## Forking a workflow
+
+### PHP API
+
+Call `Queuety::fork_workflow()` with the workflow ID. It returns the new workflow ID:
+
+```php
+use Queuety\Queuety;
+
+$forked_id = Queuety::fork_workflow( $workflow_id );
+```
+
+### CLI
+
+```bash
+wp queuety workflow fork <id>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID to fork (required) |
+
+```bash
+wp queuety workflow fork 42
+# Success: Workflow #42 forked. New workflow ID: 43.
+```
+
+## How it works
+
+When you fork a workflow:
+
+1. The original workflow row is locked and read
+2. A new workflow row is inserted with the same state, step definitions, and current step
+3. The new workflow's name is `{original_name}_fork_{timestamp}`
+4. The current step is enqueued for the forked workflow
+5. A `workflow_forked` log event is recorded on both the original and forked workflow
+6. The original workflow continues processing as normal
+
+The forked workflow is completely independent. It has its own workflow ID, its own state copy, and its own job queue entries. From the fork point onward, each workflow can diverge freely.
+
+## Use cases
+
+### A/B testing step handlers
+
+Fork a workflow to test two different implementations of an upcoming step:
+
+```php
+// Original workflow will use the existing CallLLMHandler (GPT-4).
+// Fork it to test with a different handler.
+$forked_id = Queuety::fork_workflow( $workflow_id );
+
+// Modify the forked workflow's state to use a different model.
+// (Update the state via a custom step or direct DB update.)
+```
+
+### What-if analysis
+
+Fork a workflow at a decision point to explore different branches:
+
+```php
+// Workflow is at step 3, about to process data.
+// Fork it so we can try two different processing strategies.
+$fork_a = Queuety::fork_workflow( $workflow_id );
+$fork_b = Queuety::fork_workflow( $workflow_id );
+```
+
+Each fork proceeds with the same input state but can be modified to take different paths.
+
+### Parallel experimentation
+
+When a workflow reaches a point where you want to try multiple approaches in parallel, fork it for each approach and compare the results after all forks complete.
+
+## Tracking forks
+
+The log event on each workflow includes a reference to the other:
+
+- On the original: `context.forked_workflow_id` points to the new workflow
+- On the fork: `context.forked_from_workflow_id` points to the original
+
+Query the logs to find all forks of a workflow:
+
+```php
+$logs = Queuety::logger()->for_workflow( $workflow_id );
+
+foreach ( $logs as $entry ) {
+    if ( 'workflow_forked' === $entry['event'] ) {
+        $context = json_decode( $entry['context'] ?? '{}', true );
+        // $context['forked_workflow_id'] is the new workflow
+    }
+}
+```
+
+## Limitations
+
+- The forked workflow does not inherit the event log history from the original. It starts with a clean event log.
+- Sub-workflow relationships are not duplicated. If the original workflow had a running sub-workflow, the fork does not get a copy of it.
+- The fork is a snapshot of the current state. Any in-flight jobs for the original workflow are not duplicated.
