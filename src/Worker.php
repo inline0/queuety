@@ -145,20 +145,17 @@ class Worker {
 				}
 				sleep( Config::worker_sleep() );
 
-				// Check for stale jobs periodically.
 				if ( time() - $stale_check_timer >= 60 ) {
 					$this->recover_stale();
 					$stale_check_timer = time();
 				}
 
-				// Check for due schedules periodically.
 				if ( null !== $this->scheduler && time() - $schedule_check_timer >= 60 ) {
 					$this->debug_log( 'Running scheduler tick.', $primary_queue );
 					$this->scheduler->tick();
 					$schedule_check_timer = time();
 				}
 
-				// Check for expired workflow deadlines periodically.
 				if ( time() - $deadline_check_timer >= 60 ) {
 					$this->workflow->check_deadlines();
 					$deadline_check_timer = time();
@@ -167,7 +164,6 @@ class Worker {
 				continue;
 			}
 
-			// Check rate limiting before processing.
 			if ( null !== $this->rate_limiter ) {
 				$this->register_handler_rate_limit( $job->handler );
 
@@ -191,7 +187,6 @@ class Worker {
 				break;
 			}
 
-			// Memory and job count safety limits.
 			$memory_mb = memory_get_usage( true ) / 1024 / 1024;
 			if ( $memory_mb >= Config::worker_max_memory() ) {
 				break;
@@ -200,19 +195,16 @@ class Worker {
 				break;
 			}
 
-			// Periodic stale check.
 			if ( time() - $stale_check_timer >= 60 ) {
 				$this->recover_stale();
 				$stale_check_timer = time();
 			}
 
-			// Periodic schedule check.
 			if ( null !== $this->scheduler && time() - $schedule_check_timer >= 60 ) {
 				$this->scheduler->tick();
 				$schedule_check_timer = time();
 			}
 
-			// Periodic deadline check.
 			if ( time() - $deadline_check_timer >= 60 ) {
 				$this->workflow->check_deadlines();
 				$deadline_check_timer = time();
@@ -243,14 +235,13 @@ class Worker {
 				break;
 			}
 
-			// Check rate limiting before processing.
 			if ( null !== $this->rate_limiter ) {
 				$this->register_handler_rate_limit( $job->handler );
 
 				if ( $this->rate_limiter->is_limited( $job->handler ) ) {
 					$this->queue->unclaim( $job->id );
 
-					// Prevent infinite loop: if we keep skipping the same job, break.
+					// Flush mode should not spin forever on a single rate-limited head job.
 					if ( $last_skipped === $job->id ) {
 						++$skip_streak;
 						if ( $skip_streak >= 2 ) {
@@ -289,7 +280,6 @@ class Worker {
 		$previous_handler = null;
 		$job_instance     = null;
 
-		// Read job properties from the job class if it implements Contracts\Job.
 		if ( $this->registry->is_job_class( $job->handler ) ) {
 			$job_props = $this->read_job_properties( $job->handler );
 
@@ -328,7 +318,6 @@ class Worker {
 			)
 		);
 
-		// Record step_started event for workflow steps.
 		if ( null !== $this->event_log && $job->is_workflow_step() && null !== $job->step_index ) {
 			$this->event_log->record_step_started(
 				workflow_id: $job->workflow_id,
@@ -337,7 +326,6 @@ class Worker {
 			);
 		}
 
-		// Install timeout alarm if pcntl is available.
 		if ( $pcntl_available ) {
 			$alarm_callback   = static function () use ( $timeout_seconds ): void {
 				throw new TimeoutException( $timeout_seconds );
@@ -346,11 +334,9 @@ class Worker {
 			pcntl_alarm( $timeout_seconds );
 		}
 
-		// Initialize heartbeat context for this job.
 		Heartbeat::init( $job->id, $this->conn );
 
 		try {
-			// Handle sub-workflow placeholder jobs directly.
 			if ( $job->is_workflow_step() && '__queuety_sub_workflow' === $job->handler ) {
 				$state = $this->workflow->get_state( $job->workflow_id ) ?? array();
 
@@ -402,8 +388,6 @@ class Worker {
 					);
 				}
 			} elseif ( $job->is_workflow_step() && '__queuety_timer' === $job->handler ) {
-				// Handle durable timer: the delay already happened via available_at.
-				// Mark the timer job as complete and advance the workflow.
 				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
 				$this->workflow->advance_step(
@@ -426,16 +410,13 @@ class Worker {
 					)
 				);
 			} elseif ( $job->is_workflow_step() && '__queuety_signal' === $job->handler ) {
-				// Handle signal step placeholder: trigger signal step processing in the workflow.
 				$wf_state = $this->workflow->get_state( $job->workflow_id ) ?? array();
 				$steps    = $wf_state['_steps'] ?? array();
 				$step_def = $steps[ $job->step_index ] ?? null;
 
-				// Mark the placeholder job as completed.
 				$this->queue->complete( $job->id );
 
 				if ( $step_def && 'signal' === ( $step_def['type'] ?? '' ) ) {
-					// Delegate to the workflow's signal step handling.
 					$this->workflow->handle_signal_step(
 						workflow_id: $job->workflow_id,
 						step_def: $step_def,
@@ -458,17 +439,14 @@ class Worker {
 					)
 				);
 			} elseif ( $this->registry->is_job_class( $job->handler ) ) {
-				// Contracts\Job class: deserialize, run through middleware pipeline.
 				$this->debug_log( "Deserializing job class: {$job->handler}", $job->queue );
 				$job_instance = JobSerializer::deserialize( $job->handler, $job->payload );
 
-				// Collect middleware from the job if it defines a middleware() method.
 				$middleware = array();
 				if ( method_exists( $job_instance, 'middleware' ) ) {
 					$middleware = $job_instance->middleware();
 				}
 
-				// Build the core closure that calls handle().
 				$queue_ref   = $this->queue;
 				$logger_ref  = $this->logger;
 				$webhook_ref = $this;
@@ -513,14 +491,12 @@ class Worker {
 					)
 				);
 
-				// Record batch completion if part of a batch.
 				$this->record_batch_completion( $job );
 			} else {
 
 				$this->debug_log( "Resolving handler: {$job->handler}", $job->queue );
 				$handler = $this->registry->resolve( $job->handler );
 
-				// Register rate limit from handler config if available.
 				if ( null !== $this->rate_limiter && $handler instanceof Handler ) {
 					$config = $handler->config();
 					if ( isset( $config['rate_limit'] ) && is_array( $config['rate_limit'] ) ) {
@@ -533,7 +509,6 @@ class Worker {
 				}
 
 				if ( $job->is_workflow_step() && $handler instanceof StreamingStep ) {
-					// Streaming workflow step: stream chunks with persistence.
 					$this->process_streaming_step( $job, $handler, $start_time );
 				} elseif ( $job->is_workflow_step() && $handler instanceof FanOutHandler && $this->is_fan_out_workflow_job( $job ) ) {
 					$state       = $this->workflow->get_state( $job->workflow_id ) ?? array();
@@ -553,7 +528,6 @@ class Worker {
 						duration_ms: $duration_ms,
 					);
 				} elseif ( $job->is_workflow_step() && $handler instanceof Step ) {
-					// Workflow step: load accumulated state and pass to handler.
 					$state  = $this->workflow->get_state( $job->workflow_id ) ?? array();
 					$output = $handler->handle( $state );
 
@@ -566,7 +540,6 @@ class Worker {
 						duration_ms: $duration_ms,
 					);
 				} else {
-					// Simple job.
 					$handler->handle( $this->public_payload( $job->payload ) );
 
 					$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
@@ -595,19 +568,16 @@ class Worker {
 						)
 					);
 
-					// Record batch completion if part of a batch.
 					$this->record_batch_completion( $job );
 				}
-			} // End of handler/step else block.
+			}
 
-			// Record successful execution for rate limiting.
 			if ( null !== $this->rate_limiter ) {
 				$this->rate_limiter->record( $job->handler );
 			}
 		} catch ( \Throwable $e ) {
 			$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
-			// Record step_failed event for workflow steps.
 			if ( null !== $this->event_log && $job->is_workflow_step() && null !== $job->step_index ) {
 				$this->event_log->record_step_failed(
 					workflow_id: $job->workflow_id,
@@ -618,10 +588,8 @@ class Worker {
 				);
 			}
 
-			// Determine effective max_attempts (job property overrides DB value).
 			$effective_max = $max_attempts;
 
-			// Calculate backoff from handler/job metadata when provided.
 			if ( is_array( $custom_backoff ) ) {
 				$attempt_index  = min( $job->attempts - 1, count( $custom_backoff ) - 1 );
 				$custom_backoff = $custom_backoff[ max( 0, $attempt_index ) ];
@@ -630,12 +598,10 @@ class Worker {
 			if ( $job->attempts >= $effective_max ) {
 				$is_fan_out_terminal = $job->is_workflow_step() && $this->is_fan_out_workflow_job( $job );
 
-				// Max attempts reached, bury the job.
 				if ( ! $is_fan_out_terminal ) {
 					$this->queue->bury( $job->id, $e->getMessage() );
 				}
 
-				// Call failed() hook on the job instance if available.
 				$this->call_failed_hook( $job, $job_instance, $e );
 				$this->call_chain_catch( $job, $e );
 
@@ -665,7 +631,6 @@ class Worker {
 					)
 				);
 
-				// If part of a workflow, mark the workflow as failed.
 				if ( $job->is_workflow_step() ) {
 					$workflow_failed = false;
 
@@ -693,10 +658,8 @@ class Worker {
 					}
 				}
 
-				// Record batch failure if part of a batch.
 				$this->record_batch_failure( $job );
 			} else {
-				// Retry with backoff.
 				$backoff = $custom_backoff ?? Queue::calculate_backoff( $job->attempts, $backoff_strategy ?? Config::retry_backoff() );
 				$this->queue->retry( $job->id, $backoff );
 
@@ -740,10 +703,8 @@ class Worker {
 				);
 			}
 		} finally {
-			// Clear heartbeat context.
 			Heartbeat::clear();
 
-			// Reset the alarm and restore previous signal handler.
 			if ( $pcntl_available ) {
 				pcntl_alarm( 0 );
 				if ( is_callable( $previous_handler ) || SIG_DFL === $previous_handler || SIG_IGN === $previous_handler ) {
@@ -896,7 +857,6 @@ class Worker {
 	 * @param \Throwable       $exception    The exception that caused the failure.
 	 */
 	private function call_failed_hook( Job $job, ?JobContract $job_instance, \Throwable $exception ): void {
-		// Try to use the already-deserialized instance first.
 		if ( null === $job_instance && $this->registry->is_job_class( $job->handler ) ) {
 			try {
 				$job_instance = JobSerializer::deserialize( $job->handler, $job->payload );
@@ -937,17 +897,14 @@ class Worker {
 
 		$state = $this->workflow->get_state( $job->workflow_id ) ?? array();
 
-		// Load existing chunks from a previous (possibly failed) attempt.
 		$existing_chunks = $this->chunk_store->get_chunks( $job->id );
 		$chunk_index     = count( $existing_chunks );
 
-		// Call the handler's stream generator.
 		$generator = $handler->stream( $state, $existing_chunks );
 
 		foreach ( $generator as $chunk ) {
 			$content = (string) $chunk;
 
-			// Persist the chunk immediately.
 			$this->chunk_store->append_chunk(
 				job_id: $job->id,
 				chunk_index: $chunk_index,
@@ -958,22 +915,17 @@ class Worker {
 
 			++$chunk_index;
 
-			// Send heartbeat so the stale detector does not kill us.
 			Heartbeat::beat( array( 'streaming_chunks' => $chunk_index ) );
 		}
 
-		// Gather all chunks (existing + new).
 		$all_chunks = $this->chunk_store->get_chunks( $job->id );
 
-		// Call on_complete to get the data to merge into workflow state.
 		$output = $handler->on_complete( $all_chunks, $state );
 
 		$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
-		// Clean up chunks now that on_complete has the data.
 		$this->chunk_store->clear_chunks( $job->id );
 
-		// Advance the workflow with the on_complete result.
 		$this->workflow->advance_step(
 			workflow_id: $job->workflow_id,
 			completed_job_id: $job->id,
@@ -1018,7 +970,6 @@ class Worker {
 			return;
 		}
 
-		// Don't overwrite an explicitly registered rate limit.
 		if ( $this->rate_limiter->is_registered( $handler ) ) {
 			return;
 		}

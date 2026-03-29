@@ -86,7 +86,7 @@ class Workflow {
 			if ( is_array( $step_def ) && isset( $step_def['name'] ) && $step_def['name'] === $name ) {
 				return $index;
 			}
-			// Legacy string format: name is the index as a string.
+			// Older persisted workflows used the step index itself as the step name.
 			if ( is_string( $step_def ) && (string) $index === $name ) {
 				return $index;
 			}
@@ -691,7 +691,6 @@ class Workflow {
 		$sig_tbl     = $this->conn->table( Config::table_signals() );
 		$signal_name = $step_def['signal_name'] ?? '';
 
-		// Check for a pre-existing signal matching this workflow and signal name.
 		$stmt = $pdo->prepare(
 			"SELECT payload FROM {$sig_tbl}
 			WHERE workflow_id = :workflow_id AND signal_name = :signal_name
@@ -706,7 +705,6 @@ class Workflow {
 		$signal_row = $stmt->fetch();
 
 		if ( $signal_row ) {
-			// Signal already exists: merge data into state and advance.
 			$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$wf_stmt->execute( array( 'id' => $workflow_id ) );
 			$wf_row = $wf_stmt->fetch();
@@ -720,7 +718,6 @@ class Workflow {
 				$steps       = $state['_steps'] ?? array();
 				$total_steps = (int) $wf_row['total_steps'];
 
-			// Merge signal data into state.
 			foreach ( $signal_data as $key => $value ) {
 				if ( ! str_starts_with( $key, '_' ) ) {
 					$state[ $key ] = $value;
@@ -769,7 +766,6 @@ class Workflow {
 					)
 				);
 
-				// Enqueue the next step after the signal wait.
 				if ( isset( $steps[ $next_step ] ) ) {
 					$queue_name   = $state['_queue'] ?? 'default';
 					$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
@@ -786,7 +782,6 @@ class Workflow {
 				}
 			}
 		} else {
-			// No pre-existing signal: pause the workflow and wait.
 			$wf_stmt = $pdo->prepare( "SELECT state FROM {$wf_tbl} WHERE id = :id" );
 			$wf_stmt->execute( array( 'id' => $workflow_id ) );
 			$wf_row = $wf_stmt->fetch();
@@ -1135,7 +1130,7 @@ class Workflow {
 
 		$pdo->beginTransaction();
 		try {
-			// Insert signal for audit trail.
+			// Signals are persisted even when the workflow is not waiting yet.
 			$ins = $pdo->prepare(
 				"INSERT INTO {$sig_tbl} (workflow_id, signal_name, payload)
 				VALUES (:workflow_id, :signal_name, :payload)"
@@ -1148,7 +1143,6 @@ class Workflow {
 				)
 			);
 
-			// Lock and check if the workflow is waiting for this signal.
 			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$stmt->execute( array( 'id' => $workflow_id ) );
 			$wf_row = $stmt->fetch();
@@ -1165,23 +1159,21 @@ class Workflow {
 				WorkflowStatus::WaitingSignal->value === $wf_row['status']
 				&& $waiting_signal === $signal_name
 			) {
-				// Merge signal data into state.
 				foreach ( $data as $key => $value ) {
 					if ( ! str_starts_with( $key, '_' ) ) {
 						$state[ $key ] = $value;
 					}
 				}
 
-				// Clear the waiting signal marker.
-					unset( $state['_waiting_signal'] );
+				unset( $state['_waiting_signal'] );
 
-					$current_step     = (int) $wf_row['current_step'];
-					$total_steps      = (int) $wf_row['total_steps'];
-					$steps            = $state['_steps'] ?? array();
-					$current_step_def = $steps[ $current_step ] ?? null;
-					$this->push_compensation_snapshot( $state, $current_step_def, $current_step );
-					$next_step = $current_step + 1;
-					$is_last   = $next_step >= $total_steps;
+				$current_step     = (int) $wf_row['current_step'];
+				$total_steps      = (int) $wf_row['total_steps'];
+				$steps            = $state['_steps'] ?? array();
+				$current_step_def = $steps[ $current_step ] ?? null;
+				$this->push_compensation_snapshot( $state, $current_step_def, $current_step );
+				$next_step = $current_step + 1;
+				$is_last   = $next_step >= $total_steps;
 
 				if ( $is_last ) {
 					$upd = $pdo->prepare(
@@ -1221,7 +1213,6 @@ class Workflow {
 						)
 					);
 
-					// Enqueue the next step.
 					if ( isset( $steps[ $next_step ] ) ) {
 						$queue_name   = $state['_queue'] ?? 'default';
 						$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
@@ -1295,7 +1286,6 @@ class Workflow {
 
 		$pdo->beginTransaction();
 		try {
-			// Lock and fetch the workflow row.
 			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$stmt->execute( array( 'id' => $workflow_id ) );
 			$wf_row = $stmt->fetch();
@@ -1461,7 +1451,7 @@ class Workflow {
 				$this->merge_step_output_into_state( $state, $step_output, $current_step );
 				$total_handlers = count( $current_step_def['handlers'] ?? array() );
 
-				// Mark the completed job first so count includes it.
+				// Parallel branches can finish out of order, so count only after this branch is marked complete.
 				$mark_stmt = $pdo->prepare(
 					"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
 				);
@@ -1472,10 +1462,8 @@ class Workflow {
 					)
 				);
 
-				// Count completed jobs for this step (including the one just marked).
 				$completed_count = $this->count_completed_jobs_for_step( $workflow_id, $current_step );
 
-				// Always update state (merge partial results).
 				$state_stmt = $pdo->prepare(
 					"UPDATE {$wf_tbl} SET state = :state WHERE id = :id"
 				);
@@ -1486,7 +1474,6 @@ class Workflow {
 					)
 				);
 
-				// Log step completion.
 				$this->logger->log(
 					LogEvent::Completed,
 					array(
@@ -1500,20 +1487,17 @@ class Workflow {
 					)
 				);
 
-				// Only advance if ALL parallel jobs are done.
 				if ( $completed_count < $total_handlers ) {
 					$pdo->commit();
 					return;
 				}
 
-				// All parallel jobs complete, fall through to normal advancement logic.
-				// Re-read state in case other parallel jobs updated it.
+				// Another branch may have merged fresher state before this one won the join race.
 				$re_stmt = $pdo->prepare( "SELECT state FROM {$wf_tbl} WHERE id = :id" );
 				$re_stmt->execute( array( 'id' => $workflow_id ) );
 				$re_row = $re_stmt->fetch();
 				$state  = json_decode( $re_row['state'], true ) ?: array();
 
-				// Record workflow event log for completed parallel step.
 				if ( null !== $this->event_log ) {
 					$snapshot = array_filter(
 						$state,
@@ -1536,7 +1520,6 @@ class Workflow {
 				$is_paused = WorkflowStatus::Paused->value === $wf_row['status'];
 				$this->push_compensation_snapshot( $state, $current_step_def, $current_step );
 
-				// Update workflow state.
 				if ( $is_last ) {
 					$upd_stmt = $pdo->prepare(
 						"UPDATE {$wf_tbl}
@@ -1563,7 +1546,6 @@ class Workflow {
 					);
 				}
 
-				// Enqueue next step or log workflow completion.
 				if ( $is_last ) {
 					$this->logger->log(
 						LogEvent::WorkflowCompleted,
@@ -1630,7 +1612,6 @@ class Workflow {
 	private function on_workflow_completed( int $workflow_id, array $state, \PDO $pdo ): void {
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
 
-		// Check if this is a sub-workflow with a parent.
 		$stmt = $pdo->prepare(
 			"SELECT parent_workflow_id, parent_step_index FROM {$wf_tbl} WHERE id = :id"
 		);
@@ -1644,7 +1625,6 @@ class Workflow {
 		$parent_id   = (int) $row['parent_workflow_id'];
 		$parent_step = (int) $row['parent_step_index'];
 
-		// Merge the sub-workflow's public state into the parent's state.
 		$parent_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 		$parent_stmt->execute( array( 'id' => $parent_id ) );
 		$parent_row = $parent_stmt->fetch();
@@ -1655,7 +1635,6 @@ class Workflow {
 
 		$parent_state = json_decode( $parent_row['state'], true ) ?: array();
 
-			// Merge non-reserved keys from sub-workflow state into parent state.
 		foreach ( $state as $key => $value ) {
 			if ( ! str_starts_with( $key, '_' ) ) {
 				$parent_state[ $key ] = $value;
@@ -1694,7 +1673,7 @@ class Workflow {
 				)
 			);
 
-			// Recursive: check if parent also has a parent.
+			// Nested sub-workflows resume upward one parent at a time.
 			$this->on_workflow_completed( $parent_id, $parent_state, $pdo );
 		} else {
 			$upd_stmt = $pdo->prepare(
@@ -1708,7 +1687,6 @@ class Workflow {
 				)
 			);
 
-			// Enqueue the parent's next step.
 			if ( ! $is_paused && isset( $parent_steps[ $next_step ] ) ) {
 				$queue_name   = $parent_state['_queue'] ?? 'default';
 				$priority     = Priority::tryFrom( $parent_state['_priority'] ?? 0 ) ?? Priority::Low;
@@ -1777,7 +1755,6 @@ class Workflow {
 
 		$priority = Priority::tryFrom( $priority_value ) ?? Priority::Low;
 
-		// Enqueue the first step of the sub-workflow.
 		if ( ! empty( $steps ) ) {
 			$this->enqueue_step_def(
 				$steps[0],
@@ -1827,7 +1804,6 @@ class Workflow {
 		$sub_priority = $step_def['sub_priority'] ?? ( $workflow_state['_priority'] ?? 0 );
 		$sub_max      = $step_def['sub_max_attempts'] ?? ( $workflow_state['_max_attempts'] ?? 3 );
 
-		// Build initial state for sub-workflow from parent's public state.
 		$initial_state = array();
 		foreach ( $workflow_state as $key => $value ) {
 			if ( ! str_starts_with( $key, '_' ) ) {
@@ -1835,7 +1811,6 @@ class Workflow {
 			}
 		}
 
-		// Dispatch the sub-workflow.
 		$this->dispatch_sub_workflow(
 			parent_workflow_id: $workflow_id,
 			parent_step_index: $step_index,
@@ -1847,7 +1822,6 @@ class Workflow {
 			max_attempts: $sub_max,
 		);
 
-		// Mark the placeholder job as completed.
 		$stmt = $this->conn->pdo()->prepare(
 			"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
 		);
@@ -1858,8 +1832,7 @@ class Workflow {
 			)
 		);
 
-		// Do NOT advance the parent workflow. The parent stays at current_step
-		// and will be advanced when the sub-workflow completes (via on_workflow_completed).
+		// The parent must stay parked on this step until the child reports completion.
 	}
 
 	/**
@@ -1880,7 +1853,6 @@ class Workflow {
 
 		$pdo->beginTransaction();
 		try {
-			// Lock and fetch the workflow row.
 			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$stmt->execute( array( 'id' => $workflow_id ) );
 			$wf_row = $stmt->fetch();
@@ -1892,7 +1864,6 @@ class Workflow {
 
 			$current_status = $wf_row['status'];
 
-			// Cannot cancel already completed or cancelled workflows.
 			if ( in_array( $current_status, array( 'completed', 'cancelled' ), true ) ) {
 				$pdo->rollBack();
 				throw new \RuntimeException(
@@ -1900,33 +1871,32 @@ class Workflow {
 				);
 			}
 
-				$state = json_decode( $wf_row['state'], true ) ?: array();
+			$state = json_decode( $wf_row['state'], true ) ?: array();
 
-				// Set workflow status to cancelled.
-				$upd = $pdo->prepare(
+			$upd = $pdo->prepare(
 					"UPDATE {$wf_tbl}
 				SET status = :status, completed_at = NOW()
 				WHERE id = :id"
 				);
-				$upd->execute(
-					array(
-						'status' => WorkflowStatus::Cancelled->value,
-						'id'     => $workflow_id,
-					)
-				);
+			$upd->execute(
+				array(
+					'status' => WorkflowStatus::Cancelled->value,
+					'id'     => $workflow_id,
+				)
+			);
 
-				$this->bury_active_jobs_for_workflow( $workflow_id, 'Workflow cancelled' );
+			$this->bury_active_jobs_for_workflow( $workflow_id, 'Workflow cancelled' );
 
-				$this->logger->log(
-					LogEvent::WorkflowCancelled,
-					array(
-						'workflow_id' => $workflow_id,
-						'handler'     => $wf_row['name'],
-						'queue'       => $state['_queue'] ?? 'default',
-					)
-				);
+			$this->logger->log(
+				LogEvent::WorkflowCancelled,
+				array(
+					'workflow_id' => $workflow_id,
+					'handler'     => $wf_row['name'],
+					'queue'       => $state['_queue'] ?? 'default',
+				)
+			);
 
-				$pdo->commit();
+			$pdo->commit();
 		} catch ( \Throwable $e ) {
 			if ( $pdo->inTransaction() ) {
 				$pdo->rollBack();
@@ -1934,10 +1904,10 @@ class Workflow {
 			throw $e;
 		}
 
-			$state = $this->run_compensations( $workflow_id, $state, 'cancel' );
-			$this->persist_internal_state( $workflow_id, $state );
+		$state = $this->run_compensations( $workflow_id, $state, 'cancel' );
+		$this->persist_internal_state( $workflow_id, $state );
 
-			$cancel_handler = $state['_on_cancel'] ?? null;
+		$cancel_handler = $state['_on_cancel'] ?? null;
 		if ( null !== $cancel_handler && class_exists( $cancel_handler ) ) {
 			try {
 				$handler_instance = new $cancel_handler();
@@ -1955,7 +1925,7 @@ class Workflow {
 			}
 		}
 
-			$this->invalidate_workflow_cache( $workflow_id );
+		$this->invalidate_workflow_cache( $workflow_id );
 	}
 
 	/**
@@ -2007,7 +1977,6 @@ class Workflow {
 	 * @return WorkflowState|null
 	 */
 	public function status( int $workflow_id ): ?WorkflowState {
-		// Try cache first.
 		if ( null !== $this->cache ) {
 			$cache_key = "queuety:wf_status:{$workflow_id}";
 			$cached    = $this->cache->get( $cache_key );
@@ -2028,7 +1997,6 @@ class Workflow {
 
 		$state = json_decode( $row['state'], true ) ?: array();
 
-		// Strip reserved keys from the public state view.
 		$public_state = array_filter(
 			$state,
 			fn( string $key ) => ! str_starts_with( $key, '_' ),
@@ -2046,7 +2014,6 @@ class Workflow {
 			parent_step_index: $row['parent_step_index'] !== null ? (int) $row['parent_step_index'] : null,
 		);
 
-		// Cache the result.
 		if ( null !== $this->cache ) {
 			$this->cache->set( "queuety:wf_status:{$workflow_id}", $result, self::STATE_CACHE_TTL );
 		}
@@ -2094,7 +2061,6 @@ class Workflow {
 
 		$pdo->beginTransaction();
 		try {
-			// Reset workflow status.
 			$stmt = $pdo->prepare(
 				"UPDATE {$wf_tbl}
 				SET status = 'running', failed_at = NULL, error_message = NULL
@@ -2112,8 +2078,7 @@ class Workflow {
 				}
 			}
 
-				// Enqueue the failed step again.
-				$this->enqueue_step_def(
+			$this->enqueue_step_def(
 					$steps[ $current_step ],
 					$workflow_id,
 					$current_step,
@@ -2288,7 +2253,6 @@ class Workflow {
 	 * @return array|null Full state array, or null if not found.
 	 */
 	public function get_state( int $workflow_id ): ?array {
-		// Try cache first.
 		if ( null !== $this->cache ) {
 			$cache_key = "queuety:wf_state:{$workflow_id}";
 			$cached    = $this->cache->get( $cache_key );
@@ -2309,7 +2273,6 @@ class Workflow {
 
 		$state = json_decode( $row['state'], true ) ?: array();
 
-		// Cache the result.
 		if ( null !== $this->cache ) {
 			$this->cache->set( "queuety:wf_state:{$workflow_id}", $state, self::STATE_CACHE_TTL );
 		}
@@ -2358,20 +2321,18 @@ class Workflow {
 
 			$full_state = json_decode( $wf_row['state'], true ) ?: array();
 
-			// Restore internal reserved keys from the current workflow row.
 			$steps        = $full_state['_steps'] ?? array();
 			$queue_name   = $full_state['_queue'] ?? 'default';
 			$priority_val = $full_state['_priority'] ?? 0;
 			$max_attempts = $full_state['_max_attempts'] ?? 3;
 
-			// Build the new state: snapshot (public data) + reserved keys.
+			// Event snapshots only contain public state, so rewind has to restore runtime metadata from the live row.
 			$new_state                  = $snapshot;
 			$new_state['_steps']        = $steps;
 			$new_state['_queue']        = $queue_name;
 			$new_state['_priority']     = $priority_val;
 			$new_state['_max_attempts'] = $max_attempts;
 
-			// Preserve other reserved keys from the original state.
 			foreach ( $full_state as $key => $value ) {
 				if ( str_starts_with( $key, '_' ) && ! isset( $new_state[ $key ] ) ) {
 					$new_state[ $key ] = $value;
@@ -2380,7 +2341,6 @@ class Workflow {
 
 			$next_step = $to_step + 1;
 
-			// Update workflow row.
 			$upd = $pdo->prepare(
 				"UPDATE {$wf_tbl}
 				SET state = :state, current_step = :step, status = 'running',
@@ -2395,7 +2355,7 @@ class Workflow {
 				)
 			);
 
-			// Bury any pending/processing jobs for this workflow that are past the rewind point.
+			// Superseded jobs must be buried so an old worker cannot continue the abandoned path.
 			$jb_tbl  = $this->conn->table( Config::table_jobs() );
 			$cleanup = $pdo->prepare(
 				"UPDATE {$jb_tbl}
@@ -2404,7 +2364,6 @@ class Workflow {
 			);
 			$cleanup->execute( array( 'wf_id' => $workflow_id ) );
 
-			// Enqueue the next step.
 			if ( isset( $steps[ $next_step ] ) ) {
 				$priority = Priority::tryFrom( $priority_val ) ?? Priority::Low;
 
@@ -2418,7 +2377,6 @@ class Workflow {
 				);
 			}
 
-			// Log the rewind event.
 			$this->logger->log(
 				LogEvent::WorkflowRewound,
 				array(
@@ -2475,7 +2433,6 @@ class Workflow {
 			$max_attempts = $state['_max_attempts'] ?? 3;
 			$fork_name    = $wf_row['name'] . '_fork_' . time();
 
-			// Insert the forked workflow row.
 			$ins = $pdo->prepare(
 				"INSERT INTO {$wf_tbl}
 				(name, status, state, current_step, total_steps)
@@ -2491,7 +2448,6 @@ class Workflow {
 			);
 			$forked_id = (int) $pdo->lastInsertId();
 
-			// Enqueue the current step for the forked workflow.
 			if ( isset( $steps[ $current_step ] ) ) {
 				$priority = Priority::tryFrom( $priority_val ) ?? Priority::Low;
 
@@ -2505,7 +2461,6 @@ class Workflow {
 				);
 			}
 
-			// Log fork event on the original workflow.
 			$this->logger->log(
 				LogEvent::WorkflowForked,
 				array(
@@ -2516,7 +2471,6 @@ class Workflow {
 				)
 			);
 
-			// Log fork event on the forked workflow.
 			$this->logger->log(
 				LogEvent::WorkflowForked,
 				array(
@@ -2565,7 +2519,6 @@ class Workflow {
 			$state         = json_decode( $wf_row['state'], true ) ?: array();
 			$handler_class = $state['_on_deadline'] ?? null;
 
-			// Call deadline handler if defined.
 			if ( null !== $handler_class && class_exists( $handler_class ) ) {
 				$public_state = array_filter(
 					$state,

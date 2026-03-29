@@ -44,22 +44,19 @@ class UniqueJob implements Middleware {
 		$cache     = $this->resolve_cache();
 		$cache_key = "queuety:lock:{$lock_key}";
 
-		// Try cache-first lock (atomic add) when available.
 		$cache_locked = false;
 		if ( null !== $cache ) {
 			$cache_locked = $cache->add( $cache_key, $owner, Config::max_execution_time() );
 
 			if ( ! $cache_locked ) {
-				// Cache says lock is held; skip this job.
 				return;
 			}
 		}
 
-		// DB lock is authoritative.
+		// Cache only short-circuits hot contention; the database lock decides ownership.
 		$acquired = $this->acquire_lock( $table, $lock_key, $owner, $conn );
 
 		if ( ! $acquired ) {
-			// Clean up cache lock if we got it but DB says no.
 			if ( $cache_locked && null !== $cache ) {
 				$cache->delete( $cache_key );
 			}
@@ -113,7 +110,6 @@ class UniqueJob implements Middleware {
 			);
 			return true;
 		} catch ( \PDOException ) {
-			// Duplicate key: lock already held.
 			return false;
 		}
 	}

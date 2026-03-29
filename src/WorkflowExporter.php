@@ -31,7 +31,6 @@ class WorkflowExporter {
 		$lg_tbl = $conn->table( Config::table_logs() );
 		$ev_tbl = $conn->table( Config::table_workflow_events() );
 
-		// Load the workflow row.
 		$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id" );
 		$stmt->execute( array( 'id' => $workflow_id ) );
 		$wf_row = $stmt->fetch();
@@ -40,7 +39,6 @@ class WorkflowExporter {
 			throw new \RuntimeException( "Workflow {$workflow_id} not found." );
 		}
 
-		// Decode state for export.
 		$wf_data = array(
 			'id'                 => (int) $wf_row['id'],
 			'name'               => $wf_row['name'],
@@ -57,7 +55,6 @@ class WorkflowExporter {
 			'deadline_at'        => $wf_row['deadline_at'] ?? null,
 		);
 
-		// Load associated jobs.
 		$stmt = $pdo->prepare(
 			"SELECT * FROM {$jb_tbl} WHERE workflow_id = :workflow_id ORDER BY id ASC"
 		);
@@ -85,7 +82,6 @@ class WorkflowExporter {
 			);
 		}
 
-		// Load workflow events.
 		$stmt = $pdo->prepare(
 			"SELECT * FROM {$ev_tbl} WHERE workflow_id = :workflow_id ORDER BY id ASC"
 		);
@@ -111,7 +107,6 @@ class WorkflowExporter {
 			);
 		}
 
-		// Load log entries.
 		$stmt = $pdo->prepare(
 			"SELECT * FROM {$lg_tbl} WHERE workflow_id = :workflow_id ORDER BY id ASC"
 		);

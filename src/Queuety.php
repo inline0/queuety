@@ -166,7 +166,6 @@ class Queuety {
 	public static function init( Connection $conn ): void {
 		self::$conn = $conn;
 
-		// Create cache if not already set via set_cache().
 		if ( null === self::$cache ) {
 			self::$cache = CacheFactory::create();
 		}
@@ -245,7 +244,6 @@ class Queuety {
 			return;
 		}
 
-		// Handler is a class name implementing Contracts\Job.
 		if ( class_exists( $handler ) ) {
 			$reflection = new \ReflectionClass( $handler );
 			if ( $reflection->implementsInterface( JobContract::class ) ) {
@@ -255,7 +253,6 @@ class Queuety {
 			}
 		}
 
-		// Fallback: resolve from registry.
 		self::ensure_initialized();
 		$resolved = self::$registry->resolve( $handler );
 		if ( $resolved instanceof JobContract ) {

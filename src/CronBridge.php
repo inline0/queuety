@@ -42,19 +42,13 @@ class CronBridge {
 			return;
 		}
 
-		// Disable the default WP-Cron spawning on page loads.
 		if ( ! defined( 'DISABLE_WP_CRON' ) ) {
 			// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound -- WordPress core constant.
 			define( 'DISABLE_WP_CRON', true );
 		}
 
-		// Intercept wp_schedule_event() and wp_schedule_single_event().
 		add_filter( 'pre_schedule_event', array( self::class, 'intercept_schedule_event' ), 10, 2 );
-
-		// Intercept wp_unschedule_event().
 		add_filter( 'pre_unschedule_event', array( self::class, 'intercept_unschedule_event' ), 10, 4 );
-
-		// Intercept wp_get_scheduled_event() lookups.
 		add_filter( 'pre_get_scheduled_event', array( self::class, 'intercept_get_scheduled_event' ), 10, 4 );
 
 		self::$installed = true;
@@ -106,7 +100,6 @@ class CronBridge {
 			return null;
 		}
 
-		// Only intercept recurring events (those with a schedule).
 		if ( empty( $event->schedule ) ) {
 			return null;
 		}
@@ -132,7 +125,6 @@ class CronBridge {
 			return true;
 		} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Graceful fallback.
 			unset( $e );
-			// Fall through to default WP-Cron on error.
 			return null;
 		}
 	}
@@ -162,7 +154,6 @@ class CronBridge {
 			}
 		} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Graceful fallback.
 			unset( $e );
-			// Fall through.
 		}
 
 		return null;
@@ -197,7 +188,6 @@ class CronBridge {
 			}
 		} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Graceful fallback.
 			unset( $e );
-			// Fall through.
 		}
 
 		return null;
@@ -227,7 +217,6 @@ class CronBridge {
 	 * @return int Interval in seconds, or 0 if unknown.
 	 */
 	private static function resolve_interval( string $schedule ): int {
-		// Try WordPress's built-in schedules function first.
 		if ( function_exists( 'wp_get_schedules' ) ) {
 			$schedules = wp_get_schedules();
 			if ( isset( $schedules[ $schedule ]['interval'] ) ) {
@@ -235,7 +224,6 @@ class CronBridge {
 			}
 		}
 
-		// Fallback to known defaults.
 		return match ( $schedule ) {
 			'hourly'     => 3600,
 			'twicedaily' => 43200,

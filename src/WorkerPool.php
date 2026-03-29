@@ -84,23 +84,20 @@ class WorkerPool {
 	public function run( string $queue = 'default' ): void {
 		$this->install_parent_signals();
 
-		// Fork all children.
 		for ( $i = 0; $i < $this->worker_count; $i++ ) {
 			$this->fork_child( $queue );
 		}
 
-		// Parent monitoring loop.
 		$child_count = count( $this->children );
 		while ( ! $this->shutting_down || $child_count > 0 ) {
 			$child_count = count( $this->children );
 			pcntl_signal_dispatch();
 
-			// Check for exited children.
 			while ( ( $pid = pcntl_waitpid( -1, $status, WNOHANG ) ) > 0 ) {
 				$this->handle_child_exit( $pid, $status, $queue );
 			}
 
-			// Run scheduler tick in the parent (only one process should do this).
+			// The scheduler must stay single-writer even when job execution is forked.
 			static $last_tick = 0;
 			if ( ! $this->shutting_down && time() - $last_tick >= 60 ) {
 				$this->run_scheduler_tick();
@@ -125,12 +122,10 @@ class WorkerPool {
 		}
 
 		if ( 0 === $pid ) {
-			// Child process: create fresh connection and run worker.
 			$this->run_child_worker( $queue );
 			exit( 0 );
 		}
 
-		// Parent: track the child.
 		$this->children[ $pid ] = array(
 			'started_at' => time(),
 			'restarts'   => 0,
@@ -143,7 +138,7 @@ class WorkerPool {
 	 * @param string $queue Queue name.
 	 */
 	private function run_child_worker( string $queue ): void {
-		// Each child must create its own PDO connection.
+		// Forked PDO handles are unsafe to reuse across processes.
 		$conn              = new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix );
 		$cache             = null;
 
@@ -185,7 +180,6 @@ class WorkerPool {
 			$event_log,
 		);
 
-		// Install child signal handler.
 		pcntl_signal(
 			SIGTERM,
 			function () use ( $worker ) {
@@ -222,18 +216,15 @@ class WorkerPool {
 
 		$exit_code = pcntl_wifexited( $status ) ? pcntl_wexitstatus( $status ) : -1;
 
-		// Normal exit: do not restart.
 		if ( 0 === $exit_code ) {
 			$this->fork_child( $queue );
 			return;
 		}
 
-		// Abnormal exit: restart with rate limiting.
 		$restarts = $meta['restarts'] + 1;
 		$uptime   = time() - $meta['started_at'];
 
 		if ( $uptime < 60 && $restarts >= self::MAX_RESTARTS_PER_MINUTE ) {
-			// Too many restarts too quickly, skip this one.
 			return;
 		}
 

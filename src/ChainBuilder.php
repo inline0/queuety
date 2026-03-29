@@ -93,7 +93,6 @@ class ChainBuilder {
 				continue;
 			}
 
-			// Add catch handler info to payload metadata if configured.
 			if ( null !== $this->catch_handler ) {
 				$payload['__chain_catch'] = $this->catch_handler;
 			}

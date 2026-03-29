@@ -62,7 +62,6 @@ class Queue {
 		$payload_json = json_encode( $payload, JSON_THROW_ON_ERROR ) ?: '{}';
 		$payload_hash = $unique ? hash( 'sha256', $payload_json ) : null;
 
-		// Unique job deduplication: check for existing pending/processing job.
 		if ( $unique ) {
 			$check = $this->conn->pdo()->prepare(
 				"SELECT id FROM {$table}
@@ -248,7 +247,6 @@ class Queue {
 
 			$pdo->commit();
 
-			// Re-fetch to get the updated row.
 			$row['status']      = JobStatus::Processing->value;
 			$row['reserved_at'] = gmdate( 'Y-m-d H:i:s' );
 			$row['attempts']    = (int) $row['attempts'] + 1;
@@ -538,7 +536,6 @@ class Queue {
 		);
 		$stmt->execute( array( 'queue' => $queue ) );
 
-		// Update cache to reflect the new paused state.
 		if ( null !== $this->cache ) {
 			$this->cache->set( "queuety:paused:{$queue}", true, Config::cache_ttl() );
 		}
@@ -556,7 +553,6 @@ class Queue {
 		);
 		$stmt->execute( array( 'queue' => $queue ) );
 
-		// Invalidate cache so workers pick up the resumed state.
 		if ( null !== $this->cache ) {
 			$this->cache->delete( "queuety:paused:{$queue}" );
 		}
@@ -569,7 +565,6 @@ class Queue {
 	 * @return bool
 	 */
 	public function is_queue_paused( string $queue ): bool {
-		// Try cache first.
 		if ( null !== $this->cache ) {
 			$cache_key = "queuety:paused:{$queue}";
 			$cached    = $this->cache->get( $cache_key );
@@ -579,7 +574,6 @@ class Queue {
 			}
 		}
 
-		// Fall through to DB.
 		$table = $this->conn->table( Config::table_queue_states() );
 		$stmt  = $this->conn->pdo()->prepare(
 			"SELECT paused FROM {$table} WHERE queue = :queue"
@@ -589,7 +583,6 @@ class Queue {
 
 		$paused = $row && (bool) $row['paused'];
 
-		// Cache the result.
 		if ( null !== $this->cache ) {
 			$this->cache->set( "queuety:paused:{$queue}", $paused, Config::cache_ttl() );
 		}

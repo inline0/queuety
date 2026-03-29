@@ -22,7 +22,6 @@ define( 'QUEUETY_DB_VERSION_OPTION', 'queuety_db_version' );
 define( 'QUEUETY_PLUGIN_FILE', __FILE__ );
 define( 'QUEUETY_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 
-// Autoloader: plugin mode or Composer package mode.
 $queuety_autoloader = __DIR__ . '/vendor/autoload.php';
 if ( ! file_exists( $queuety_autoloader ) ) {
 	$queuety_autoloader = dirname( __DIR__, 2 ) . '/autoload.php';
@@ -72,7 +71,6 @@ $queuety_make_connection = static function () {
 	);
 };
 
-// Initialize Queuety with WordPress database credentials.
 add_action(
 	'plugins_loaded',
 	static function () use ( $queuety_make_connection ) {
@@ -97,7 +95,6 @@ add_action(
 	}
 );
 
-// Activation: create or upgrade tables, then record the schema version.
 register_activation_hook(
 	__FILE__,
 	static function () use ( $queuety_make_connection ) {
@@ -107,7 +104,6 @@ register_activation_hook(
 	}
 );
 
-// Deactivation: remove Queuety's own WP-Cron event.
 register_deactivation_hook(
 	__FILE__,
 	static function () {
@@ -115,12 +111,9 @@ register_deactivation_hook(
 	}
 );
 
-// Default processing via wp_cron: works on every host, no shell access needed.
-// WP-CLI workers are the upgrade path for better performance.
 add_action(
 	'init',
 	function () {
-		// Register the cron schedule if not already.
 		if ( ! wp_next_scheduled( 'queuety_cron_process' ) ) {
 			wp_schedule_event( time(), 'every_minute', 'queuety_cron_process' );
 		}
@@ -150,7 +143,6 @@ add_action(
 	}
 );
 
-// WP-CLI commands (upgrade path for dedicated workers).
 if ( defined( 'WP_CLI' ) && WP_CLI ) {
 	\WP_CLI::add_command( 'queuety', Queuety\CLI\QueuetyCommand::class );
 	\WP_CLI::add_command( 'queuety workflow', Queuety\CLI\WorkflowCommand::class );

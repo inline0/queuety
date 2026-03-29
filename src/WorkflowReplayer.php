@@ -48,13 +48,9 @@ class WorkflowReplayer {
 		$priority_val = $state['_priority'] ?? 0;
 		$max_attempts = $state['_max_attempts'] ?? 3;
 
-		// Determine the status for the replayed workflow.
-		// If the original was completed or failed, we start at its current step.
 		$replay_status = 'running';
 		$replay_step   = $current_step;
 
-		// If workflow was completed, replay from step 0 to recreate history.
-		// The replayed workflow resumes at the original's current_step.
 		if ( 'completed' === $wf_data['status'] ) {
 			$replay_step   = $total_steps;
 			$replay_status = 'completed';
@@ -62,7 +58,6 @@ class WorkflowReplayer {
 
 		$pdo->beginTransaction();
 		try {
-			// Create the workflow row.
 			$stmt = $pdo->prepare(
 				"INSERT INTO {$wf_tbl}
 				(name, status, state, current_step, total_steps)
@@ -79,7 +74,6 @@ class WorkflowReplayer {
 			);
 			$new_id = (int) $pdo->lastInsertId();
 
-			// Record historical event log entries for completed steps.
 			foreach ( $events as $event ) {
 				if ( 'step_completed' !== ( $event['event'] ?? '' ) ) {
 					continue;
@@ -107,7 +101,6 @@ class WorkflowReplayer {
 				);
 			}
 
-			// If the workflow is not completed, enqueue the current step.
 			if ( 'running' === $replay_status && isset( $steps[ $replay_step ] ) ) {
 				$queue    = new Queue( $conn );
 				$priority = \Queuety\Enums\Priority::tryFrom( $priority_val ) ?? \Queuety\Enums\Priority::Low;

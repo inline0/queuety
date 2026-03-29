@@ -141,7 +141,6 @@ class JobSerializer {
 
 		$type_name = $type->getName();
 
-		// Restore backed enums.
 		if ( ! $type->isBuiltin() && enum_exists( $type_name ) ) {
 			$reflection = new \ReflectionEnum( $type_name );
 			if ( $reflection->isBacked() ) {

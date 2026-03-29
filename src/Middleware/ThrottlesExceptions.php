@@ -42,10 +42,8 @@ class ThrottlesExceptions implements Middleware {
 	public function handle( object $job, \Closure $next ): void {
 		$handler_key = 'throttle_exceptions:' . get_class( $job );
 
-		// Check current exception count.
 		$count = $this->get_exception_count( $handler_key );
 		if ( $count >= $this->max_attempts ) {
-			// Too many exceptions, release with delay.
 			throw new \RuntimeException(
 				sprintf(
 					'Too many exceptions for %s (%d in %d minutes). Throttled.',

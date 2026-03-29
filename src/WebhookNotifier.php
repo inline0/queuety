@@ -126,7 +126,6 @@ class WebhookNotifier {
 			);
 			@file_get_contents( $url, false, $context );
 		} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
-			// Fire-and-forget: silently ignore failures.
 		}
 	}
 }

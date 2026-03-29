@@ -188,7 +188,6 @@ class QueuetyCommand extends \WP_CLI_Command {
 		$format = $assoc_args['format'] ?? 'table';
 		$table  = Queuety::queue();
 
-		// Build a simple query using the Queue's connection.
 		$conn   = $this->get_connection();
 		$tbl    = $conn->table( \Queuety\Config::table_jobs() );
 		$sql    = "SELECT id, queue, handler, status, attempts, priority, created_at FROM {$tbl} WHERE 1=1";
@@ -477,8 +476,6 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * @return \Queuety\Connection
 	 */
 	private function get_connection(): \Queuety\Connection {
-		// Access the connection through the Queue's internal state.
-		// The facade exposes queue() which requires the connection.
 		$reflection = new \ReflectionProperty( \Queuety\Queue::class, 'conn' );
 		return $reflection->getValue( Queuety::queue() );
 	}

@@ -31,7 +31,6 @@ class CronExpression {
 
 		list( $minute_field, $hour_field, $dom_field, $month_field, $dow_field ) = $fields;
 
-		// Start from the next minute after $after.
 		$candidate = $after->modify( '+1 minute' );
 		$candidate = $candidate->setTime(
 			(int) $candidate->format( 'G' ),
@@ -46,23 +45,20 @@ class CronExpression {
 			$c_hour   = (int) $candidate->format( 'G' );
 			$c_dom    = (int) $candidate->format( 'j' );
 			$c_month  = (int) $candidate->format( 'n' );
-			$c_dow    = (int) $candidate->format( 'w' ); // 0 = Sunday.
+			$c_dow    = (int) $candidate->format( 'w' );
 
 			if ( ! self::matches_field( $month_field, $c_month, 1, 12 ) ) {
-				// Jump to next month.
 				$candidate = $candidate->modify( 'first day of next month' )->setTime( 0, 0, 0 );
 				continue;
 			}
 
 			if ( ! self::matches_field( $dom_field, $c_dom, 1, 31 )
 				|| ! self::matches_field( $dow_field, $c_dow, 0, 7 ) ) {
-				// Jump to next day.
 				$candidate = $candidate->modify( '+1 day' )->setTime( 0, 0, 0 );
 				continue;
 			}
 
 			if ( ! self::matches_field( $hour_field, $c_hour, 0, 23 ) ) {
-				// Jump to next hour.
 				$candidate = $candidate->modify( '+1 hour' )->setTime(
 					(int) $candidate->modify( '+1 hour' )->format( 'G' ),
 					0,
@@ -92,7 +88,6 @@ class CronExpression {
 	 * @return bool
 	 */
 	private static function matches_field( string $field, int $value, int $min, int $max ): bool {
-		// Handle lists (e.g. '1,3,5').
 		if ( str_contains( $field, ',' ) ) {
 			$parts = explode( ',', $field );
 			foreach ( $parts as $part ) {
@@ -103,7 +98,6 @@ class CronExpression {
 			return false;
 		}
 
-		// Handle steps (e.g. '*/5' or '1-10/2').
 		if ( str_contains( $field, '/' ) ) {
 			list( $range, $step ) = explode( '/', $field, 2 );
 			$step                 = (int) $step;
@@ -112,7 +106,6 @@ class CronExpression {
 				return 0 === ( $value - $min ) % $step;
 			}
 
-			// Range with step (e.g. '1-10/2').
 			if ( str_contains( $range, '-' ) ) {
 				list( $range_min, $range_max ) = explode( '-', $range, 2 );
 				$range_min                     = (int) $range_min;
@@ -123,18 +116,15 @@ class CronExpression {
 			return false;
 		}
 
-		// Handle ranges (e.g. '1-5').
 		if ( str_contains( $field, '-' ) ) {
 			list( $range_min, $range_max ) = explode( '-', $field, 2 );
 			return $value >= (int) $range_min && $value <= (int) $range_max;
 		}
 
-		// Wildcard.
 		if ( '*' === $field ) {
 			return true;
 		}
 
-		// Exact match. Handle day-of-week 7 as alias for 0 (Sunday).
 		$field_val = (int) $field;
 		if ( 7 === $max && 7 === $field_val ) {
 			$field_val = 0;

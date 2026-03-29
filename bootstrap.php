@@ -11,7 +11,6 @@
  * @package Queuety
  */
 
-// Find wp-config.php by walking up from the plugin directory.
 $queuety_dir       = __DIR__;
 $queuety_wp_config = null;
 
@@ -33,13 +32,10 @@ if ( null === $queuety_wp_config ) {
 	exit( 1 );
 }
 
-// Load the Composer autoloader.
 require_once $queuety_dir . '/vendor/autoload.php';
 
-// Parse wp-config.php for database credentials.
 $queuety_db = Queuety\ConfigParser::from_wp_config( $queuety_wp_config );
 
-// Create the database connection.
 $queuety_conn = new Queuety\Connection(
 	host: $queuety_db['host'],
 	dbname: $queuety_db['name'],
@@ -48,10 +44,8 @@ $queuety_conn = new Queuety\Connection(
 	prefix: $queuety_db['prefix'],
 );
 
-// Initialize Queuety.
 Queuety\Queuety::init( $queuety_conn );
 
-// Load user handler registrations if present.
 $queuety_handlers_file = dirname( $queuety_wp_config ) . '/queuety-handlers.php';
 if ( file_exists( $queuety_handlers_file ) ) {
 	require_once $queuety_handlers_file;

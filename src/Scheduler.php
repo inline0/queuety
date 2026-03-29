@@ -176,7 +176,6 @@ class Scheduler {
 				$next_run = $this->calculate_next_run( $schedule->expression, $schedule->expression_type, $now );
 				$policy   = $schedule->overlap_policy;
 
-				// Check overlap policy before enqueueing.
 				if ( OverlapPolicy::Allow !== $policy ) {
 					$check_stmt = $pdo->prepare(
 						"SELECT COUNT(*) AS cnt FROM {$jobs_table}
@@ -194,7 +193,6 @@ class Scheduler {
 
 					if ( $has_running ) {
 						if ( OverlapPolicy::Skip === $policy ) {
-							// Skip: just update next_run without enqueueing.
 							$update = $pdo->prepare(
 								"UPDATE {$table}
 								SET last_run = :last_run, next_run = :next_run
@@ -211,7 +209,6 @@ class Scheduler {
 						}
 
 						if ( OverlapPolicy::Buffer === $policy ) {
-							// Buffer: push next_run to try again next tick.
 							$update = $pdo->prepare(
 								"UPDATE {$table}
 								SET next_run = :next_run

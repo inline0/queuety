@@ -106,7 +106,6 @@ class RateLimiter {
 
 		$limit = $this->limits[ $handler ];
 
-		// Reset counter if the window has expired.
 		$elapsed = time() - $this->window_starts[ $handler ];
 		if ( $elapsed >= $limit['window'] ) {
 			$this->counters[ $handler ]      = 0;
@@ -117,7 +116,6 @@ class RateLimiter {
 			}
 		}
 
-		// Try reading from shared cache before querying DB.
 		if ( null !== $this->cache ) {
 			$cache_key = "queuety:rate_limit:{$handler}";
 			$cached    = $this->cache->get( $cache_key );
@@ -130,7 +128,6 @@ class RateLimiter {
 			}
 		}
 
-		// Refresh from DB if stale.
 		$now = microtime( true );
 		if ( ( $now - $this->last_refresh[ $handler ] ) >= self::REFRESH_INTERVAL ) {
 			$this->refresh_from_db( $handler );
@@ -211,7 +208,6 @@ class RateLimiter {
 		$this->counters[ $handler ]     = $row ? (int) $row['cnt'] : 0;
 		$this->last_refresh[ $handler ] = microtime( true );
 
-		// Write count to shared cache so other workers can read it.
 		if ( null !== $this->cache ) {
 			$cache_key = "queuety:rate_limit:{$handler}";
 			$this->cache->set( $cache_key, $this->counters[ $handler ], Config::cache_ttl() );

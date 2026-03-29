@@ -45,10 +45,6 @@ readonly class WorkflowTemplate {
 		$builder->with_priority( $this->priority );
 		$builder->max_attempts( $this->max_attempts );
 
-		// Re-build the steps from the stored definitions.
-		// We need to add them to the builder using the original step definitions.
-		// Since the builder stores steps internally and we have the built output,
-		// we create a new builder that directly dispatches with our step definitions.
 		return $this->dispatch_from_definitions( $payload );
 	}
 
@@ -93,7 +89,6 @@ readonly class WorkflowTemplate {
 			);
 			$workflow_id = (int) $pdo->lastInsertId();
 
-			// Enqueue the first step.
 			$first_step = $this->steps[0];
 			$this->enqueue_step( $first_step, $workflow_id, 0, $queue );
 

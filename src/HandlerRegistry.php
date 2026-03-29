@@ -74,19 +74,16 @@ class HandlerRegistry {
 			throw new \RuntimeException( "Handler not found: {$name}" );
 		}
 
-		// Auto-register from QueuetyHandler attribute when resolving a class.
 		$this->auto_register_from_attribute( $class );
 
-		// For Contracts\Job classes, use JobSerializer to handle constructor args.
-		// Resolve without payload returns a bare instance for type-checking only.
 		$reflection = new \ReflectionClass( $class );
 		if ( $reflection->implementsInterface( JobContract::class ) ) {
 			$constructor = $reflection->getConstructor();
 			if ( null === $constructor || 0 === $constructor->getNumberOfRequiredParameters() ) {
 				return $reflection->newInstance();
 			}
-			// Cannot instantiate without payload; return via JobSerializer with empty payload.
-			// Callers needing a real instance should use is_job_class() + JobSerializer::deserialize().
+
+			// Job classes may require constructor payload, so resolution here only produces a probe instance.
 			return JobSerializer::deserialize( $class, array() );
 		}
 

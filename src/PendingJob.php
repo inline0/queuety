@@ -262,7 +262,6 @@ class PendingJob {
 		);
 		$this->dispatched = true;
 
-		// Register rate limit with the facade if configured.
 		if ( null !== $this->rate_limit_config ) {
 			try {
 				Queuety::rate_limiter()->register(

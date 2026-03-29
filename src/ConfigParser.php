@@ -39,7 +39,6 @@ class ConfigParser {
 
 		$result = array();
 		foreach ( $constants as $constant => $key ) {
-			// Match: define( 'CONSTANT', 'value' ) with single or double quotes.
 			$pattern = '/define\s*\(\s*[\'"]' . preg_quote( $constant, '/' ) . '[\'"]\s*,\s*[\'"]([^\'"]*)[\'"]\s*\)/';
 			if ( preg_match( $pattern, $contents, $matches ) ) {
 				$result[ $key ] = $matches[1];
@@ -48,7 +47,6 @@ class ConfigParser {
 			}
 		}
 
-		// Match the table prefix variable.
 		$result['prefix'] = 'wp_';
 		if ( preg_match( '/\$table_prefix\s*=\s*[\'"]([^\'"]*)[\'"]\s*;/', $contents, $matches ) ) {
 			$result['prefix'] = $matches[1];

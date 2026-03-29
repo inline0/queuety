@@ -493,7 +493,6 @@ class WorkflowBuilder {
 
 		$built_steps = $this->build_steps();
 
-		// Store step definitions in the state under a reserved key.
 		$state                  = $initial_payload;
 		$state['_steps']        = $built_steps;
 		$state['_queue']        = $this->queue;
@@ -542,7 +541,6 @@ class WorkflowBuilder {
 			);
 			$workflow_id = (int) $pdo->lastInsertId();
 
-			// Enqueue the first step.
 			$first_step = $built_steps[0];
 			$this->enqueue_step( $first_step, $workflow_id, 0 );
 
@@ -585,9 +583,7 @@ class WorkflowBuilder {
 				);
 			}
 		} elseif ( 'sub_workflow' === $step_def['type'] ) {
-			// Sub-workflows are dispatched by Workflow::advance_step when reached,
-			// not at build time. Dispatch a placeholder handler that triggers the sub-workflow.
-			// Actually, for the first step, if it's a sub_workflow, we handle it in Workflow.
+			// The parent must stay parked on this step until the child workflow completes.
 			$this->queue_ops->dispatch(
 				handler: '__queuety_sub_workflow',
 				payload: array( 'step_index' => $step_index ),
@@ -619,9 +615,7 @@ class WorkflowBuilder {
 				step_index: $step_index,
 			);
 		} elseif ( 'signal' === $step_def['type'] ) {
-			// Signal steps are handled by Workflow::enqueue_step_def.
-			// When dispatched from the builder (first step), delegate to Workflow logic
-			// by dispatching a placeholder that Workflow will interpret.
+			// Signal steps must round-trip through the workflow runtime so pre-sent signals can resume immediately.
 			$this->queue_ops->dispatch(
 				handler: '__queuety_signal',
 				payload: array( 'step_index' => $step_index ),
@@ -632,7 +626,6 @@ class WorkflowBuilder {
 				step_index: $step_index,
 			);
 		} else {
-			// Single step.
 			$handler_defaults = HandlerMetadata::from_class( $step_def['class'] );
 			$this->queue_ops->dispatch(
 				handler: $step_def['class'],

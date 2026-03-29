@@ -45,25 +45,21 @@ class WithoutOverlapping implements Middleware {
 		$cache     = $this->resolve_cache();
 		$cache_key = "queuety:overlap:{$this->key}";
 
-		// Clean up expired locks before attempting acquisition.
 		$this->cleanup_expired( $table, $conn );
 
-		// Try cache-first lock (atomic add) when available.
 		$cache_locked = false;
 		if ( null !== $cache ) {
 			$cache_locked = $cache->add( $cache_key, $owner, $this->release_after );
 
 			if ( ! $cache_locked ) {
-				// Cache says lock is held; skip this job.
 				return;
 			}
 		}
 
-		// DB lock is authoritative.
+		// Cache only short-circuits hot contention; the database lock decides ownership.
 		$acquired = $this->acquire_lock( $table, $this->key, $owner, $conn );
 
 		if ( ! $acquired ) {
-			// Clean up cache lock if we got it but DB says no.
 			if ( $cache_locked && null !== $cache ) {
 				$cache->delete( $cache_key );
 			}
@@ -140,7 +136,6 @@ class WithoutOverlapping implements Middleware {
 			);
 			return true;
 		} catch ( \PDOException ) {
-			// Duplicate key: lock already held.
 			return false;
 		}
 	}
