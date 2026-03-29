@@ -246,6 +246,82 @@ class Workflow {
 	}
 
 	/**
+	 * Normalize persisted fan-out branch entries so sparse indexes survive JSON round-trips.
+	 *
+	 * @param array $entries Persisted result or failure entries.
+	 * @return array<string,array>
+	 */
+	private function normalize_fan_out_entries( array $entries ): array {
+		$normalized = array();
+
+		foreach ( $entries as $key => $entry ) {
+			if ( ! is_array( $entry ) ) {
+				continue;
+			}
+
+			$index                         = array_key_exists( 'index', $entry ) ? (int) $entry['index'] : (int) $key;
+			$normalized[ (string) $index ] = $entry;
+		}
+
+		ksort( $normalized, SORT_NUMERIC );
+		return $normalized;
+	}
+
+	/**
+	 * Normalize fan-out runtime state loaded from persisted workflow state.
+	 *
+	 * @param array $runtime Raw runtime state.
+	 * @return array
+	 */
+	private function normalize_fan_out_runtime( array $runtime ): array {
+		$runtime['items']        = array_values( is_array( $runtime['items'] ?? null ) ? $runtime['items'] : array() );
+		$runtime['results']      = $this->normalize_fan_out_entries( is_array( $runtime['results'] ?? null ) ? $runtime['results'] : array() );
+		$runtime['failures']     = $this->normalize_fan_out_entries( is_array( $runtime['failures'] ?? null ) ? $runtime['failures'] : array() );
+		$runtime['winner_index'] = isset( $runtime['winner_index'] ) ? (int) $runtime['winner_index'] : null;
+		$runtime['settled']      = ! empty( $runtime['settled'] );
+
+		return $runtime;
+	}
+
+	/**
+	 * Whether a workflow step job can be completed by the workflow runtime.
+	 *
+	 * @param string $status Current job status.
+	 * @return bool
+	 */
+	private function is_completable_workflow_job_status( string $status ): bool {
+		return in_array(
+			$status,
+			array( JobStatus::Pending->value, JobStatus::Processing->value ),
+			true
+		);
+	}
+
+	/**
+	 * Mark a workflow job completed when it is still pending or processing.
+	 *
+	 * @param \PDO $pdo    Active PDO connection.
+	 * @param int  $job_id Job ID.
+	 */
+	private function mark_workflow_job_completed( \PDO $pdo, int $job_id ): void {
+		$jb_tbl = $this->conn->table( Config::table_jobs() );
+		$stmt   = $pdo->prepare(
+			"UPDATE {$jb_tbl}
+			SET status = :status, completed_at = NOW()
+			WHERE id = :id
+				AND status IN (:pending, :processing)"
+		);
+		$stmt->execute(
+			array(
+				'status'     => JobStatus::Completed->value,
+				'id'         => $job_id,
+				'pending'    => JobStatus::Pending->value,
+				'processing' => JobStatus::Processing->value,
+			)
+		);
+	}
+
+	/**
 	 * Build the public aggregate payload for a settled fan-out step.
 	 *
 	 * @param array $step_def Step definition.
@@ -416,7 +492,6 @@ class Workflow {
 		bool $log_job_completion = true,
 	): void {
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
-		$jb_tbl = $this->conn->table( Config::table_jobs() );
 
 		$this->merge_step_output_into_state( $state, $step_output, $current_step );
 
@@ -460,16 +535,7 @@ class Workflow {
 			)
 		);
 
-		$mark_stmt = $pdo->prepare(
-			"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id AND status = :processing"
-		);
-		$mark_stmt->execute(
-			array(
-				'status'     => JobStatus::Completed->value,
-				'id'         => $completed_job_id,
-				'processing' => JobStatus::Processing->value,
-			)
-		);
+		$this->mark_workflow_job_completed( $pdo, $completed_job_id );
 
 		if ( $log_job_completion ) {
 			$this->logger->log(
@@ -822,6 +888,8 @@ class Workflow {
 					'failures'     => array(),
 					'winner_index' => null,
 				);
+			} else {
+				$runtime = $this->normalize_fan_out_runtime( $runtime );
 			}
 
 			$all_indexes = array_keys( $runtime['items'] ?? array() );
@@ -852,15 +920,7 @@ class Workflow {
 					$state             = $this->mark_workflow_failed_locked( $pdo, $wf_row, $workflow_id, $job_id, 'Fan-out join could not be satisfied.', $state );
 					$should_compensate = ! empty( $state['_compensate_on_failure'] );
 				} else {
-					$mark = $pdo->prepare(
-						"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
-					);
-					$mark->execute(
-						array(
-							'status' => JobStatus::Completed->value,
-							'id'     => $job_id,
-						)
-					);
+					$this->mark_workflow_job_completed( $pdo, $job_id );
 					$this->persist_internal_state( $workflow_id, $state );
 					$should_log_completion = true;
 				}
@@ -899,15 +959,7 @@ class Workflow {
 
 			$this->persist_internal_state( $workflow_id, $state );
 
-			$mark = $pdo->prepare(
-				"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
-			);
-			$mark->execute(
-				array(
-					'status' => JobStatus::Completed->value,
-					'id'     => $job_id,
-				)
-			);
+			$this->mark_workflow_job_completed( $pdo, $job_id );
 			$should_log_completion = true;
 
 			$pdo->commit();
@@ -1000,6 +1052,8 @@ class Workflow {
 					'failures'     => array(),
 					'winner_index' => null,
 				);
+			} else {
+				$runtime = $this->normalize_fan_out_runtime( $runtime );
 			}
 
 				$payload     = $job_row['payload'] ? ( json_decode( $job_row['payload'], true ) ?: array() ) : array();
@@ -1259,7 +1313,7 @@ class Workflow {
 			}
 
 			if ( ! in_array( $wf_row['status'], array( WorkflowStatus::Running->value, WorkflowStatus::Paused->value ), true ) ) {
-				if ( JobStatus::Processing->value === $job_row['status'] ) {
+				if ( $this->is_completable_workflow_job_status( $job_row['status'] ) ) {
 					$stmt = $pdo->prepare(
 						"UPDATE {$jb_tbl}
 							SET status = :status, failed_at = NOW(), error_message = :error
@@ -1277,7 +1331,7 @@ class Workflow {
 				return;
 			}
 
-			if ( JobStatus::Processing->value !== $job_row['status'] ) {
+			if ( ! $this->is_completable_workflow_job_status( $job_row['status'] ) ) {
 				$pdo->commit();
 				return;
 			}
@@ -1319,6 +1373,7 @@ class Workflow {
 				if ( ! is_array( $runtime ) || empty( $runtime['initialized'] ) ) {
 					throw new \RuntimeException( "Workflow {$workflow_id}: fan-out runtime state missing for step {$current_step}." );
 				}
+				$runtime = $this->normalize_fan_out_runtime( $runtime );
 
 				if ( ! empty( $runtime['settled'] ) ) {
 					$stmt = $pdo->prepare(
@@ -1357,15 +1412,7 @@ class Workflow {
 				if ( ! $this->fan_out_join_satisfied( $current_step_def, $runtime ) ) {
 					$this->persist_internal_state( $workflow_id, $state );
 
-					$mark_stmt = $pdo->prepare(
-						"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
-					);
-					$mark_stmt->execute(
-						array(
-							'status' => JobStatus::Completed->value,
-							'id'     => $completed_job_id,
-						)
-					);
+					$this->mark_workflow_job_completed( $pdo, $completed_job_id );
 
 					$this->logger->log(
 						LogEvent::Completed,
@@ -1387,6 +1434,7 @@ class Workflow {
 
 				$runtime['settled']                       = true;
 				$state['_fan_out_steps'][ $current_step ] = $runtime;
+				$this->persist_internal_state( $workflow_id, $state );
 				$this->bury_active_jobs_for_step( $workflow_id, $current_step, 'Fan-out join settled early.', $completed_job_id );
 
 				$step_output = $this->fan_out_step_output( $state, $current_step_def, $runtime, $current_step );
