@@ -25,6 +25,8 @@ readonly class WorkflowState {
 	 * @param array          $state              Accumulated state data.
 	 * @param int|null       $parent_workflow_id Parent workflow ID, if this is a sub-workflow.
 	 * @param int|null       $parent_step_index  Parent step index, if this is a sub-workflow.
+	 * @param string|null    $wait_type          Wait primitive currently blocking the workflow, if any.
+	 * @param array|null     $waiting_for        Wait targets currently blocking the workflow, if any.
 	 */
 	public function __construct(
 		public int $workflow_id,
@@ -35,5 +37,7 @@ readonly class WorkflowState {
 		public array $state,
 		public ?int $parent_workflow_id = null,
 		public ?int $parent_step_index = null,
+		public ?string $wait_type = null,
+		public ?array $waiting_for = null,
 	) {}
 }

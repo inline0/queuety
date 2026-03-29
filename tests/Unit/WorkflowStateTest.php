@@ -39,4 +39,20 @@ class WorkflowStateTest extends TestCase {
 		$reflection = new \ReflectionClass( $state );
 		$this->assertTrue( $reflection->isReadonly() );
 	}
+
+	public function test_exposes_wait_context_when_present(): void {
+		$state = new WorkflowState(
+			workflow_id: 7,
+			name: 'awaiting_review',
+			status: WorkflowStatus::WaitingWorkflow,
+			current_step: 2,
+			total_steps: 4,
+			state: array(),
+			wait_type: 'workflow',
+			waiting_for: array( '12', '18' ),
+		);
+
+		$this->assertSame( 'workflow', $state->wait_type );
+		$this->assertSame( array( '12', '18' ), $state->waiting_for );
+	}
 }

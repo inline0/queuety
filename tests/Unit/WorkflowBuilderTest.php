@@ -6,6 +6,7 @@ use PHPUnit\Framework\TestCase;
 use Queuety\Connection;
 use Queuety\Enums\JoinMode;
 use Queuety\Enums\Priority;
+use Queuety\Enums\WaitMode;
 use Queuety\Logger;
 use Queuety\Queue;
 use Queuety\WorkflowBuilder;
@@ -148,6 +149,10 @@ class WorkflowBuilderTest extends TestCase {
 			->wait_for_signal( 'approved' )
 			->compensate_with( 'UndoSignal' )
 			->build_steps();
+		$workflow_wait_steps = $this->make_builder( 'workflow_wait' )
+			->await_workflow( 42 )
+			->compensate_with( 'UndoWorkflowWait' )
+			->build_steps();
 		$sub_steps = $this->make_builder( 'parent' )
 			->sub_workflow( 'child', $sub_builder )
 			->compensate_with( 'UndoSubWorkflow' )
@@ -155,6 +160,76 @@ class WorkflowBuilderTest extends TestCase {
 
 		$this->assertSame( 'UndoTimer', $timer_steps[0]['compensation'] );
 		$this->assertSame( 'UndoSignal', $signal_steps[0]['compensation'] );
+		$this->assertSame( 'UndoWorkflowWait', $workflow_wait_steps[0]['compensation'] );
 		$this->assertSame( 'UndoSubWorkflow', $sub_steps[0]['compensation'] );
+	}
+
+	public function test_wait_for_signals_builds_serializable_definition(): void {
+		$steps = $this->make_builder( 'signals' )
+			->wait_for_signals(
+				array( 'approved', 'reviewed' ),
+				WaitMode::Any,
+				'gate_result',
+				'wait_gate'
+			)
+			->build_steps();
+
+		$this->assertSame(
+			array(
+				'type'         => 'signal',
+				'name'         => 'wait_gate',
+				'signal_name'  => 'approved',
+				'signal_names' => array( 'approved', 'reviewed' ),
+				'wait_mode'    => 'any',
+				'result_key'   => 'gate_result',
+				'compensation' => null,
+			),
+			$steps[0]
+		);
+	}
+
+	public function test_await_approval_uses_namespaced_result_key(): void {
+		$steps = $this->make_builder( 'approval' )
+			->await_approval()
+			->build_steps();
+
+		$this->assertSame( 'signal', $steps[0]['type'] );
+		$this->assertSame( 'approval', $steps[0]['signal_name'] );
+		$this->assertSame( 'approval', $steps[0]['result_key'] );
+	}
+
+	public function test_await_workflows_builds_serializable_definition(): void {
+		$steps = $this->make_builder( 'deps' )
+			->await_workflows(
+				array( 12, 18 ),
+				WaitMode::Any,
+				'dependency_results',
+				'wait_for_dependency'
+			)
+			->build_steps();
+
+		$this->assertSame(
+			array(
+				'type'            => 'workflow_wait',
+				'name'            => 'wait_for_dependency',
+				'workflow_ids'    => array( 12, 18 ),
+				'workflow_id_key' => null,
+				'wait_mode'       => 'any',
+				'result_key'      => 'dependency_results',
+				'compensation'    => null,
+			),
+			$steps[0]
+		);
+	}
+
+	public function test_await_workflow_accepts_state_key_source(): void {
+		$steps = $this->make_builder( 'deps' )
+			->await_workflow( 'child_workflow_id', 'child_state' )
+			->build_steps();
+
+		$this->assertSame( 'workflow_wait', $steps[0]['type'] );
+		$this->assertSame( 'child_workflow_id', $steps[0]['workflow_id_key'] );
+		$this->assertNull( $steps[0]['workflow_ids'] );
+		$this->assertSame( 'child_state', $steps[0]['result_key'] );
 	}
 }

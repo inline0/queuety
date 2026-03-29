@@ -9,6 +9,7 @@ namespace Queuety\Tests\Integration;
 
 use Queuety\Config;
 use Queuety\Enums\JobStatus;
+use Queuety\Enums\WaitMode;
 use Queuety\Enums\WorkflowStatus;
 use Queuety\HandlerRegistry;
 use Queuety\Job;
@@ -369,5 +370,84 @@ class SignalTest extends IntegrationTestCase {
 		$status = $this->workflow_mgr->status( $wf_id );
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
 		$this->assertSame( 1, $status->state['counter'] );
+	}
+
+	public function test_wait_for_signals_all_requires_all_signals(): void {
+		$wf_id = Queuety::workflow( 'signal_all' )
+			->then( DataFetchStep::class )
+			->wait_for_signals( array( 'approved', 'reviewed' ), WaitMode::All, 'gate' )
+			->then( AccumulatingStep::class )
+			->dispatch( array( 'user_id' => 9 ) );
+
+		$this->process_one();
+		$this->process_one();
+
+		$status = $this->workflow_mgr->status( $wf_id );
+		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( array( 'approved', 'reviewed' ), $status->waiting_for );
+
+		Queuety::signal( $wf_id, 'approved', array( 'decision' => 'approved' ) );
+		$status = $this->workflow_mgr->status( $wf_id );
+		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+
+		Queuety::signal( $wf_id, 'reviewed', array( 'reviewer' => 'ops' ) );
+		$status = $this->workflow_mgr->status( $wf_id );
+		$this->assertSame( WorkflowStatus::Running, $status->status );
+		$this->assertSame(
+			array(
+				'approved' => array( 'decision' => 'approved' ),
+				'reviewed' => array( 'reviewer' => 'ops' ),
+			),
+			$status->state['gate']
+		);
+	}
+
+	public function test_wait_for_signals_any_resumes_on_first_match(): void {
+		$wf_id = Queuety::workflow( 'signal_any' )
+			->then( DataFetchStep::class )
+			->wait_for_signals( array( 'approve', 'reject' ), WaitMode::Any, 'decision' )
+			->then( AccumulatingStep::class )
+			->dispatch( array( 'user_id' => 10 ) );
+
+		$this->process_one();
+		$this->process_one();
+
+		Queuety::signal( $wf_id, 'reject', array( 'reason' => 'invalid' ) );
+
+		$status = $this->workflow_mgr->status( $wf_id );
+		$this->assertSame( WorkflowStatus::Running, $status->status );
+		$this->assertSame(
+			array(
+				'reject' => array( 'reason' => 'invalid' ),
+			),
+			$status->state['decision']
+		);
+	}
+
+	public function test_await_approval_and_input_store_namespaced_payloads(): void {
+		$wf_id = Queuety::workflow( 'approval_input' )
+			->await_approval()
+			->await_input()
+			->dispatch();
+
+		$this->process_one();
+		Queuety::signal( $wf_id, 'approval', array( 'approved' => true, 'by' => 'admin' ) );
+
+		$status = $this->workflow_mgr->status( $wf_id );
+		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame(
+			array(
+				'approved' => true,
+				'by'       => 'admin',
+			),
+			$status->state['approval']
+		);
+
+		$this->process_one();
+		Queuety::signal( $wf_id, 'input', array( 'text' => 'ship it' ) );
+
+		$status = $this->workflow_mgr->status( $wf_id );
+		$this->assertSame( WorkflowStatus::Completed, $status->status );
+		$this->assertSame( array( 'text' => 'ship it' ), $status->state['input'] );
 	}
 }

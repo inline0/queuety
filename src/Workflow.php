@@ -14,6 +14,7 @@ use Queuety\Enums\JobStatus;
 use Queuety\Enums\JoinMode;
 use Queuety\Enums\LogEvent;
 use Queuety\Enums\Priority;
+use Queuety\Enums\WaitMode;
 use Queuety\Enums\WorkflowStatus;
 
 /**
@@ -106,6 +107,563 @@ class Workflow {
 			fn( string $key ) => ! str_starts_with( $key, '_' ),
 			ARRAY_FILTER_USE_KEY
 		);
+	}
+
+	/**
+	 * Resolve public wait context from persisted workflow state.
+	 *
+	 * @param array $state Full workflow state.
+	 * @return array<string,mixed>|null
+	 */
+	private function wait_context_from_state( array $state ): ?array {
+		$context = $state['_wait'] ?? null;
+		if ( is_array( $context ) && isset( $context['type'] ) ) {
+			return $context;
+		}
+
+		$waiting_signal = $state['_waiting_signal'] ?? null;
+		if ( is_string( $waiting_signal ) && '' !== $waiting_signal ) {
+			return array(
+				'type'         => 'signal',
+				'signal_names' => array( $waiting_signal ),
+				'wait_mode'    => WaitMode::All->value,
+			);
+		}
+
+		return null;
+	}
+
+	/**
+	 * Store runtime wait metadata in workflow state.
+	 *
+	 * @param array       $state       Workflow state.
+	 * @param string      $type        Wait type.
+	 * @param int         $step_index  Step index.
+	 * @param array       $waiting_for Wait targets.
+	 * @param WaitMode    $mode        Wait mode.
+	 * @param string|null $result_key  Optional result key.
+	 */
+	private function set_wait_context(
+		array &$state,
+		string $type,
+		int $step_index,
+		array $waiting_for,
+		WaitMode $mode,
+		?string $result_key = null,
+	): void {
+		$state['_wait'] = array(
+			'type'        => $type,
+			'step_index'  => $step_index,
+			'wait_mode'   => $mode->value,
+			'result_key'  => $result_key,
+			'waiting_for' => array_values( $waiting_for ),
+		);
+
+		if ( 'signal' === $type && WaitMode::All === $mode && 1 === count( $waiting_for ) ) {
+			$state['_waiting_signal'] = $waiting_for[0];
+			return;
+		}
+
+		unset( $state['_waiting_signal'] );
+	}
+
+	/**
+	 * Remove runtime wait metadata from workflow state.
+	 *
+	 * @param array $state Workflow state.
+	 */
+	private function clear_wait_context( array &$state ): void {
+		unset( $state['_wait'], $state['_waiting_signal'] );
+	}
+
+	/**
+	 * Resolve signal names from a signal step definition.
+	 *
+	 * @param array $step_def Step definition.
+	 * @return string[]
+	 */
+	private function signal_names_for_step( array $step_def ): array {
+		$signal_names = $step_def['signal_names'] ?? null;
+		if ( is_array( $signal_names ) ) {
+			return array_values(
+				array_filter(
+					array_map(
+						static fn( mixed $signal_name ): string => trim( (string) $signal_name ),
+						$signal_names
+					),
+					static fn( string $signal_name ): bool => '' !== $signal_name
+				)
+			);
+		}
+
+		$signal_name = trim( (string) ( $step_def['signal_name'] ?? '' ) );
+		return '' === $signal_name ? array() : array( $signal_name );
+	}
+
+	/**
+	 * Resolve the wait mode for a signal or workflow wait step.
+	 *
+	 * @param array $step_def Step definition.
+	 * @return WaitMode
+	 */
+	private function wait_mode_for_step( array $step_def ): WaitMode {
+		return WaitMode::tryFrom( (string) ( $step_def['wait_mode'] ?? WaitMode::All->value ) ) ?? WaitMode::All;
+	}
+
+	/**
+	 * Resolve the public result key for a wait step.
+	 *
+	 * @param array $step_def Step definition.
+	 * @return string|null
+	 */
+	private function wait_result_key_for_step( array $step_def ): ?string {
+		$result_key = $step_def['result_key'] ?? null;
+		if ( ! is_string( $result_key ) ) {
+			return null;
+		}
+
+		$result_key = trim( $result_key );
+		return '' === $result_key ? null : $result_key;
+	}
+
+	/**
+	 * Build the public step output for a signal wait that has been satisfied.
+	 *
+	 * @param array $step_def         Step definition.
+	 * @param array $matched_payloads Matched signal payloads keyed by signal name.
+	 * @return array
+	 */
+	private function signal_step_output( array $step_def, array $matched_payloads ): array {
+		$result_key   = $this->wait_result_key_for_step( $step_def );
+		$signal_names = $this->signal_names_for_step( $step_def );
+
+		$matched_payloads = array_intersect_key( $matched_payloads, array_flip( $signal_names ) );
+
+		if ( null !== $result_key ) {
+			if ( 1 === count( $signal_names ) ) {
+				return array( $result_key => $matched_payloads[ $signal_names[0] ] ?? array() );
+			}
+
+			$collected = array();
+			foreach ( $signal_names as $signal_name ) {
+				if ( array_key_exists( $signal_name, $matched_payloads ) ) {
+					$collected[ $signal_name ] = $matched_payloads[ $signal_name ];
+				}
+			}
+			return array( $result_key => $collected );
+		}
+
+		$output = array();
+		foreach ( $signal_names as $signal_name ) {
+			foreach ( $matched_payloads[ $signal_name ] ?? array() as $key => $value ) {
+				if ( ! str_starts_with( $key, '_' ) ) {
+					$output[ $key ] = $value;
+				}
+			}
+		}
+
+		return $output;
+	}
+
+	/**
+	 * Fetch stored signal payloads that satisfy a signal wait definition.
+	 *
+	 * @param int   $workflow_id Workflow ID.
+	 * @param array $step_def    Signal step definition.
+	 * @return array<string,array>|null
+	 */
+	private function resolve_signal_wait_payloads( int $workflow_id, array $step_def ): ?array {
+		$signal_names = $this->signal_names_for_step( $step_def );
+		if ( empty( $signal_names ) ) {
+			return null;
+		}
+
+		$sig_tbl      = $this->conn->table( Config::table_signals() );
+		$placeholders = array();
+		$params       = array( 'workflow_id' => $workflow_id );
+
+		foreach ( $signal_names as $index => $signal_name ) {
+			$key            = 'signal_' . $index;
+			$placeholders[] = ':' . $key;
+			$params[ $key ] = $signal_name;
+		}
+
+		$stmt = $this->conn->pdo()->prepare(
+			"SELECT signal_name, payload
+			FROM {$sig_tbl}
+			WHERE workflow_id = :workflow_id
+				AND signal_name IN (" . implode( ', ', $placeholders ) . ')
+			ORDER BY id ASC'
+		);
+		$stmt->execute( $params );
+
+		$mode              = $this->wait_mode_for_step( $step_def );
+		$first_payloads    = array();
+		$first_signal_name = null;
+		$first_signal_data = null;
+
+		foreach ( $stmt->fetchAll() as $row ) {
+			$signal_name = (string) $row['signal_name'];
+			$payload     = $row['payload'] ? ( json_decode( $row['payload'], true ) ?: array() ) : array();
+
+			if ( null === $first_signal_name ) {
+				$first_signal_name = $signal_name;
+				$first_signal_data = $payload;
+			}
+
+			if ( ! array_key_exists( $signal_name, $first_payloads ) ) {
+				$first_payloads[ $signal_name ] = $payload;
+			}
+		}
+
+		if ( WaitMode::Any === $mode ) {
+			if ( null === $first_signal_name ) {
+				return null;
+			}
+
+			return array( $first_signal_name => $first_signal_data ?? array() );
+		}
+
+		foreach ( $signal_names as $signal_name ) {
+			if ( ! array_key_exists( $signal_name, $first_payloads ) ) {
+				return null;
+			}
+		}
+
+		$ordered = array();
+		foreach ( $signal_names as $signal_name ) {
+			$ordered[ $signal_name ] = $first_payloads[ $signal_name ];
+		}
+
+		return $ordered;
+	}
+
+	/**
+	 * Resolve workflow dependency IDs for a workflow wait step.
+	 *
+	 * @param array $step_def Step definition.
+	 * @param array $state    Current workflow state.
+	 * @return int[]
+	 */
+	private function resolve_workflow_wait_ids( array $step_def, array $state ): array {
+		$workflow_ids = $step_def['workflow_ids'] ?? null;
+		if ( is_array( $workflow_ids ) ) {
+			return array_values(
+				array_unique(
+					array_filter(
+						array_map(
+							static fn( mixed $workflow_id ): int => (int) $workflow_id,
+							$workflow_ids
+						),
+						static fn( int $workflow_id ): bool => $workflow_id > 0
+					)
+				)
+			);
+		}
+
+		$workflow_key = trim( (string) ( $step_def['workflow_id_key'] ?? '' ) );
+		if ( '' === $workflow_key ) {
+			return array();
+		}
+
+		$value = $state[ $workflow_key ] ?? null;
+		if ( null === $value ) {
+			return array();
+		}
+
+		if ( is_array( $value ) ) {
+			return array_values(
+				array_unique(
+					array_filter(
+						array_map(
+							static fn( mixed $workflow_id ): int => (int) $workflow_id,
+							$value
+						),
+						static fn( int $workflow_id ): bool => $workflow_id > 0
+					)
+				)
+			);
+		}
+
+		$workflow_id = (int) $value;
+		return $workflow_id > 0 ? array( $workflow_id ) : array();
+	}
+
+	/**
+	 * Fetch dependency workflow rows keyed by workflow ID.
+	 *
+	 * @param int[] $workflow_ids Workflow IDs.
+	 * @return array<int,array>
+	 */
+	private function fetch_workflow_rows_by_id( array $workflow_ids ): array {
+		if ( empty( $workflow_ids ) ) {
+			return array();
+		}
+
+		$wf_tbl       = $this->conn->table( Config::table_workflows() );
+		$placeholders = array();
+		$params       = array();
+
+		foreach ( array_values( $workflow_ids ) as $index => $workflow_id ) {
+			$key            = 'workflow_' . $index;
+			$placeholders[] = ':' . $key;
+			$params[ $key ] = $workflow_id;
+		}
+
+		$stmt = $this->conn->pdo()->prepare(
+			"SELECT id, status, state
+			FROM {$wf_tbl}
+			WHERE id IN (" . implode( ', ', $placeholders ) . ')'
+		);
+		$stmt->execute( $params );
+
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			$rows[ (int) $row['id'] ] = $row;
+		}
+
+		return $rows;
+	}
+
+	/**
+	 * Evaluate whether a workflow wait is satisfied, still pending, or impossible.
+	 *
+	 * @param array $step_def      Step definition.
+	 * @param int[] $workflow_ids  Dependency workflow IDs.
+	 * @param array $workflow_rows Workflow rows keyed by ID.
+	 * @return string
+	 */
+	private function evaluate_workflow_wait_state( array $step_def, array $workflow_ids, array $workflow_rows ): string {
+		if ( empty( $workflow_ids ) ) {
+			return WaitMode::All === $this->wait_mode_for_step( $step_def ) ? 'satisfied' : 'impossible';
+		}
+
+		$mode              = $this->wait_mode_for_step( $step_def );
+		$completed_count   = 0;
+		$terminal_failures = 0;
+		$active_count      = 0;
+
+		foreach ( $workflow_ids as $workflow_id ) {
+			$row = $workflow_rows[ $workflow_id ] ?? null;
+			if ( null === $row ) {
+				return 'impossible';
+			}
+
+			$status = WorkflowStatus::from( $row['status'] );
+			if ( WorkflowStatus::Completed === $status ) {
+				++$completed_count;
+			} elseif ( in_array( $status, array( WorkflowStatus::Failed, WorkflowStatus::Cancelled ), true ) ) {
+				++$terminal_failures;
+			} else {
+				++$active_count;
+			}
+		}
+
+		if ( WaitMode::Any === $mode ) {
+			if ( $completed_count >= 1 ) {
+				return 'satisfied';
+			}
+
+			return 0 === $active_count ? 'impossible' : 'pending';
+		}
+
+		if ( $completed_count === count( $workflow_ids ) ) {
+			return 'satisfied';
+		}
+
+		if ( $terminal_failures > 0 ) {
+			return 'impossible';
+		}
+
+		return 'pending';
+	}
+
+	/**
+	 * Build public step output for a satisfied workflow wait step.
+	 *
+	 * @param array $step_def      Step definition.
+	 * @param int[] $workflow_ids  Dependency workflow IDs.
+	 * @param array $workflow_rows Workflow rows keyed by ID.
+	 * @return array
+	 */
+	private function workflow_wait_step_output( array $step_def, array $workflow_ids, array $workflow_rows ): array {
+		$result_key = $this->wait_result_key_for_step( $step_def );
+		$mode       = $this->wait_mode_for_step( $step_def );
+		$results    = array();
+
+		foreach ( $workflow_ids as $workflow_id ) {
+			$row = $workflow_rows[ $workflow_id ] ?? null;
+			if ( null === $row || WorkflowStatus::Completed->value !== $row['status'] ) {
+				continue;
+			}
+
+			$state                            = json_decode( $row['state'], true ) ?: array();
+			$results[ (string) $workflow_id ] = $this->public_state( $state );
+
+			if ( WaitMode::Any === $mode ) {
+				break;
+			}
+		}
+
+		if ( null !== $result_key ) {
+			if ( 1 === count( $workflow_ids ) && 1 === count( $results ) ) {
+				return array( $result_key => array_values( $results )[0] );
+			}
+
+			return array( $result_key => $results );
+		}
+
+		$output = array();
+		foreach ( $workflow_ids as $workflow_id ) {
+			foreach ( $results[ (string) $workflow_id ] ?? array() as $key => $value ) {
+				if ( ! str_starts_with( $key, '_' ) ) {
+					$output[ $key ] = $value;
+				}
+			}
+
+			if ( WaitMode::Any === $mode && ! empty( $results[ (string) $workflow_id ] ?? null ) ) {
+				break;
+			}
+		}
+
+		return $output;
+	}
+
+	/**
+	 * Delete workflow dependency rows for a specific wait step.
+	 *
+	 * @param int $workflow_id Workflow ID.
+	 * @param int $step_index  Step index.
+	 */
+	private function clear_workflow_dependencies( int $workflow_id, int $step_index ): void {
+		$dep_tbl = $this->conn->table( Config::table_workflow_dependencies() );
+		$stmt    = $this->conn->pdo()->prepare(
+			"DELETE FROM {$dep_tbl}
+			WHERE waiting_workflow_id = :workflow_id
+				AND step_index = :step_index"
+		);
+		$stmt->execute(
+			array(
+				'workflow_id' => $workflow_id,
+				'step_index'  => $step_index,
+			)
+		);
+	}
+
+	/**
+	 * Register workflow dependency rows for a pending wait step.
+	 *
+	 * @param int   $workflow_id Workflow ID.
+	 * @param int   $step_index  Step index.
+	 * @param int[] $workflow_ids Dependency workflow IDs.
+	 */
+	private function store_workflow_dependencies( int $workflow_id, int $step_index, array $workflow_ids ): void {
+		$this->clear_workflow_dependencies( $workflow_id, $step_index );
+
+		if ( empty( $workflow_ids ) ) {
+			return;
+		}
+
+		$dep_tbl = $this->conn->table( Config::table_workflow_dependencies() );
+		$stmt    = $this->conn->pdo()->prepare(
+			"INSERT INTO {$dep_tbl}
+			(waiting_workflow_id, step_index, dependency_workflow_id)
+			VALUES (:waiting_workflow_id, :step_index, :dependency_workflow_id)"
+		);
+
+		foreach ( $workflow_ids as $dependency_workflow_id ) {
+			$stmt->execute(
+				array(
+					'waiting_workflow_id'    => $workflow_id,
+					'step_index'             => $step_index,
+					'dependency_workflow_id' => $dependency_workflow_id,
+				)
+			);
+		}
+	}
+
+	/**
+	 * Advance a satisfied wait step without requiring a completing job row.
+	 *
+	 * @param \PDO  $pdo         Active PDO connection.
+	 * @param array $wf_row      Locked workflow row.
+	 * @param int   $workflow_id Workflow ID.
+	 * @param int   $step_index  Step index.
+	 * @param array $state       Workflow state.
+	 * @param array $step_output Wait step output.
+	 * @return int[] Completed workflow IDs that may unblock dependent waits.
+	 */
+	private function settle_wait_step(
+		\PDO $pdo,
+		array $wf_row,
+		int $workflow_id,
+		int $step_index,
+		array $state,
+		array $step_output,
+	): array {
+		$wf_tbl      = $this->conn->table( Config::table_workflows() );
+		$steps       = $state['_steps'] ?? array();
+		$total_steps = (int) $wf_row['total_steps'];
+
+		$this->clear_wait_context( $state );
+		$this->merge_step_output_into_state( $state, $step_output, $step_index );
+
+		$current_step_def = $steps[ $step_index ] ?? null;
+		$this->push_compensation_snapshot( $state, $current_step_def, $step_index );
+
+		$next_step = $step_index + 1;
+		$is_last   = $next_step >= $total_steps;
+
+		if ( $is_last ) {
+			$stmt = $pdo->prepare(
+				"UPDATE {$wf_tbl}
+				SET status = 'completed', state = :state, current_step = :step, completed_at = NOW()
+				WHERE id = :id"
+			);
+		} else {
+			$stmt = $pdo->prepare(
+				"UPDATE {$wf_tbl}
+				SET status = 'running', state = :state, current_step = :step
+				WHERE id = :id"
+			);
+		}
+
+		$stmt->execute(
+			array(
+				'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
+				'step'  => $next_step,
+				'id'    => $workflow_id,
+			)
+		);
+
+		if ( $is_last ) {
+			$this->logger->log(
+				LogEvent::WorkflowCompleted,
+				array(
+					'workflow_id' => $workflow_id,
+					'handler'     => $wf_row['name'],
+					'queue'       => $state['_queue'] ?? 'default',
+				)
+			);
+			return $this->on_workflow_completed( $workflow_id, $state, $pdo );
+		}
+
+		if ( isset( $steps[ $next_step ] ) ) {
+			$queue_name   = $state['_queue'] ?? 'default';
+			$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
+			$max_attempts = $state['_max_attempts'] ?? 3;
+
+			$this->enqueue_step_def(
+				$steps[ $next_step ],
+				$workflow_id,
+				$next_step,
+				$queue_name,
+				$priority,
+				$max_attempts,
+			);
+		}
+
+		return array();
 	}
 
 	/**
@@ -475,6 +1033,7 @@ class Workflow {
 	 * @param array $step_output      Step output to merge into state.
 	 * @param int   $duration_ms      Step duration.
 	 * @param bool  $log_job_completion Whether to emit the job completion log entry.
+	 * @return int[] Completed workflow IDs that may unblock dependent waits.
 	 * @throws \RuntimeException If `_goto` references an unknown step name.
 	 */
 	private function finalize_step_completion(
@@ -490,7 +1049,7 @@ class Workflow {
 		array $step_output,
 		int $duration_ms,
 		bool $log_job_completion = true,
-	): void {
+	): array {
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
 
 		$this->merge_step_output_into_state( $state, $step_output, $current_step );
@@ -572,8 +1131,7 @@ class Workflow {
 					'queue'       => $job_row['queue'] ?? 'default',
 				)
 			);
-			$this->on_workflow_completed( $workflow_id, $state, $pdo );
-			return;
+			return $this->on_workflow_completed( $workflow_id, $state, $pdo );
 		}
 
 		if ( ! $is_paused && isset( $steps[ $next_step ] ) ) {
@@ -590,6 +1148,8 @@ class Workflow {
 				$max_attempts,
 			);
 		}
+
+		return array();
 	}
 
 	/**
@@ -658,7 +1218,25 @@ class Workflow {
 				step_index: $step_index,
 			);
 		} elseif ( 'signal' === $type ) {
-			$this->enqueue_signal_step( $step_def, $workflow_id, $step_index );
+			$this->queue->dispatch(
+				handler: '__queuety_signal',
+				payload: array( 'step_index' => $step_index ),
+				queue: $queue_name,
+				priority: $priority,
+				max_attempts: $max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
+		} elseif ( 'workflow_wait' === $type ) {
+			$this->queue->dispatch(
+				handler: '__queuety_workflow_wait',
+				payload: array( 'step_index' => $step_index ),
+				queue: $queue_name,
+				priority: $priority,
+				max_attempts: $max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
 		} else {
 			$handler          = $this->resolve_step_handler( $step_def );
 			$handler_defaults = HandlerMetadata::from_class( $handler );
@@ -684,124 +1262,82 @@ class Workflow {
 	 * @param array $step_def    Signal step definition.
 	 * @param int   $workflow_id Workflow ID.
 	 * @param int   $step_index  Step index.
+	 * @throws \Throwable If the database transaction fails.
 	 */
 	private function enqueue_signal_step( array $step_def, int $workflow_id, int $step_index ): void {
-		$pdo         = $this->conn->pdo();
-		$wf_tbl      = $this->conn->table( Config::table_workflows() );
-		$sig_tbl     = $this->conn->table( Config::table_signals() );
-		$signal_name = $step_def['signal_name'] ?? '';
+		$pdo              = $this->conn->pdo();
+		$wf_tbl           = $this->conn->table( Config::table_workflows() );
+		$matched_payloads = $this->resolve_signal_wait_payloads( $workflow_id, $step_def );
+		$completed_ids    = array();
 
-		$stmt = $pdo->prepare(
-			"SELECT payload FROM {$sig_tbl}
-			WHERE workflow_id = :workflow_id AND signal_name = :signal_name
-			ORDER BY id ASC LIMIT 1"
-		);
-		$stmt->execute(
-			array(
-				'workflow_id' => $workflow_id,
-				'signal_name' => $signal_name,
-			)
-		);
-		$signal_row = $stmt->fetch();
-
-		if ( $signal_row ) {
+		$pdo->beginTransaction();
+		try {
 			$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$wf_stmt->execute( array( 'id' => $workflow_id ) );
 			$wf_row = $wf_stmt->fetch();
 
 			if ( ! $wf_row ) {
+				$pdo->rollBack();
 				return;
 			}
 
-				$state       = json_decode( $wf_row['state'], true ) ?: array();
-				$signal_data = json_decode( $signal_row['payload'], true ) ?: array();
-				$steps       = $state['_steps'] ?? array();
-				$total_steps = (int) $wf_row['total_steps'];
+			$state        = json_decode( $wf_row['state'], true ) ?: array();
+			$current_step = (int) $wf_row['current_step'];
+			$status       = WorkflowStatus::from( $wf_row['status'] );
 
-			foreach ( $signal_data as $key => $value ) {
-				if ( ! str_starts_with( $key, '_' ) ) {
-					$state[ $key ] = $value;
-				}
+			if (
+				$current_step !== $step_index
+				|| ! in_array( $status, array( WorkflowStatus::Running, WorkflowStatus::Paused, WorkflowStatus::WaitingSignal ), true )
+			) {
+				$pdo->commit();
+				return;
 			}
 
-				$current_step_def = $steps[ $step_index ] ?? null;
-				$this->push_compensation_snapshot( $state, $current_step_def, $step_index );
+			if ( null !== $matched_payloads ) {
+				$completed_ids = $this->settle_wait_step(
+					$pdo,
+					$wf_row,
+					$workflow_id,
+					$step_index,
+					$state,
+					$this->signal_step_output( $step_def, $matched_payloads ),
+				);
+			} else {
+				$this->set_wait_context(
+					$state,
+					'signal',
+					$step_index,
+					$this->signal_names_for_step( $step_def ),
+					$this->wait_mode_for_step( $step_def ),
+					$this->wait_result_key_for_step( $step_def ),
+				);
 
-				$next_step = $step_index + 1;
-				$is_last   = $next_step >= $total_steps;
-
-			if ( $is_last ) {
 				$upd = $pdo->prepare(
 					"UPDATE {$wf_tbl}
-					SET state = :state, current_step = :step, status = 'completed', completed_at = NOW()
+					SET status = :status, state = :state, current_step = :step
 					WHERE id = :id"
 				);
 				$upd->execute(
 					array(
-						'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
-						'step'  => $next_step,
-						'id'    => $workflow_id,
+						'status' => WorkflowStatus::WaitingSignal->value,
+						'state'  => json_encode( $state, JSON_THROW_ON_ERROR ),
+						'step'   => $step_index,
+						'id'     => $workflow_id,
 					)
 				);
-
-				$this->logger->log(
-					LogEvent::WorkflowCompleted,
-					array(
-						'workflow_id' => $workflow_id,
-						'handler'     => $wf_row['name'],
-						'queue'       => $state['_queue'] ?? 'default',
-					)
-				);
-
-				$this->on_workflow_completed( $workflow_id, $state, $pdo );
-			} else {
-				$upd = $pdo->prepare(
-					"UPDATE {$wf_tbl} SET state = :state, current_step = :step WHERE id = :id"
-				);
-				$upd->execute(
-					array(
-						'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
-						'step'  => $next_step,
-						'id'    => $workflow_id,
-					)
-				);
-
-				if ( isset( $steps[ $next_step ] ) ) {
-					$queue_name   = $state['_queue'] ?? 'default';
-					$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
-					$max_attempts = $state['_max_attempts'] ?? 3;
-
-					$this->enqueue_step_def(
-						$steps[ $next_step ],
-						$workflow_id,
-						$next_step,
-						$queue_name,
-						$priority,
-						$max_attempts,
-					);
-				}
 			}
-		} else {
-			$wf_stmt = $pdo->prepare( "SELECT state FROM {$wf_tbl} WHERE id = :id" );
-			$wf_stmt->execute( array( 'id' => $workflow_id ) );
-			$wf_row = $wf_stmt->fetch();
 
-			$state                    = $wf_row ? ( json_decode( $wf_row['state'], true ) ?: array() ) : array();
-			$state['_waiting_signal'] = $signal_name;
+			$pdo->commit();
+			$this->invalidate_workflow_cache( $workflow_id );
+		} catch ( \Throwable $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+			throw $e;
+		}
 
-			$upd = $pdo->prepare(
-				"UPDATE {$wf_tbl}
-				SET status = :status, state = :state, current_step = :step
-				WHERE id = :id"
-			);
-			$upd->execute(
-				array(
-					'status' => WorkflowStatus::WaitingSignal->value,
-					'state'  => json_encode( $state, JSON_THROW_ON_ERROR ),
-					'step'   => $step_index,
-					'id'     => $workflow_id,
-				)
-			);
+		foreach ( $completed_ids as $completed_workflow_id ) {
+			$this->reconcile_waiting_workflows_for_dependency( $completed_workflow_id );
 		}
 	}
 
@@ -823,6 +1359,7 @@ class Workflow {
 		$state                 = $workflow_state;
 		$should_log_completion = false;
 		$should_compensate     = false;
+		$terminal_ids          = array();
 
 		$pdo->beginTransaction();
 		try {
@@ -895,8 +1432,8 @@ class Workflow {
 
 			if ( empty( $missing ) ) {
 				if ( $this->fan_out_join_satisfied( $step_def, $runtime ) ) {
-					$step_output = $this->fan_out_step_output( $state, $step_def, $runtime, $step_index );
-					$this->finalize_step_completion(
+					$step_output           = $this->fan_out_step_output( $state, $step_def, $runtime, $step_index );
+					$terminal_ids          = $this->finalize_step_completion(
 						$pdo,
 						$wf_row,
 						$job_row,
@@ -914,6 +1451,7 @@ class Workflow {
 				} elseif ( $this->fan_out_join_impossible( $step_def, $runtime ) ) {
 					$state             = $this->mark_workflow_failed_locked( $pdo, $wf_row, $workflow_id, $job_id, 'Fan-out join could not be satisfied.', $state );
 					$should_compensate = ! empty( $state['_compensate_on_failure'] );
+					$terminal_ids      = array( $workflow_id );
 				} else {
 					$this->mark_workflow_job_completed( $pdo, $job_id );
 					$this->persist_internal_state( $workflow_id, $state );
@@ -926,6 +1464,11 @@ class Workflow {
 					$this->persist_internal_state( $workflow_id, $state );
 				}
 				$this->invalidate_workflow_cache( $workflow_id );
+
+				foreach ( array_values( array_unique( $terminal_ids ) ) as $terminal_workflow_id ) {
+					$this->reconcile_waiting_workflows_for_dependency( $terminal_workflow_id );
+				}
+
 				return $should_log_completion;
 			}
 
@@ -1111,6 +1654,113 @@ class Workflow {
 	}
 
 	/**
+	 * Handle a workflow dependency wait step dispatched via the worker.
+	 *
+	 * @param int   $workflow_id    Workflow ID.
+	 * @param array $step_def       Step definition.
+	 * @param int   $step_index     Step index.
+	 * @param array $workflow_state Current workflow state.
+	 * @throws \Throwable If the database transaction fails.
+	 */
+	public function handle_workflow_wait_step( int $workflow_id, array $step_def, int $step_index, array $workflow_state ): void {
+		$pdo               = $this->conn->pdo();
+		$wf_tbl            = $this->conn->table( Config::table_workflows() );
+		$should_compensate = false;
+		$state             = $workflow_state;
+		$completed_ids     = array();
+		$terminal_ids      = array();
+
+		$pdo->beginTransaction();
+		try {
+			$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+			$wf_stmt->execute( array( 'id' => $workflow_id ) );
+			$wf_row = $wf_stmt->fetch();
+
+			if ( ! $wf_row ) {
+				$pdo->rollBack();
+				return;
+			}
+
+			$state        = json_decode( $wf_row['state'], true ) ?: $workflow_state;
+			$current_step = (int) $wf_row['current_step'];
+			$status       = WorkflowStatus::from( $wf_row['status'] );
+
+			if (
+				$current_step !== $step_index
+				|| ! in_array( $status, array( WorkflowStatus::Running, WorkflowStatus::Paused, WorkflowStatus::WaitingWorkflow ), true )
+			) {
+				$pdo->commit();
+				return;
+			}
+
+			$workflow_ids  = $this->resolve_workflow_wait_ids( $step_def, $state );
+			$workflow_rows = $this->fetch_workflow_rows_by_id( $workflow_ids );
+			$evaluation    = $this->evaluate_workflow_wait_state( $step_def, $workflow_ids, $workflow_rows );
+
+			if ( 'satisfied' === $evaluation ) {
+				$this->clear_workflow_dependencies( $workflow_id, $step_index );
+				$completed_ids = $this->settle_wait_step(
+					$pdo,
+					$wf_row,
+					$workflow_id,
+					$step_index,
+					$state,
+					$this->workflow_wait_step_output( $step_def, $workflow_ids, $workflow_rows ),
+				);
+				$terminal_ids  = $completed_ids;
+			} elseif ( 'pending' === $evaluation ) {
+				$this->store_workflow_dependencies( $workflow_id, $step_index, $workflow_ids );
+				$this->set_wait_context(
+					$state,
+					'workflow',
+					$step_index,
+					array_map( 'strval', $workflow_ids ),
+					$this->wait_mode_for_step( $step_def ),
+					$this->wait_result_key_for_step( $step_def ),
+				);
+
+				$upd = $pdo->prepare(
+					"UPDATE {$wf_tbl}
+					SET status = :status, state = :state, current_step = :step
+					WHERE id = :id"
+				);
+				$upd->execute(
+					array(
+						'status' => WorkflowStatus::WaitingWorkflow->value,
+						'state'  => json_encode( $state, JSON_THROW_ON_ERROR ),
+						'step'   => $step_index,
+						'id'     => $workflow_id,
+					)
+				);
+			} else {
+				$this->clear_workflow_dependencies( $workflow_id, $step_index );
+				$this->clear_wait_context( $state );
+				$state             = $this->mark_workflow_failed_locked( $pdo, $wf_row, $workflow_id, 0, 'Workflow wait could not be satisfied.', $state );
+				$should_compensate = ! empty( $state['_compensate_on_failure'] );
+				$terminal_ids      = array( $workflow_id );
+			}
+
+			$pdo->commit();
+		} catch ( \Throwable $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+			throw $e;
+		}
+
+		if ( $should_compensate ) {
+			$state = $this->run_compensations( $workflow_id, $state, 'failure' );
+			$this->persist_internal_state( $workflow_id, $state );
+		}
+
+		$this->invalidate_workflow_cache( $workflow_id );
+
+		foreach ( array_values( array_unique( $terminal_ids ) ) as $terminal_workflow_id ) {
+			$this->reconcile_waiting_workflows_for_dependency( $terminal_workflow_id );
+		}
+	}
+
+	/**
 	 * Handle an external signal sent to a workflow.
 	 *
 	 * Inserts the signal into the queuety_signals table for audit purposes.
@@ -1124,9 +1774,11 @@ class Workflow {
 	 * @throws \Throwable If the database transaction fails.
 	 */
 	public function handle_signal( int $workflow_id, string $signal_name, array $data = array() ): void {
-		$pdo     = $this->conn->pdo();
-		$wf_tbl  = $this->conn->table( Config::table_workflows() );
-		$sig_tbl = $this->conn->table( Config::table_signals() );
+		$pdo           = $this->conn->pdo();
+		$wf_tbl        = $this->conn->table( Config::table_workflows() );
+		$sig_tbl       = $this->conn->table( Config::table_signals() );
+		$state_changed = false;
+		$completed_ids = array();
 
 		$pdo->beginTransaction();
 		try {
@@ -1152,81 +1804,28 @@ class Workflow {
 				return;
 			}
 
-				$state          = json_decode( $wf_row['state'], true ) ?: array();
-				$waiting_signal = $state['_waiting_signal'] ?? null;
+			$state        = json_decode( $wf_row['state'], true ) ?: array();
+			$current_step = (int) $wf_row['current_step'];
+			$steps        = $state['_steps'] ?? array();
+			$step_def     = $steps[ $current_step ] ?? null;
 
 			if (
 				WorkflowStatus::WaitingSignal->value === $wf_row['status']
-				&& $waiting_signal === $signal_name
+				&& is_array( $step_def )
+				&& 'signal' === ( $step_def['type'] ?? '' )
+				&& in_array( $signal_name, $this->signal_names_for_step( $step_def ), true )
 			) {
-				foreach ( $data as $key => $value ) {
-					if ( ! str_starts_with( $key, '_' ) ) {
-						$state[ $key ] = $value;
-					}
-				}
-
-				unset( $state['_waiting_signal'] );
-
-				$current_step     = (int) $wf_row['current_step'];
-				$total_steps      = (int) $wf_row['total_steps'];
-				$steps            = $state['_steps'] ?? array();
-				$current_step_def = $steps[ $current_step ] ?? null;
-				$this->push_compensation_snapshot( $state, $current_step_def, $current_step );
-				$next_step = $current_step + 1;
-				$is_last   = $next_step >= $total_steps;
-
-				if ( $is_last ) {
-					$upd = $pdo->prepare(
-						"UPDATE {$wf_tbl}
-						SET status = 'completed', state = :state, current_step = :step, completed_at = NOW()
-						WHERE id = :id"
+				$matched_payloads = $this->resolve_signal_wait_payloads( $workflow_id, $step_def );
+				if ( null !== $matched_payloads ) {
+					$completed_ids = $this->settle_wait_step(
+						$pdo,
+						$wf_row,
+						$workflow_id,
+						$current_step,
+						$state,
+						$this->signal_step_output( $step_def, $matched_payloads ),
 					);
-					$upd->execute(
-						array(
-							'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
-							'step'  => $next_step,
-							'id'    => $workflow_id,
-						)
-					);
-
-					$this->logger->log(
-						LogEvent::WorkflowCompleted,
-						array(
-							'workflow_id' => $workflow_id,
-							'handler'     => $wf_row['name'],
-							'queue'       => $state['_queue'] ?? 'default',
-						)
-					);
-
-					$this->on_workflow_completed( $workflow_id, $state, $pdo );
-				} else {
-					$upd = $pdo->prepare(
-						"UPDATE {$wf_tbl}
-						SET status = 'running', state = :state, current_step = :step
-						WHERE id = :id"
-					);
-					$upd->execute(
-						array(
-							'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
-							'step'  => $next_step,
-							'id'    => $workflow_id,
-						)
-					);
-
-					if ( isset( $steps[ $next_step ] ) ) {
-						$queue_name   = $state['_queue'] ?? 'default';
-						$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
-						$max_attempts = $state['_max_attempts'] ?? 3;
-
-						$this->enqueue_step_def(
-							$steps[ $next_step ],
-							$workflow_id,
-							$next_step,
-							$queue_name,
-							$priority,
-							$max_attempts,
-						);
-					}
+					$state_changed = true;
 				}
 			}
 
@@ -1236,6 +1835,159 @@ class Workflow {
 				$pdo->rollBack();
 			}
 			throw $e;
+		}
+
+		if ( $state_changed ) {
+			$this->invalidate_workflow_cache( $workflow_id );
+		}
+
+		foreach ( $completed_ids as $completed_workflow_id ) {
+			$this->reconcile_waiting_workflows_for_dependency( $completed_workflow_id );
+		}
+	}
+
+	/**
+	 * Re-evaluate workflows that are waiting on a terminal dependency workflow.
+	 *
+	 * @param int $dependency_workflow_id Dependency workflow ID.
+	 * @throws \Throwable If a dependent workflow reconciliation transaction fails.
+	 */
+	private function reconcile_waiting_workflows_for_dependency( int $dependency_workflow_id ): void {
+		$pdo     = $this->conn->pdo();
+		$dep_tbl = $this->conn->table( Config::table_workflow_dependencies() );
+		$wf_tbl  = $this->conn->table( Config::table_workflows() );
+
+		$dep_stmt = $pdo->prepare( "SELECT status FROM {$wf_tbl} WHERE id = :id" );
+		$dep_stmt->execute( array( 'id' => $dependency_workflow_id ) );
+		$dependency_row = $dep_stmt->fetch();
+
+		if ( ! $dependency_row ) {
+			return;
+		}
+
+		$dependency_status = WorkflowStatus::from( $dependency_row['status'] );
+
+		$stmt = $pdo->prepare(
+			"SELECT DISTINCT waiting_workflow_id, step_index
+			FROM {$dep_tbl}
+			WHERE dependency_workflow_id = :dependency_workflow_id
+			ORDER BY waiting_workflow_id ASC"
+		);
+		$stmt->execute( array( 'dependency_workflow_id' => $dependency_workflow_id ) );
+
+		foreach ( $stmt->fetchAll() as $row ) {
+			$waiting_workflow_id = (int) $row['waiting_workflow_id'];
+			$step_index          = (int) $row['step_index'];
+			$completed_ids       = array();
+			$terminal_ids        = array();
+			$should_compensate   = false;
+			$state               = array();
+
+			$pdo->beginTransaction();
+			try {
+				if ( WorkflowStatus::Completed === $dependency_status ) {
+					$mark = $pdo->prepare(
+						"UPDATE {$dep_tbl}
+						SET satisfied_at = NOW()
+						WHERE waiting_workflow_id = :waiting_workflow_id
+							AND step_index = :step_index
+							AND dependency_workflow_id = :dependency_workflow_id
+							AND satisfied_at IS NULL"
+					);
+					$mark->execute(
+						array(
+							'waiting_workflow_id'    => $waiting_workflow_id,
+							'step_index'             => $step_index,
+							'dependency_workflow_id' => $dependency_workflow_id,
+						)
+					);
+				}
+
+				$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+				$wf_stmt->execute( array( 'id' => $waiting_workflow_id ) );
+				$wf_row = $wf_stmt->fetch();
+
+				if ( ! $wf_row ) {
+					$this->clear_workflow_dependencies( $waiting_workflow_id, $step_index );
+					$pdo->commit();
+					continue;
+				}
+
+				$state = json_decode( $wf_row['state'], true ) ?: array();
+				if (
+					WorkflowStatus::WaitingWorkflow->value !== $wf_row['status']
+					|| (int) $wf_row['current_step'] !== $step_index
+				) {
+					$this->clear_workflow_dependencies( $waiting_workflow_id, $step_index );
+					$pdo->commit();
+					$this->invalidate_workflow_cache( $waiting_workflow_id );
+					continue;
+				}
+
+				$steps    = $state['_steps'] ?? array();
+				$step_def = $steps[ $step_index ] ?? null;
+				if ( ! is_array( $step_def ) || 'workflow_wait' !== ( $step_def['type'] ?? '' ) ) {
+					$this->clear_workflow_dependencies( $waiting_workflow_id, $step_index );
+					$this->clear_wait_context( $state );
+
+					$upd = $pdo->prepare(
+						"UPDATE {$wf_tbl} SET state = :state WHERE id = :id"
+					);
+					$upd->execute(
+						array(
+							'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
+							'id'    => $waiting_workflow_id,
+						)
+					);
+
+					$pdo->commit();
+					$this->invalidate_workflow_cache( $waiting_workflow_id );
+					continue;
+				}
+
+				$workflow_ids  = $this->resolve_workflow_wait_ids( $step_def, $state );
+				$workflow_rows = $this->fetch_workflow_rows_by_id( $workflow_ids );
+				$evaluation    = $this->evaluate_workflow_wait_state( $step_def, $workflow_ids, $workflow_rows );
+
+				if ( 'satisfied' === $evaluation ) {
+					$this->clear_workflow_dependencies( $waiting_workflow_id, $step_index );
+					$completed_ids = $this->settle_wait_step(
+						$pdo,
+						$wf_row,
+						$waiting_workflow_id,
+						$step_index,
+						$state,
+						$this->workflow_wait_step_output( $step_def, $workflow_ids, $workflow_rows ),
+					);
+					$terminal_ids  = $completed_ids;
+				} elseif ( 'impossible' === $evaluation ) {
+					$this->clear_workflow_dependencies( $waiting_workflow_id, $step_index );
+					$this->clear_wait_context( $state );
+					$state             = $this->mark_workflow_failed_locked( $pdo, $wf_row, $waiting_workflow_id, 0, 'Workflow wait could not be satisfied.', $state );
+					$should_compensate = ! empty( $state['_compensate_on_failure'] );
+					$terminal_ids      = array( $waiting_workflow_id );
+				}
+
+				$pdo->commit();
+			} catch ( \Throwable $e ) {
+				if ( $pdo->inTransaction() ) {
+					$pdo->rollBack();
+				}
+				throw $e;
+			}
+
+			if ( $should_compensate ) {
+				$state = $this->run_compensations( $waiting_workflow_id, $state, 'failure' );
+				$this->persist_internal_state( $waiting_workflow_id, $state );
+			}
+
+			$this->invalidate_workflow_cache( $waiting_workflow_id );
+
+			foreach ( array_values( array_unique( $terminal_ids ) ) as $terminal_workflow_id ) {
+				if ( $terminal_workflow_id !== $dependency_workflow_id ) {
+					$this->reconcile_waiting_workflows_for_dependency( $terminal_workflow_id );
+				}
+			}
 		}
 	}
 
@@ -1280,9 +2032,10 @@ class Workflow {
 	 * @throws \Throwable If the database transaction fails.
 	 */
 	public function advance_step( int $workflow_id, int $completed_job_id, array $step_output, int $duration_ms = 0 ): void {
-		$pdo    = $this->conn->pdo();
-		$wf_tbl = $this->conn->table( Config::table_workflows() );
-		$jb_tbl = $this->conn->table( Config::table_jobs() );
+		$pdo          = $this->conn->pdo();
+		$wf_tbl       = $this->conn->table( Config::table_workflows() );
+		$jb_tbl       = $this->conn->table( Config::table_jobs() );
+		$terminal_ids = array();
 
 		$pdo->beginTransaction();
 		try {
@@ -1427,8 +2180,8 @@ class Workflow {
 				$this->persist_internal_state( $workflow_id, $state );
 				$this->bury_active_jobs_for_step( $workflow_id, $current_step, 'Fan-out join settled early.', $completed_job_id );
 
-				$step_output = $this->fan_out_step_output( $state, $current_step_def, $runtime, $current_step );
-				$this->finalize_step_completion(
+				$step_output  = $this->fan_out_step_output( $state, $current_step_def, $runtime, $current_step );
+				$terminal_ids = $this->finalize_step_completion(
 					$pdo,
 					$wf_row,
 					$job_row,
@@ -1444,6 +2197,9 @@ class Workflow {
 
 				$pdo->commit();
 				$this->invalidate_workflow_cache( $workflow_id );
+				foreach ( array_values( array_unique( $terminal_ids ) ) as $terminal_workflow_id ) {
+					$this->reconcile_waiting_workflows_for_dependency( $terminal_workflow_id );
+				}
 				return;
 			}
 
@@ -1555,7 +2311,7 @@ class Workflow {
 							'queue'       => $job_row['queue'] ?? 'default',
 						)
 					);
-					$this->on_workflow_completed( $workflow_id, $state, $pdo );
+					$terminal_ids = $this->on_workflow_completed( $workflow_id, $state, $pdo );
 				} elseif ( ! $is_paused && isset( $steps[ $next_step ] ) ) {
 					$queue_name   = $state['_queue'] ?? 'default';
 					$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
@@ -1573,10 +2329,13 @@ class Workflow {
 
 				$pdo->commit();
 				$this->invalidate_workflow_cache( $workflow_id );
+				foreach ( array_values( array_unique( $terminal_ids ) ) as $terminal_workflow_id ) {
+					$this->reconcile_waiting_workflows_for_dependency( $terminal_workflow_id );
+				}
 				return;
 			}
 
-				$this->finalize_step_completion(
+				$terminal_ids = $this->finalize_step_completion(
 					$pdo,
 					$wf_row,
 					$job_row,
@@ -1592,6 +2351,9 @@ class Workflow {
 
 				$pdo->commit();
 				$this->invalidate_workflow_cache( $workflow_id );
+			foreach ( array_values( array_unique( $terminal_ids ) ) as $terminal_workflow_id ) {
+				$this->reconcile_waiting_workflows_for_dependency( $terminal_workflow_id );
+			}
 		} catch ( \Throwable $e ) {
 			if ( $pdo->inTransaction() ) {
 				$pdo->rollBack();
@@ -1609,8 +2371,9 @@ class Workflow {
 	 * @param array $state       The completed workflow's state.
 	 * @param \PDO  $pdo         Active PDO connection (may be in a transaction).
 	 */
-	private function on_workflow_completed( int $workflow_id, array $state, \PDO $pdo ): void {
-		$wf_tbl = $this->conn->table( Config::table_workflows() );
+	private function on_workflow_completed( int $workflow_id, array $state, \PDO $pdo ): array {
+		$wf_tbl        = $this->conn->table( Config::table_workflows() );
+		$completed_ids = array( $workflow_id );
 
 		$stmt = $pdo->prepare(
 			"SELECT parent_workflow_id, parent_step_index FROM {$wf_tbl} WHERE id = :id"
@@ -1619,7 +2382,7 @@ class Workflow {
 		$row = $stmt->fetch();
 
 		if ( ! $row || empty( $row['parent_workflow_id'] ) ) {
-			return;
+			return $completed_ids;
 		}
 
 		$parent_id   = (int) $row['parent_workflow_id'];
@@ -1630,7 +2393,7 @@ class Workflow {
 		$parent_row = $parent_stmt->fetch();
 
 		if ( ! $parent_row ) {
-			return;
+			return $completed_ids;
 		}
 
 		$parent_state = json_decode( $parent_row['state'], true ) ?: array();
@@ -1674,7 +2437,7 @@ class Workflow {
 			);
 
 			// Nested sub-workflows resume upward one parent at a time.
-			$this->on_workflow_completed( $parent_id, $parent_state, $pdo );
+			$completed_ids = array_merge( $completed_ids, $this->on_workflow_completed( $parent_id, $parent_state, $pdo ) );
 		} else {
 			$upd_stmt = $pdo->prepare(
 				"UPDATE {$wf_tbl} SET state = :state, current_step = :step WHERE id = :id"
@@ -1702,6 +2465,8 @@ class Workflow {
 				);
 			}
 		}
+
+		return array_values( array_unique( $completed_ids ) );
 	}
 
 	/**
@@ -1926,6 +2691,7 @@ class Workflow {
 		}
 
 		$this->invalidate_workflow_cache( $workflow_id );
+		$this->reconcile_waiting_workflows_for_dependency( $workflow_id );
 	}
 
 	/**
@@ -1952,7 +2718,16 @@ class Workflow {
 				return;
 			}
 
-			$should_compensate = in_array( $wf_row['status'], array( WorkflowStatus::Running->value, WorkflowStatus::Paused->value ), true );
+			$should_compensate = in_array(
+				$wf_row['status'],
+				array(
+					WorkflowStatus::Running->value,
+					WorkflowStatus::Paused->value,
+					WorkflowStatus::WaitingSignal->value,
+					WorkflowStatus::WaitingWorkflow->value,
+				),
+				true
+			);
 			$state             = $this->mark_workflow_failed_locked( $pdo, $wf_row, $workflow_id, $failed_job_id, $error_message );
 			$pdo->commit();
 		} catch ( \Throwable $e ) {
@@ -1968,6 +2743,7 @@ class Workflow {
 		}
 
 		$this->invalidate_workflow_cache( $workflow_id );
+		$this->reconcile_waiting_workflows_for_dependency( $workflow_id );
 	}
 
 	/**
@@ -1996,6 +2772,7 @@ class Workflow {
 		}
 
 		$state = json_decode( $row['state'], true ) ?: array();
+		$wait  = $this->wait_context_from_state( $state );
 
 		$public_state = array_filter(
 			$state,
@@ -2012,6 +2789,8 @@ class Workflow {
 			state: $public_state,
 			parent_workflow_id: $row['parent_workflow_id'] ? (int) $row['parent_workflow_id'] : null,
 			parent_step_index: $row['parent_step_index'] !== null ? (int) $row['parent_step_index'] : null,
+			wait_type: $wait['type'] ?? null,
+			waiting_for: $wait['waiting_for'] ?? ( $wait['signal_names'] ?? null ),
 		);
 
 		if ( null !== $this->cache ) {
@@ -2206,6 +2985,7 @@ class Workflow {
 		$results = array();
 		foreach ( $stmt->fetchAll() as $row ) {
 			$state        = json_decode( $row['state'], true ) ?: array();
+			$wait         = $this->wait_context_from_state( $state );
 			$public_state = array_filter(
 				$state,
 				fn( string $key ) => ! str_starts_with( $key, '_' ),
@@ -2221,6 +3001,8 @@ class Workflow {
 				state: $public_state,
 				parent_workflow_id: $row['parent_workflow_id'] ? (int) $row['parent_workflow_id'] : null,
 				parent_step_index: $row['parent_step_index'] !== null ? (int) $row['parent_step_index'] : null,
+				wait_type: $wait['type'] ?? null,
+				waiting_for: $wait['waiting_for'] ?? ( $wait['signal_names'] ?? null ),
 			);
 		}
 
@@ -2571,6 +3353,7 @@ class Workflow {
 			}
 
 			$this->invalidate_workflow_cache( $workflow_id );
+			$this->reconcile_waiting_workflows_for_dependency( $workflow_id );
 			++$count;
 		}
 
@@ -2663,15 +3446,17 @@ class Workflow {
 			"UPDATE {$wf_tbl}
 			SET status = 'failed', failed_at = NOW(), error_message = :error, state = :state
 			WHERE id = :id
-				AND status IN (:running, :paused)"
+				AND status IN (:running, :paused, :waiting_signal, :waiting_workflow)"
 		);
 		$stmt->execute(
 			array(
-				'error'   => $error_message,
-				'id'      => $workflow_id,
-				'running' => WorkflowStatus::Running->value,
-				'paused'  => WorkflowStatus::Paused->value,
-				'state'   => json_encode( $state, JSON_THROW_ON_ERROR ),
+				'error'            => $error_message,
+				'id'               => $workflow_id,
+				'running'          => WorkflowStatus::Running->value,
+				'paused'           => WorkflowStatus::Paused->value,
+				'waiting_signal'   => WorkflowStatus::WaitingSignal->value,
+				'waiting_workflow' => WorkflowStatus::WaitingWorkflow->value,
+				'state'            => json_encode( $state, JSON_THROW_ON_ERROR ),
 			)
 		);
 

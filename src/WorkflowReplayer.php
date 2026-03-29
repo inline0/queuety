@@ -219,6 +219,16 @@ class WorkflowReplayer {
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 			);
+		} elseif ( 'workflow_wait' === $type ) {
+			$queue->dispatch(
+				handler: '__queuety_workflow_wait',
+				payload: array( 'step_index' => $step_index ),
+				queue: $queue_name,
+				priority: $priority,
+				max_attempts: $max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
 		}
 	}
 }

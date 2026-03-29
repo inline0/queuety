@@ -35,6 +35,10 @@ class WorkflowCommand extends \WP_CLI_Command {
 		\WP_CLI::log( "Status:   {$state->status->value}" );
 		\WP_CLI::log( "Step:     {$state->current_step}/{$state->total_steps}" );
 
+		if ( null !== $state->wait_type && ! empty( $state->waiting_for ) ) {
+			\WP_CLI::log( 'Waiting:  ' . $state->wait_type . ' => ' . implode( ', ', array_map( 'strval', $state->waiting_for ) ) );
+		}
+
 		if ( ! empty( $state->state ) ) {
 			\WP_CLI::log( 'State:' );
 			\WP_CLI::log( json_encode( $state->state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );

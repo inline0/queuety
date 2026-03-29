@@ -74,7 +74,7 @@ wp queuety work
 - **Streaming steps.** The `StreamingStep` interface yields chunks that are persisted to the database immediately. On retry, previously saved chunks are provided so the stream can resume where it left off. Ideal for LLM responses and large downloads.
 - **Pluggable cache layer.** `CacheFactory` auto-detects APCu or falls back to an in-memory cache. Custom backends implement `Contracts\Cache`. Used internally for rate-limiter lookups and queue state.
 - **Batching and chaining.** Dispatch groups of jobs with `then`/`catch`/`finally` callbacks and progress tracking, or chain jobs sequentially where each depends on the previous one completing.
-- **Durable timers and signals.** `sleep()` adds process-restart-safe delays. `wait_for_signal()` pauses a workflow until an external event arrives.
+- **Durable timers and waits.** `sleep()` adds process-restart-safe delays. `wait_for_signal()`, `wait_for_signals()`, `await_approval()`, `await_input()`, and `await_workflow()` let workflows pause on external events or other workflows without keeping PHP alive.
 - **Dynamic fan-out.** `fan_out()` expands runtime-discovered branch work from workflow state and supports all-success, first-success, and quorum joins.
 - **Step compensation.** `compensate_with()` and `compensate_on_failure()` provide rollback hooks for completed steps when workflows are cancelled or fail.
 - **Heartbeats.** Long-running steps send heartbeats to prevent the stale-job recovery system from reclaiming active work.

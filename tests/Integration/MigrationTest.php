@@ -32,6 +32,7 @@ class MigrationTest extends IntegrationTestCase {
 			'queuety_batches',
 			'queuety_chunks',
 			'queuety_workflow_events',
+			'queuety_workflow_dependencies',
 		);
 
 		foreach ( $tables as $table ) {
@@ -170,6 +171,26 @@ class MigrationTest extends IntegrationTestCase {
 		);
 	}
 
+	public function test_migrate_0130_on_fresh_install(): void {
+		Schema::migrate_0130( $this->conn );
+
+		$deps_table = $this->conn->table( 'queuety_workflow_dependencies' );
+		$this->assertTrue( Schema::table_exists( $this->conn, $deps_table ) );
+	}
+
+	public function test_migrate_0130_is_idempotent(): void {
+		Schema::migrate_0130( $this->conn );
+		Schema::migrate_0130( $this->conn );
+
+		$this->assertTrue(
+			Schema::index_exists(
+				$this->conn,
+				$this->conn->table( 'queuety_workflow_dependencies' ),
+				'idx_dependency'
+			)
+		);
+	}
+
 	// -- uninstall drops everything ------------------------------------------
 
 	public function test_uninstall_drops_all_tables(): void {
@@ -187,6 +208,7 @@ class MigrationTest extends IntegrationTestCase {
 			'queuety_batches',
 			'queuety_chunks',
 			'queuety_workflow_events',
+			'queuety_workflow_dependencies',
 		);
 
 		foreach ( $tables as $table ) {

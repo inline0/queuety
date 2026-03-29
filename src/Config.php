@@ -153,6 +153,15 @@ class Config {
 	}
 
 	/**
+	 * Get the workflow dependency waits table name.
+	 *
+	 * @return string
+	 */
+	public static function table_workflow_dependencies(): string {
+		return defined( 'QUEUETY_TABLE_WORKFLOW_DEPENDENCIES' ) ? QUEUETY_TABLE_WORKFLOW_DEPENDENCIES : 'queuety_workflow_dependencies';
+	}
+
+	/**
 	 * Get the locks table name.
 	 *
 	 * @return string

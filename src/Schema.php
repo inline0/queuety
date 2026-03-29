@@ -15,7 +15,7 @@ class Schema {
 	/**
 	 * Current schema version for plugin-managed upgrades.
 	 */
-	public const CURRENT_VERSION = '0.12.0';
+	public const CURRENT_VERSION = '0.13.0';
 
 	/**
 	 * Create all Queuety tables.
@@ -31,6 +31,7 @@ class Schema {
 		$queue_states    = $conn->table( Config::table_queue_states() );
 		$webhooks        = $conn->table( Config::table_webhooks() );
 		$signals         = $conn->table( Config::table_signals() );
+		$workflow_waits  = $conn->table( Config::table_workflow_dependencies() );
 		$locks           = $conn->table( Config::table_locks() );
 		$batches         = $conn->table( Config::table_batches() );
 		$chunks          = $conn->table( Config::table_chunks() );
@@ -72,7 +73,7 @@ class Schema {
 			"CREATE TABLE IF NOT EXISTS {$wf} (
 				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 				name VARCHAR(255) NOT NULL,
-				status ENUM('running', 'completed', 'failed', 'paused', 'waiting_signal', 'cancelled') NOT NULL DEFAULT 'running',
+				status ENUM('running', 'completed', 'failed', 'paused', 'waiting_signal', 'waiting_workflow', 'cancelled') NOT NULL DEFAULT 'running',
 				state LONGTEXT NOT NULL,
 				current_step TINYINT UNSIGNED NOT NULL DEFAULT 0,
 				total_steps TINYINT UNSIGNED NOT NULL,
@@ -158,6 +159,20 @@ class Schema {
 				payload LONGTEXT NOT NULL,
 				received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				INDEX idx_workflow_signal (workflow_id, signal_name)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$workflow_waits} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				waiting_workflow_id BIGINT UNSIGNED NOT NULL,
+				step_index TINYINT UNSIGNED NOT NULL,
+				dependency_workflow_id BIGINT UNSIGNED NOT NULL,
+				satisfied_at DATETIME DEFAULT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE INDEX idx_waiting_dependency (waiting_workflow_id, step_index, dependency_workflow_id),
+				INDEX idx_dependency (dependency_workflow_id, satisfied_at),
+				INDEX idx_waiting (waiting_workflow_id, step_index, satisfied_at)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 
@@ -261,6 +276,11 @@ class Schema {
 
 		if ( version_compare( $version, '0.12.0', '<' ) ) {
 			self::migrate_0120( $conn );
+			$version = '0.12.0';
+		}
+
+		if ( version_compare( $version, '0.13.0', '<' ) ) {
+			self::migrate_0130( $conn );
 		}
 
 		return self::CURRENT_VERSION;
@@ -281,9 +301,14 @@ class Schema {
 		$wf              = $conn->table( Config::table_workflows() );
 		$schedules       = $conn->table( Config::table_schedules() );
 		$signals         = $conn->table( Config::table_signals() );
+		$workflow_waits  = $conn->table( Config::table_workflow_dependencies() );
 		$batches         = $conn->table( Config::table_batches() );
 		$chunks          = $conn->table( Config::table_chunks() );
 		$workflow_events = $conn->table( Config::table_workflow_events() );
+
+		if ( self::table_exists( $conn, $workflow_waits ) && self::enum_contains( $conn, $wf, 'status', 'waiting_workflow' ) ) {
+			return '0.13.0';
+		}
 
 		if ( self::column_exists( $conn, $wf, 'deadline_at' ) ) {
 			return '0.12.0';
@@ -336,6 +361,7 @@ class Schema {
 		$queue_states    = $conn->table( Config::table_queue_states() );
 		$webhooks        = $conn->table( Config::table_webhooks() );
 		$signals         = $conn->table( Config::table_signals() );
+		$workflow_waits  = $conn->table( Config::table_workflow_dependencies() );
 		$locks           = $conn->table( Config::table_locks() );
 		$batches         = $conn->table( Config::table_batches() );
 		$chunks          = $conn->table( Config::table_chunks() );
@@ -345,6 +371,7 @@ class Schema {
 		$pdo->exec( "DROP TABLE IF EXISTS {$chunks}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$batches}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$locks}" );
+		$pdo->exec( "DROP TABLE IF EXISTS {$workflow_waits}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$signals}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$webhooks}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$logs}" );
@@ -531,6 +558,40 @@ class Schema {
 			"ALTER TABLE {$workflow_events} MODIFY COLUMN event
 			ENUM('step_started', 'step_completed', 'step_failed', 'state_snapshot', 'workflow_rewound', 'workflow_forked', 'workflow_deadline_exceeded')
 			NOT NULL"
+		);
+	}
+
+	/**
+	 * Migrate from v0.12.x to v0.13.0.
+	 *
+	 * Adds the 'waiting_workflow' workflow status and the dependency table used
+	 * by workflow-to-workflow wait steps.
+	 *
+	 * @param Connection $conn Database connection.
+	 */
+	public static function migrate_0130( Connection $conn ): void {
+		$pdo            = $conn->pdo();
+		$wf             = $conn->table( Config::table_workflows() );
+		$workflow_waits = $conn->table( Config::table_workflow_dependencies() );
+
+		$pdo->exec(
+			"ALTER TABLE {$wf} MODIFY COLUMN status
+			ENUM('running', 'completed', 'failed', 'paused', 'waiting_signal', 'waiting_workflow', 'cancelled')
+			NOT NULL DEFAULT 'running'"
+		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$workflow_waits} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				waiting_workflow_id BIGINT UNSIGNED NOT NULL,
+				step_index TINYINT UNSIGNED NOT NULL,
+				dependency_workflow_id BIGINT UNSIGNED NOT NULL,
+				satisfied_at DATETIME DEFAULT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE INDEX idx_waiting_dependency (waiting_workflow_id, step_index, dependency_workflow_id),
+				INDEX idx_dependency (dependency_workflow_id, satisfied_at),
+				INDEX idx_waiting (waiting_workflow_id, step_index, satisfied_at)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 	}
 

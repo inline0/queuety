@@ -10,6 +10,7 @@ namespace Queuety;
 use Queuety\Enums\JoinMode;
 use Queuety\Enums\LogEvent;
 use Queuety\Enums\Priority;
+use Queuety\Enums\WaitMode;
 
 /**
  * Fluent builder for defining and dispatching workflows.
@@ -236,15 +237,168 @@ class WorkflowBuilder {
 	 * external signal with the given name. If the signal has already been
 	 * sent before the step is reached, the workflow continues immediately.
 	 *
-	 * @param string $name The signal name to wait for.
+	 * @param string      $name       The signal name to wait for.
+	 * @param string|null $result_key Optional state key for the signal payload.
+	 * @param string|null $step_name  Optional step name.
 	 * @return self
 	 */
-	public function wait_for_signal( string $name ): self {
-		$this->steps[] = array(
-			'type'        => 'signal',
-			'signal_name' => $name,
-			'name'        => 'wait_for_' . $name,
+	public function wait_for_signal(
+		string $name,
+		?string $result_key = null,
+		?string $step_name = null,
+	): self {
+		return $this->wait_for_signals( array( $name ), WaitMode::All, $result_key, $step_name ?? 'wait_for_' . $name );
+	}
+
+	/**
+	 * Add a signal wait step that resumes when the configured condition is satisfied.
+	 *
+	 * @param array       $signal_names Signal names to wait for.
+	 * @param WaitMode    $mode         Whether all signals or any signal should unblock the workflow.
+	 * @param string|null $result_key   Optional state key for the collected signal payloads.
+	 * @param string|null $name         Optional step name.
+	 * @return self
+	 * @throws \RuntimeException If no signal names are provided.
+	 */
+	public function wait_for_signals(
+		array $signal_names,
+		WaitMode $mode = WaitMode::All,
+		?string $result_key = null,
+		?string $name = null,
+	): self {
+		$normalized = array_values(
+			array_filter(
+				array_map(
+					static fn( mixed $signal_name ): string => trim( (string) $signal_name ),
+					$signal_names
+				),
+				static fn( string $signal_name ): bool => '' !== $signal_name
+			)
 		);
+
+		if ( empty( $normalized ) ) {
+			throw new \RuntimeException( 'Signal wait steps require at least one signal name.' );
+		}
+
+		$index         = count( $this->steps );
+		$this->steps[] = array(
+			'type'         => 'signal',
+			'signal_names' => $normalized,
+			'wait_mode'    => $mode,
+			'result_key'   => $result_key,
+			'name'         => $name ?? ( 1 === count( $normalized ) ? 'wait_for_' . $normalized[0] : 'wait_for_signals_' . $index ),
+		);
+		return $this;
+	}
+
+	/**
+	 * Add a signal wait step for human approval.
+	 *
+	 * @param string      $signal_name Approval signal name.
+	 * @param string|null $result_key  Optional state key for the approval payload.
+	 * @param string|null $name        Optional step name.
+	 * @return self
+	 */
+	public function await_approval(
+		string $signal_name = 'approval',
+		?string $result_key = 'approval',
+		?string $name = null,
+	): self {
+		return $this->wait_for_signals(
+			array( $signal_name ),
+			WaitMode::All,
+			$result_key,
+			$name ?? 'await_approval'
+		);
+	}
+
+	/**
+	 * Add a signal wait step for human input.
+	 *
+	 * @param string      $signal_name Input signal name.
+	 * @param string|null $result_key  Optional state key for the input payload.
+	 * @param string|null $name        Optional step name.
+	 * @return self
+	 */
+	public function await_input(
+		string $signal_name = 'input',
+		?string $result_key = 'input',
+		?string $name = null,
+	): self {
+		return $this->wait_for_signals(
+			array( $signal_name ),
+			WaitMode::All,
+			$result_key,
+			$name ?? 'await_input'
+		);
+	}
+
+	/**
+	 * Add a workflow dependency wait for a single workflow ID or state key.
+	 *
+	 * @param int|string  $workflow   Workflow ID or public state key that resolves to one.
+	 * @param string|null $result_key Optional state key for the completed workflow state.
+	 * @param string|null $name       Optional step name.
+	 * @return self
+	 */
+	public function await_workflow(
+		int|string $workflow,
+		?string $result_key = null,
+		?string $name = null,
+	): self {
+		return $this->await_workflows(
+			is_int( $workflow ) ? array( $workflow ) : $workflow,
+			WaitMode::All,
+			$result_key,
+			$name ?? 'await_workflow'
+		);
+	}
+
+	/**
+	 * Add a workflow dependency wait for one or more workflows.
+	 *
+	 * @param array|string $workflows  Workflow IDs or a public state key that resolves to IDs.
+	 * @param WaitMode     $mode       Whether all workflows or any workflow should unblock the step.
+	 * @param string|null  $result_key Optional state key for completed workflow state.
+	 * @param string|null  $name       Optional step name.
+	 * @return self
+	 * @throws \RuntimeException If the provided state key is empty.
+	 */
+	public function await_workflows(
+		array|string $workflows,
+		WaitMode $mode = WaitMode::All,
+		?string $result_key = null,
+		?string $name = null,
+	): self {
+		$index = count( $this->steps );
+		$step  = array(
+			'type'       => 'workflow_wait',
+			'wait_mode'  => $mode,
+			'result_key' => $result_key,
+			'name'       => $name ?? 'await_workflows_' . $index,
+		);
+
+		if ( is_string( $workflows ) ) {
+			$workflow_key = trim( $workflows );
+			if ( '' === $workflow_key ) {
+				throw new \RuntimeException( 'Workflow wait steps require a non-empty state key.' );
+			}
+			$step['workflow_id_key'] = $workflow_key;
+		} else {
+			$workflow_ids = array_values(
+				array_filter(
+					array_map(
+						static fn( mixed $workflow_id ): int => (int) $workflow_id,
+						$workflows
+					),
+					static fn( int $workflow_id ): bool => $workflow_id > 0
+				)
+			);
+
+			$step['workflow_ids'] = $workflow_ids;
+		}
+
+		$this->steps[] = $step;
 		return $this;
 	}
 
@@ -453,8 +607,21 @@ class WorkflowBuilder {
 				$result[] = array(
 					'type'         => 'signal',
 					'name'         => $step['name'],
-					'signal_name'  => $step['signal_name'],
+					'signal_name'  => $step['signal_names'][0],
+					'signal_names' => $step['signal_names'],
+					'wait_mode'    => $step['wait_mode']->value,
+					'result_key'   => $step['result_key'],
 					'compensation' => $step['compensation'] ?? null,
+				);
+			} elseif ( 'workflow_wait' === $step['type'] ) {
+				$result[] = array(
+					'type'            => 'workflow_wait',
+					'name'            => $step['name'],
+					'workflow_ids'    => $step['workflow_ids'] ?? null,
+					'workflow_id_key' => $step['workflow_id_key'] ?? null,
+					'wait_mode'       => $step['wait_mode']->value,
+					'result_key'      => $step['result_key'],
+					'compensation'    => $step['compensation'] ?? null,
 				);
 			} else {
 				$entry = array(
@@ -618,6 +785,16 @@ class WorkflowBuilder {
 			// Signal steps must round-trip through the workflow runtime so pre-sent signals can resume immediately.
 			$this->queue_ops->dispatch(
 				handler: '__queuety_signal',
+				payload: array( 'step_index' => $step_index ),
+				queue: $this->queue,
+				priority: $this->priority,
+				max_attempts: $this->max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
+		} elseif ( 'workflow_wait' === $step_def['type'] ) {
+			$this->queue_ops->dispatch(
+				handler: '__queuety_workflow_wait',
 				payload: array( 'step_index' => $step_index ),
 				queue: $this->queue,
 				priority: $this->priority,

@@ -152,6 +152,26 @@ readonly class WorkflowTemplate {
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 			);
+		} elseif ( 'signal' === $type ) {
+			$queue_ops->dispatch(
+				handler: '__queuety_signal',
+				payload: array( 'step_index' => $step_index ),
+				queue: $this->queue,
+				priority: $this->priority,
+				max_attempts: $this->max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
+		} elseif ( 'workflow_wait' === $type ) {
+			$queue_ops->dispatch(
+				handler: '__queuety_workflow_wait',
+				payload: array( 'step_index' => $step_index ),
+				queue: $this->queue,
+				priority: $this->priority,
+				max_attempts: $this->max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
 		} else {
 			$queue_ops->dispatch(
 				handler: $step_def['class'],

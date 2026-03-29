@@ -256,7 +256,12 @@ $workflow_id = Queuety::workflow( 'generate_report' )
 | `fan_out( string $items_key, string $handler_class, ?string $result_key = null, JoinMode $join_mode = JoinMode::All, ?int $quorum = null, ?string $reducer_class = null, ?string $name = null )` | Add a dynamic fan-out step that expands one branch job per item in workflow state. |
 | `sub_workflow( string $name, WorkflowBuilder $builder )` | Add a sub-workflow step. |
 | `sleep( int $seconds, int $minutes, int $hours, int $days )` | Add a durable timer step. All durations are summed. |
-| `wait_for_signal( string $name )` | Add a signal wait step. Pauses until the named signal is received. |
+| `wait_for_signal( string $name, ?string $result_key = null, ?string $step_name = null )` | Add a signal wait step. If `result_key` is set, the payload is stored under that key instead of merging into top-level state. |
+| `wait_for_signals( array $signal_names, WaitMode $mode = WaitMode::All, ?string $result_key = null, ?string $name = null )` | Wait for all or any of several signals. |
+| `await_approval( string $signal_name = 'approval', ?string $result_key = 'approval', ?string $name = null )` | Wait for a human approval signal. |
+| `await_input( string $signal_name = 'input', ?string $result_key = 'input', ?string $name = null )` | Wait for a human input signal. |
+| `await_workflow( int|string $workflow, ?string $result_key = null, ?string $name = null )` | Wait for one workflow ID, or a workflow ID stored in public state, to complete. |
+| `await_workflows( array|string $workflows, WaitMode $mode = WaitMode::All, ?string $result_key = null, ?string $name = null )` | Wait for all or any of several workflows to complete. |
 | `compensate_with( string $class )` | Attach a compensation handler to the most recently added step. |
 | `compensate_on_failure()` | Run completed-step compensations automatically when the workflow fails. |
 | `on_queue( string $queue )` | Set the queue for all steps. |
@@ -279,6 +284,7 @@ echo $state->status->value; // 'running'
 echo $state->current_step;  // 1
 echo $state->total_steps;   // 3
 echo $state->state;         // accumulated state array
+echo $state->wait_type;     // 'signal' or 'workflow' while blocked
 ```
 
 ### `Queuety::retry_workflow( $workflow_id )`
@@ -953,6 +959,7 @@ enum WorkflowStatus: string {
     case Failed         = 'failed';
     case Paused         = 'paused';
     case WaitingSignal  = 'waiting_signal';
+    case WaitingWorkflow = 'waiting_workflow';
     case Cancelled      = 'cancelled';
 }
 ```
@@ -974,6 +981,15 @@ enum JoinMode: string {
     case All = 'all';
     case FirstSuccess = 'first_success';
     case Quorum = 'quorum';
+}
+```
+
+### `WaitMode`
+
+```php
+enum WaitMode: string {
+    case All = 'all';
+    case Any = 'any';
 }
 ```
 

@@ -438,6 +438,36 @@ class Worker {
 						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
 					)
 				);
+			} elseif ( $job->is_workflow_step() && '__queuety_workflow_wait' === $job->handler ) {
+				$wf_state = $this->workflow->get_state( $job->workflow_id ) ?? array();
+				$steps    = $wf_state['_steps'] ?? array();
+				$step_def = $steps[ $job->step_index ] ?? null;
+
+				$this->queue->complete( $job->id );
+
+				if ( $step_def && 'workflow_wait' === ( $step_def['type'] ?? '' ) ) {
+					$this->workflow->handle_workflow_wait_step(
+						workflow_id: $job->workflow_id,
+						step_def: $step_def,
+						step_index: $job->step_index,
+						workflow_state: $wf_state,
+					);
+				}
+
+				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
+
+				$this->logger->log(
+					LogEvent::Completed,
+					array(
+						'job_id'         => $job->id,
+						'workflow_id'    => $job->workflow_id,
+						'step_index'     => $job->step_index,
+						'handler'        => $job->handler,
+						'queue'          => $job->queue,
+						'duration_ms'    => $duration_ms,
+						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
+					)
+				);
 			} elseif ( $this->registry->is_job_class( $job->handler ) ) {
 				$this->debug_log( "Deserializing job class: {$job->handler}", $job->queue );
 				$job_instance = JobSerializer::deserialize( $job->handler, $job->payload );

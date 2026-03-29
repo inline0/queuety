@@ -62,6 +62,8 @@ dispatch() -> running -> step 0 -> step 1 -> ... -> step N -> completed
                   |
                   +-> waiting_signal -> signal received -> running
                   |
+                  +-> waiting_workflow -> dependency settles -> running
+                  |
                   +-> cancelled (via cancel_workflow)
 ```
 
@@ -72,6 +74,7 @@ dispatch() -> running -> step 0 -> step 1 -> ... -> step N -> completed
 | `failed` | A step failed after exhausting retries |
 | `paused` | Manually paused. Current in-flight work may finish, but later steps are not enqueued until resumed |
 | `waiting_signal` | Waiting for an external signal via `Queuety::signal()` |
+| `waiting_workflow` | Waiting for one or more other workflows to complete via `await_workflow()` or `await_workflows()` |
 | `cancelled` | Explicitly cancelled via `Queuety::cancel_workflow()`. Pending jobs are buried and an optional cleanup handler runs. |
 
 ## Managing workflows
@@ -83,6 +86,7 @@ $state = Queuety::workflow_status( $workflow_id );
 echo $state->status->value;   // 'running'
 echo $state->current_step;    // 1
 echo $state->total_steps;     // 3
+print_r( $state->waiting_for ); // ['42'] while waiting on another workflow
 ```
 
 Pause and resume:
@@ -132,7 +136,7 @@ Use `compensate_with()` to attach a per-step compensation handler. Use `compensa
 
 ## Step types
 
-Queuety supports eight types of steps within a workflow:
+Queuety supports nine types of steps within a workflow:
 
 - [Sequential chains](/docs/workflows/chains) using `->then()` for one-at-a-time execution
 - [Parallel groups](/docs/workflows/parallel) using `->parallel()` for concurrent execution
@@ -140,5 +144,6 @@ Queuety supports eight types of steps within a workflow:
 - [Conditional branching](/docs/workflows/conditional) using named steps and `_goto`
 - [Sub-workflows](/docs/workflows/sub-workflows) using `->sub_workflow()` for nested composition
 - [Durable timers](/docs/workflows/timers) using `->sleep()` for time-based delays
-- [Signals](/docs/workflows/signals) using `->wait_for_signal()` for external event triggers
+- [Signals](/docs/workflows/signals) using `->wait_for_signal()`, `->wait_for_signals()`, `->await_approval()`, and `->await_input()` for external event triggers
+- [Workflow dependencies](/docs/workflows/dependencies) using `->await_workflow()` and `->await_workflows()` for cross-workflow coordination
 - [Streaming steps](/docs/workflows/streaming) using the `StreamingStep` interface for durable chunk-based output

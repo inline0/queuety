@@ -94,16 +94,16 @@ Queuety::dispatch( 'send_email', [ 'to' => 'user@example.com' ] );
 Run a durable workflow with timers and signals:
 
 ```php
-Queuety::workflow( 'approval_flow' )
+$workflow_id = Queuety::workflow( 'approval_flow' )
     ->then( SubmitRequestHandler::class )
     ->sleep( hours: 24 )
-    ->wait_for_signal( 'approved' )
+    ->await_approval()
     ->then( ProcessApprovalHandler::class )
     ->on_cancel( CleanupHandler::class )
     ->dispatch( [ 'request_id' => 99 ] );
 
 // Later, from another process:
-Queuety::signal( $workflow_id, 'approved', [ 'approved_by' => 'admin@example.com' ] );
+Queuety::signal( $workflow_id, 'approval', [ 'approved_by' => 'admin@example.com' ] );
 ```
 
 Build runtime-discovered branch work with compensation:
@@ -125,6 +125,22 @@ Queuety::workflow( 'agent_run' )
     ->compensate_on_failure()
     ->then( FinalizeRunStep::class )
     ->dispatch( [ 'run_id' => 99 ] );
+```
+
+Coordinate one workflow with another:
+
+```php
+use Queuety\Enums\WaitMode;
+
+$research_id = Queuety::workflow( 'research_run' )
+    ->then( PlanResearchStep::class )
+    ->fan_out( 'tasks', ExecuteResearchTask::class, 'results' )
+    ->dispatch( [ 'brief_id' => 42 ] );
+
+Queuety::workflow( 'editorial_run' )
+    ->await_workflow( $research_id, 'research' )
+    ->then( DraftBriefStep::class )
+    ->dispatch();
 ```
 
 Dispatch a batch with callbacks:
@@ -183,7 +199,8 @@ wp queuety work
 - **Batching** -- dispatch groups of jobs with `then`, `catch`, and `finally` callbacks plus progress tracking
 - **Job chaining** -- sequential job execution where each job depends on the previous one completing
 - **Durable timers** -- `sleep()` steps that survive process restarts and resume at the right time
-- **Signals** -- `wait_for_signal()` pauses a workflow until an external event arrives
+- **Signals and human gates** -- `wait_for_signal()`, `wait_for_signals()`, `await_approval()`, and `await_input()` pause workflows until external input arrives
+- **Workflow dependencies** -- `await_workflow()` and `await_workflows()` coordinate top-level workflows without forcing them into one workflow definition
 - **Dynamic fan-out** -- `fan_out()` expands runtime-discovered work with `All`, `FirstSuccess`, and `Quorum` join modes
 - **Step compensation** -- `compensate_with()` and `compensate_on_failure()` provide saga-style rollback hooks for completed steps
 - **Streaming steps** -- `StreamingStep` interface with `ChunkStore` for persisting streamed data chunk by chunk
@@ -382,6 +399,7 @@ All constants are optional. Define in `wp-config.php`:
 | `QUEUETY_TABLE_LOGS` | `queuety_logs` | Logs table name |
 | `QUEUETY_TABLE_SCHEDULES` | `queuety_schedules` | Schedules table name |
 | `QUEUETY_TABLE_SIGNALS` | `queuety_signals` | Signals table name |
+| `QUEUETY_TABLE_WORKFLOW_DEPENDENCIES` | `queuety_workflow_dependencies` | Workflow dependency waits table name |
 | `QUEUETY_TABLE_CHUNKS` | `queuety_chunks` | Streaming chunks table name |
 | `QUEUETY_TABLE_QUEUE_STATES` | `queuety_queue_states` | Queue states table name |
 | `QUEUETY_TABLE_WEBHOOKS` | `queuety_webhooks` | Webhooks table name |
