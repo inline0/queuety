@@ -13,7 +13,7 @@ jobs:
     name: Zip integrity
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: shivammathur/setup-php@v2
         with:
@@ -78,7 +78,7 @@ jobs:
           "
 
       - name: Upload zip artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: queuety-zip
           path: dist/queuety.zip
@@ -95,7 +95,7 @@ jobs:
           tools: wp-cli
 
       - name: Download zip artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: queuety-zip
 
