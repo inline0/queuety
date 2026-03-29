@@ -266,6 +266,45 @@ class Workflow {
 	}
 
 	/**
+	 * Throw when a workflow is about to enter a fan-out step that exceeds its cap.
+	 *
+	 * @param array        $state    Workflow state.
+	 * @param array|string $step_def Next step definition.
+	 * @throws WorkflowConstraintViolationException If the next fan-out step exceeds its configured cap.
+	 */
+	private function assert_fan_out_budget_for_step( array $state, array|string $step_def ): void {
+		if ( ! is_array( $step_def ) || 'fan_out' !== $this->resolve_step_type( $step_def ) ) {
+			return;
+		}
+
+		$max_fan_out_items = $this->workflow_budget_limits( $state )['max_fan_out_items'] ?? null;
+		if ( null === $max_fan_out_items ) {
+			return;
+		}
+
+		$items_key = $step_def['items_key'] ?? null;
+		if ( ! is_string( $items_key ) || '' === $items_key ) {
+			return;
+		}
+
+		$items = $state[ $items_key ] ?? null;
+		if ( ! is_array( $items ) ) {
+			return;
+		}
+
+		if ( count( $items ) > $max_fan_out_items ) {
+			throw new WorkflowConstraintViolationException(
+				sprintf(
+					"Fan-out step '%s' planned %d items, exceeding max_fan_out_items budget of %d.",
+					$step_def['name'] ?? $items_key,
+					count( $items ),
+					$max_fan_out_items
+				)
+			);
+		}
+	}
+
+	/**
 	 * Store runtime wait metadata in workflow state.
 	 *
 	 * @param array       $state       Workflow state.
@@ -783,6 +822,8 @@ class Workflow {
 		}
 
 		if ( isset( $steps[ $next_step ] ) ) {
+			$this->assert_fan_out_budget_for_step( $state, $steps[ $next_step ] );
+
 			$queue_name   = $state['_queue'] ?? 'default';
 			$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
 			$max_attempts = $state['_max_attempts'] ?? 3;
@@ -1271,6 +1312,8 @@ class Workflow {
 		}
 
 		if ( ! $is_paused && isset( $steps[ $next_step ] ) ) {
+			$this->assert_fan_out_budget_for_step( $state, $steps[ $next_step ] );
+
 			$queue_name   = $state['_queue'] ?? 'default';
 			$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
 			$max_attempts = $state['_max_attempts'] ?? 3;
@@ -2464,6 +2507,8 @@ class Workflow {
 					);
 					$terminal_ids = $this->on_workflow_completed( $workflow_id, $state, $pdo );
 				} elseif ( ! $is_paused && isset( $steps[ $next_step ] ) ) {
+					$this->assert_fan_out_budget_for_step( $state, $steps[ $next_step ] );
+
 					$queue_name   = $state['_queue'] ?? 'default';
 					$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
 					$max_attempts = $state['_max_attempts'] ?? 3;
@@ -2604,6 +2649,8 @@ class Workflow {
 			);
 
 			if ( ! $is_paused && isset( $parent_steps[ $next_step ] ) ) {
+				$this->assert_fan_out_budget_for_step( $parent_state, $parent_steps[ $next_step ] );
+
 				$queue_name   = $parent_state['_queue'] ?? 'default';
 				$priority     = Priority::tryFrom( $parent_state['_priority'] ?? 0 ) ?? Priority::Low;
 				$max_attempts = $parent_state['_max_attempts'] ?? 3;
