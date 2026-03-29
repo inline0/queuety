@@ -132,3 +132,7 @@ jobs:
         run: |
           cd wordpress
           wp queuety status
+          wp queuety workflow list
+          wp queuety schedule list
+          wp queuety log
+          wp queuety webhook list

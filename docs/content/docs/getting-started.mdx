@@ -7,19 +7,34 @@ description: Install Queuety, configure it, and run your first job and workflow.
 
 ## Installation
 
-### Via Composer (Recommended)
+### Via Composer for Composer-managed WordPress
 
 ```bash
 composer require queuety/queuety
 ```
 
-### Activate the plugin
+Then activate the plugin:
 
 ```bash
 wp plugin activate queuety
 ```
 
-On activation, Queuety creates its database tables (`queuety_jobs`, `queuety_workflows`, `queuety_logs`, `queuety_schedules`, `queuety_signals`, `queuety_chunks`, `queuety_queue_states`, `queuety_webhooks`) so workers can claim jobs directly from MySQL.
+### Via a packaged plugin zip
+
+```bash
+wp plugin install /path/to/queuety.zip --activate
+```
+
+### From source during development
+
+Place the repository in `wp-content/plugins/queuety`, then install PHP dependencies:
+
+```bash
+composer install
+wp plugin activate queuety
+```
+
+On activation, Queuety creates or upgrades its database tables (`queuety_jobs`, `queuety_workflows`, `queuety_logs`, `queuety_schedules`, `queuety_queue_states`, `queuety_webhooks`, `queuety_locks`, `queuety_signals`, `queuety_batches`, `queuety_chunks`, `queuety_workflow_events`) so workers can claim jobs directly from MySQL.
 
 ## Configuration
 

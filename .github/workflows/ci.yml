@@ -67,3 +67,37 @@ jobs:
           QUEUETY_TEST_DB_USER: root
           QUEUETY_TEST_DB_PASS: root
           QUEUETY_TEST_DB_PREFIX: test_
+
+  test-e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: queuety_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+    steps:
+      - uses: actions/checkout@v5
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: mysqli, pdo_mysql
+          tools: composer
+      - run: composer install --no-interaction
+      - run: npm install --no-audit --no-fund
+      - run: bash tests/e2e/run-all.sh
+        env:
+          QUEUETY_TEST_DB_HOST: 127.0.0.1
+          QUEUETY_TEST_DB_NAME: queuety_test
+          QUEUETY_TEST_DB_USER: root
+          QUEUETY_TEST_DB_PASS: root
+          QUEUETY_TEST_DB_PREFIX: test_

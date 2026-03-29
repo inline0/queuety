@@ -54,6 +54,25 @@ class MigrationTest extends IntegrationTestCase {
 		$this->assertTrue( Schema::table_exists( $this->conn, $full_name ) );
 	}
 
+	// -- upgrade()/detect_version() on fresh installs ------------------------
+
+	public function test_detect_version_reports_current_schema_on_fresh_install(): void {
+		$this->assertSame( Schema::CURRENT_VERSION, Schema::detect_version( $this->conn ) );
+	}
+
+	public function test_upgrade_is_safe_on_fresh_install_with_stale_recorded_version(): void {
+		$version = Schema::upgrade( $this->conn, '0.5.0' );
+
+		$this->assertSame( Schema::CURRENT_VERSION, $version );
+		$this->assertTrue(
+			Schema::column_exists(
+				$this->conn,
+				$this->conn->table( 'queuety_workflows' ),
+				'deadline_at'
+			)
+		);
+	}
+
 	// -- migrate_060 on fresh install does not error -------------------------
 
 	public function test_migrate_060_on_fresh_install(): void {
@@ -77,14 +96,7 @@ class MigrationTest extends IntegrationTestCase {
 	// -- migrate_070 on fresh install ----------------------------------------
 
 	public function test_migrate_070_on_fresh_install(): void {
-		// On fresh install, batch_id column and batches table already exist.
-		// We expect this may warn about duplicate column, but should not fatal.
-		try {
-			Schema::migrate_070( $this->conn );
-		} catch ( \PDOException $e ) {
-			// "Duplicate column name" is acceptable on a fresh install.
-			$this->assertStringContainsString( 'Duplicate', $e->getMessage() );
-		}
+		Schema::migrate_070( $this->conn );
 
 		$batch_table = $this->conn->table( 'queuety_batches' );
 		$this->assertTrue( Schema::table_exists( $this->conn, $batch_table ) );
@@ -93,12 +105,7 @@ class MigrationTest extends IntegrationTestCase {
 	// -- migrate_080 on fresh install ----------------------------------------
 
 	public function test_migrate_080_on_fresh_install(): void {
-		try {
-			Schema::migrate_080( $this->conn );
-		} catch ( \PDOException $e ) {
-			// Duplicate column errors are acceptable on fresh install.
-			$this->assertStringContainsString( 'Duplicate', $e->getMessage() );
-		}
+		Schema::migrate_080( $this->conn );
 
 		$jobs_table = $this->conn->table( 'queuety_jobs' );
 		$this->assertTrue( Schema::table_exists( $this->conn, $jobs_table ) );
@@ -136,6 +143,31 @@ class MigrationTest extends IntegrationTestCase {
 
 		$events_table = $this->conn->table( 'queuety_workflow_events' );
 		$this->assertTrue( Schema::table_exists( $this->conn, $events_table ) );
+	}
+
+	public function test_migrate_0120_on_fresh_install(): void {
+		Schema::migrate_0120( $this->conn );
+
+		$this->assertTrue(
+			Schema::column_exists(
+				$this->conn,
+				$this->conn->table( 'queuety_workflows' ),
+				'deadline_at'
+			)
+		);
+	}
+
+	public function test_migrate_0120_is_idempotent(): void {
+		Schema::migrate_0120( $this->conn );
+		Schema::migrate_0120( $this->conn );
+
+		$this->assertTrue(
+			Schema::index_exists(
+				$this->conn,
+				$this->conn->table( 'queuety_workflows' ),
+				'idx_deadline'
+			)
+		);
 	}
 
 	// -- uninstall drops everything ------------------------------------------

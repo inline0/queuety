@@ -18,6 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'QUEUETY_VERSION', '0.12.0' );
+define( 'QUEUETY_DB_VERSION_OPTION', 'queuety_db_version' );
 define( 'QUEUETY_PLUGIN_FILE', __FILE__ );
 define( 'QUEUETY_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 
@@ -30,39 +31,63 @@ if ( file_exists( $queuety_autoloader ) ) {
 	require_once $queuety_autoloader;
 }
 
+/**
+ * Build a Queuety connection from the current WordPress database credentials.
+ *
+ * @return Queuety\Connection
+ */
+$queuety_make_connection = static function () {
+	global $wpdb;
+
+	return new Queuety\Connection(
+		host: DB_HOST,
+		dbname: DB_NAME,
+		user: DB_USER,
+		password: DB_PASSWORD,
+		prefix: $wpdb->prefix,
+	);
+};
+
 // Initialize Queuety with WordPress database credentials.
 add_action(
 	'plugins_loaded',
-	function () {
-		global $wpdb;
+	static function () use ( $queuety_make_connection ) {
+		$conn              = $queuety_make_connection();
+		$installed_version = get_option( QUEUETY_DB_VERSION_OPTION );
 
-		$conn = new Queuety\Connection(
-			host: DB_HOST,
-			dbname: DB_NAME,
-			user: DB_USER,
-			password: DB_PASSWORD,
-			prefix: $wpdb->prefix,
-		);
+		if (
+			! is_string( $installed_version ) ||
+			version_compare( $installed_version, Queuety\Schema::CURRENT_VERSION, '<' )
+		) {
+			$resolved_version = Queuety\Schema::upgrade(
+				$conn,
+				is_string( $installed_version ) ? $installed_version : null
+			);
+
+			if ( $installed_version !== $resolved_version ) {
+				update_option( QUEUETY_DB_VERSION_OPTION, $resolved_version, false );
+			}
+		}
 
 		Queuety\Queuety::init( $conn );
 	}
 );
 
-// Activation: create tables.
+// Activation: create or upgrade tables, then record the schema version.
 register_activation_hook(
 	__FILE__,
-	function () {
-		global $wpdb;
+	static function () use ( $queuety_make_connection ) {
+		$conn    = $queuety_make_connection();
+		$version = Queuety\Schema::upgrade( $conn );
+		update_option( QUEUETY_DB_VERSION_OPTION, $version, false );
+	}
+);
 
-		$conn = new Queuety\Connection(
-			host: DB_HOST,
-			dbname: DB_NAME,
-			user: DB_USER,
-			password: DB_PASSWORD,
-			prefix: $wpdb->prefix,
-		);
-
-		Queuety\Schema::install( $conn );
+// Deactivation: remove Queuety's own WP-Cron event.
+register_deactivation_hook(
+	__FILE__,
+	static function () {
+		wp_clear_scheduled_hook( 'queuety_cron_process' );
 	}
 );
 
@@ -107,4 +132,5 @@ if ( defined( 'WP_CLI' ) && WP_CLI ) {
 	\WP_CLI::add_command( 'queuety workflow', Queuety\CLI\WorkflowCommand::class );
 	\WP_CLI::add_command( 'queuety log', Queuety\CLI\LogCommand::class );
 	\WP_CLI::add_command( 'queuety schedule', Queuety\CLI\ScheduleCommand::class );
+	\WP_CLI::add_command( 'queuety webhook', Queuety\CLI\WebhookCommand::class );
 }

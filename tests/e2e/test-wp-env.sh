@@ -12,6 +12,7 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+EXPECTED_VERSION="$(sed -n "s/^define( 'QUEUETY_VERSION', '\\([^']*\\)' );$/\\1/p" "$PROJECT_DIR/queuety.php" | head -n 1)"
 PASS=0
 FAIL=0
 TOTAL=0
@@ -67,6 +68,12 @@ wp_cli() {
     cd "$PROJECT_DIR" && npx wp-env run cli wp "$@" 2>/dev/null
 }
 
+cleanup() {
+    cd "$PROJECT_DIR" && npx wp-env stop >/dev/null 2>&1 || true
+}
+
+trap cleanup EXIT
+
 # Check Docker is available.
 if ! docker info > /dev/null 2>&1; then
     echo "SKIP: Docker is not available"
@@ -110,7 +117,7 @@ assert_contains "$ACTIVE_PLUGINS" "queuety" "Plugin is active"
 
 # Test: version constant is defined.
 VERSION=$(wp_cli eval "echo QUEUETY_VERSION;" 2>/dev/null || true)
-assert_equals "0.1.0" "$VERSION" "QUEUETY_VERSION is 0.1.0"
+assert_equals "$EXPECTED_VERSION" "$VERSION" "QUEUETY_VERSION matches plugin constant"
 
 echo ""
 echo "--- Table Creation ---"
@@ -128,6 +135,20 @@ echo "--- WP-CLI: Status ---"
 STATUS=$(wp_cli queuety status 2>/dev/null || true)
 assert_contains "$STATUS" "Pending" "status command shows Pending column"
 assert_contains "$STATUS" "Buried" "status command shows Buried column"
+
+echo ""
+echo "--- WP-CLI: Webhooks ---"
+
+WEBHOOK_ADD_OUT=$(wp_cli queuety webhook add job.completed https://example.com/hook 2>/dev/null || true)
+assert_contains "$WEBHOOK_ADD_OUT" "registered" "webhook add command succeeds"
+
+WEBHOOK_LIST_OUT=$(wp_cli queuety webhook list 2>/dev/null || true)
+assert_contains "$WEBHOOK_LIST_OUT" "job.completed" "webhook list shows registered event"
+assert_contains "$WEBHOOK_LIST_OUT" "https://example.com/hook" "webhook list shows registered URL"
+
+WEBHOOK_ID=$(wp_cli db query "SELECT id FROM wp_queuety_webhooks ORDER BY id DESC LIMIT 1;" --skip-column-names 2>/dev/null | tr -d '[:space:]' || true)
+WEBHOOK_REMOVE_OUT=$(wp_cli queuety webhook remove "$WEBHOOK_ID" 2>/dev/null || true)
+assert_contains "$WEBHOOK_REMOVE_OUT" "removed" "webhook remove command succeeds"
 
 echo ""
 echo "--- WP-CLI: Dispatch and List ---"
@@ -317,10 +338,5 @@ echo ""
 echo "=============================="
 echo "Results: ${PASS} passed, ${FAIL} failed (${TOTAL} total)"
 echo "=============================="
-
-# Stop wp-env.
-echo ""
-echo "Stopping wp-env..."
-cd "$PROJECT_DIR" && npx wp-env stop 2>/dev/null || true
 
 [ "$FAIL" -eq 0 ] || exit 1

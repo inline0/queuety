@@ -13,6 +13,11 @@ namespace Queuety;
 class Schema {
 
 	/**
+	 * Current schema version for plugin-managed upgrades.
+	 */
+	public const CURRENT_VERSION = '0.12.0';
+
+	/**
 	 * Create all Queuety tables.
 	 *
 	 * @param Connection $conn Database connection.
@@ -213,6 +218,111 @@ class Schema {
 	}
 
 	/**
+	 * Upgrade an existing schema to the current version.
+	 *
+	 * When the stored plugin version is missing, the existing database schema is
+	 * inspected to determine the most likely starting point.
+	 *
+	 * @param Connection  $conn              Database connection.
+	 * @param string|null $installed_version Previously recorded schema version.
+	 * @return string The upgraded schema version.
+	 */
+	public static function upgrade( Connection $conn, ?string $installed_version = null ): string {
+		if ( ! self::has_base_tables( $conn ) ) {
+			self::install( $conn );
+		}
+
+		$version = self::normalize_version( $installed_version ?? self::detect_version( $conn ) );
+
+		if ( version_compare( $version, '0.6.0', '<' ) ) {
+			self::migrate_060( $conn );
+			$version = '0.6.0';
+		}
+
+		if ( version_compare( $version, '0.7.0', '<' ) ) {
+			self::migrate_070( $conn );
+			$version = '0.7.0';
+		}
+
+		if ( version_compare( $version, '0.8.0', '<' ) ) {
+			self::migrate_080( $conn );
+			$version = '0.8.0';
+		}
+
+		if ( version_compare( $version, '0.9.0', '<' ) ) {
+			self::migrate_090( $conn );
+			$version = '0.9.0';
+		}
+
+		if ( version_compare( $version, '0.11.0', '<' ) ) {
+			self::migrate_0110( $conn );
+			$version = '0.11.0';
+		}
+
+		if ( version_compare( $version, '0.12.0', '<' ) ) {
+			self::migrate_0120( $conn );
+		}
+
+		return self::CURRENT_VERSION;
+	}
+
+	/**
+	 * Best-effort schema version detection for pre-versioned installs.
+	 *
+	 * @param Connection $conn Database connection.
+	 * @return string
+	 */
+	public static function detect_version( Connection $conn ): string {
+		if ( ! self::has_base_tables( $conn ) ) {
+			return '0.5.0';
+		}
+
+		$jobs            = $conn->table( Config::table_jobs() );
+		$wf              = $conn->table( Config::table_workflows() );
+		$schedules       = $conn->table( Config::table_schedules() );
+		$signals         = $conn->table( Config::table_signals() );
+		$batches         = $conn->table( Config::table_batches() );
+		$chunks          = $conn->table( Config::table_chunks() );
+		$workflow_events = $conn->table( Config::table_workflow_events() );
+
+		if ( self::column_exists( $conn, $wf, 'deadline_at' ) ) {
+			return '0.12.0';
+		}
+
+		if ( self::table_exists( $conn, $workflow_events ) ) {
+			return '0.11.0';
+		}
+
+		if ( self::table_exists( $conn, $chunks ) ) {
+			return '0.9.0';
+		}
+
+		if (
+			self::column_exists( $conn, $jobs, 'heartbeat_data' ) &&
+			self::column_exists( $conn, $schedules, 'overlap_policy' ) &&
+			self::enum_contains( $conn, $wf, 'status', 'cancelled' )
+		) {
+			return '0.8.0';
+		}
+
+		if (
+			self::table_exists( $conn, $batches ) &&
+			self::column_exists( $conn, $jobs, 'batch_id' )
+		) {
+			return '0.7.0';
+		}
+
+		if (
+			self::table_exists( $conn, $signals ) &&
+			self::enum_contains( $conn, $wf, 'status', 'waiting_signal' )
+		) {
+			return '0.6.0';
+		}
+
+		return '0.5.0';
+	}
+
+	/**
 	 * Drop all Queuety tables.
 	 *
 	 * @param Connection $conn Database connection.
@@ -288,13 +398,8 @@ class Schema {
 		$jobs    = $conn->table( Config::table_jobs() );
 		$batches = $conn->table( Config::table_batches() );
 
-		$pdo->exec(
-			"ALTER TABLE {$jobs} ADD COLUMN batch_id BIGINT UNSIGNED DEFAULT NULL AFTER depends_on"
-		);
-
-		$pdo->exec(
-			"ALTER TABLE {$jobs} ADD INDEX idx_batch (batch_id)"
-		);
+		self::add_column_if_missing( $conn, $jobs, 'batch_id', 'batch_id BIGINT UNSIGNED DEFAULT NULL AFTER depends_on' );
+		self::add_index_if_missing( $conn, $jobs, 'idx_batch', 'INDEX idx_batch (batch_id)' );
 
 		$pdo->exec(
 			"CREATE TABLE IF NOT EXISTS {$batches} (
@@ -340,13 +445,8 @@ class Schema {
 			NOT NULL"
 		);
 
-		$pdo->exec(
-			"ALTER TABLE {$jobs} ADD COLUMN heartbeat_data JSON DEFAULT NULL AFTER batch_id"
-		);
-
-		$pdo->exec(
-			"ALTER TABLE {$schedules} ADD COLUMN overlap_policy ENUM('allow', 'skip', 'buffer') NOT NULL DEFAULT 'allow' AFTER next_run"
-		);
+		self::add_column_if_missing( $conn, $jobs, 'heartbeat_data', 'heartbeat_data JSON DEFAULT NULL AFTER batch_id' );
+		self::add_column_if_missing( $conn, $schedules, 'overlap_policy', "overlap_policy ENUM('allow', 'skip', 'buffer') NOT NULL DEFAULT 'allow' AFTER next_run" );
 	}
 
 	/**
@@ -418,13 +518,8 @@ class Schema {
 		$logs            = $conn->table( Config::table_logs() );
 		$workflow_events = $conn->table( Config::table_workflow_events() );
 
-		$pdo->exec(
-			"ALTER TABLE {$wf} ADD COLUMN deadline_at DATETIME DEFAULT NULL AFTER error_message"
-		);
-
-		$pdo->exec(
-			"ALTER TABLE {$wf} ADD INDEX idx_deadline (status, deadline_at)"
-		);
+		self::add_column_if_missing( $conn, $wf, 'deadline_at', 'deadline_at DATETIME DEFAULT NULL AFTER error_message' );
+		self::add_index_if_missing( $conn, $wf, 'idx_deadline', 'INDEX idx_deadline (status, deadline_at)' );
 
 		$pdo->exec(
 			"ALTER TABLE {$logs} MODIFY COLUMN event
@@ -451,5 +546,128 @@ class Schema {
 		$escaped = str_replace( array( '%', '_' ), array( '\\%', '\\_' ), $table );
 		$stmt    = $conn->pdo()->query( "SHOW TABLES LIKE '" . addslashes( $escaped ) . "'" );
 		return (bool) $stmt->fetch();
+	}
+
+	/**
+	 * Check whether a column exists on a table.
+	 *
+	 * @param Connection $conn   Database connection.
+	 * @param string     $table  Full table name.
+	 * @param string     $column Column name.
+	 * @return bool
+	 */
+	public static function column_exists( Connection $conn, string $table, string $column ): bool {
+		$stmt = $conn->pdo()->prepare( "SHOW COLUMNS FROM {$table} LIKE :column" );
+		$stmt->execute( array( 'column' => $column ) );
+		return (bool) $stmt->fetch();
+	}
+
+	/**
+	 * Check whether an index exists on a table.
+	 *
+	 * @param Connection $conn  Database connection.
+	 * @param string     $table Full table name.
+	 * @param string     $index Index name.
+	 * @return bool
+	 */
+	public static function index_exists( Connection $conn, string $table, string $index ): bool {
+		$stmt = $conn->pdo()->prepare( "SHOW INDEX FROM {$table} WHERE Key_name = :index_name" );
+		$stmt->execute( array( 'index_name' => $index ) );
+		return (bool) $stmt->fetch();
+	}
+
+	/**
+	 * Check whether the base schema from pre-versioned installs exists.
+	 *
+	 * @param Connection $conn Database connection.
+	 * @return bool
+	 */
+	private static function has_base_tables( Connection $conn ): bool {
+		$tables = array(
+			Config::table_jobs(),
+			Config::table_workflows(),
+			Config::table_logs(),
+			Config::table_schedules(),
+			Config::table_queue_states(),
+			Config::table_webhooks(),
+			Config::table_locks(),
+		);
+
+		foreach ( $tables as $table ) {
+			if ( ! self::table_exists( $conn, $conn->table( $table ) ) ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * Add a column when it does not already exist.
+	 *
+	 * @param Connection $conn              Database connection.
+	 * @param string     $table             Full table name.
+	 * @param string     $column            Column name.
+	 * @param string     $column_definition Full ADD COLUMN fragment, minus the keyword.
+	 */
+	private static function add_column_if_missing( Connection $conn, string $table, string $column, string $column_definition ): void {
+		if ( self::column_exists( $conn, $table, $column ) ) {
+			return;
+		}
+
+		$conn->pdo()->exec( "ALTER TABLE {$table} ADD COLUMN {$column_definition}" );
+	}
+
+	/**
+	 * Add an index when it does not already exist.
+	 *
+	 * @param Connection $conn             Database connection.
+	 * @param string     $table            Full table name.
+	 * @param string     $index            Index name.
+	 * @param string     $index_definition Full ADD INDEX fragment, minus the keyword.
+	 */
+	private static function add_index_if_missing( Connection $conn, string $table, string $index, string $index_definition ): void {
+		if ( self::index_exists( $conn, $table, $index ) ) {
+			return;
+		}
+
+		$conn->pdo()->exec( "ALTER TABLE {$table} ADD {$index_definition}" );
+	}
+
+	/**
+	 * Check whether an ENUM column already contains a specific value.
+	 *
+	 * @param Connection $conn   Database connection.
+	 * @param string     $table  Full table name.
+	 * @param string     $column Column name.
+	 * @param string     $value  ENUM value to look for.
+	 * @return bool
+	 */
+	private static function enum_contains( Connection $conn, string $table, string $column, string $value ): bool {
+		$stmt = $conn->pdo()->prepare( "SHOW COLUMNS FROM {$table} LIKE :column" );
+		$stmt->execute( array( 'column' => $column ) );
+		$row = $stmt->fetch();
+
+		if ( ! is_array( $row ) || ! isset( $row['Type'] ) ) {
+			return false;
+		}
+
+		return str_contains( strtolower( (string) $row['Type'] ), "'" . strtolower( $value ) . "'" );
+	}
+
+	/**
+	 * Normalize version strings stored before schema version tracking existed.
+	 *
+	 * @param string|null $version Raw version string.
+	 * @return string
+	 */
+	private static function normalize_version( ?string $version ): string {
+		if ( null === $version ) {
+			return '0.5.0';
+		}
+
+		$version = ltrim( trim( $version ), 'v' );
+
+		return '' === $version ? '0.5.0' : $version;
 	}
 }

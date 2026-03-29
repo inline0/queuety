@@ -35,8 +35,23 @@ Queuety is a WordPress plugin that provides a fast job queue and durable workflo
 - WordPress 6.4+
 - MySQL 5.7+ or MariaDB 10.3+
 
+For Composer-managed WordPress installs (for example Bedrock):
+
 ```bash
 composer require queuety/queuety
+wp plugin activate queuety
+```
+
+For a packaged plugin zip:
+
+```bash
+wp plugin install /path/to/queuety.zip --activate
+```
+
+For local development from this repository:
+
+```bash
+composer install
 wp plugin activate queuety
 ```
 
@@ -348,6 +363,7 @@ All constants are optional. Define in `wp-config.php`:
 ```bash
 # Install dependencies
 composer install
+npm install
 
 # Check coding standards
 composer cs
@@ -362,8 +378,9 @@ composer test
 composer test:unit
 composer test:integration
 
-# Run E2E tests (requires Docker)
-bash tests/e2e/run-all.sh
+# Run E2E tests (requires Docker and Node.js)
+npm run test:e2e
+npm run test:e2e:wp-env
 ```
 
 ## License
