@@ -113,7 +113,7 @@ class CleanupRequest implements \Queuety\Handler {
 
 return Queuety::define_workflow('approval_flow')
     ->then(SubmitRequest::class)
-    ->sleep(hours: 0)
+    ->sleep(hours: 24)
     ->wait_for_signal('approved')
     ->then(ProcessApproval::class)
     ->on_cancel(CleanupRequest::class)

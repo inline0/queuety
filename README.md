@@ -76,7 +76,7 @@ Run a durable workflow with timers and signals:
 ```php
 Queuety::workflow( 'approval_flow' )
     ->then( SubmitRequestHandler::class )
-    ->sleep( hours: 0 )
+    ->sleep( hours: 24 )
     ->wait_for_signal( 'approved' )
     ->then( ProcessApprovalHandler::class )
     ->on_cancel( CleanupHandler::class )
