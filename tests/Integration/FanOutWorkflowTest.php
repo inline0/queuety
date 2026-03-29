@@ -58,6 +58,34 @@ class FanOutWorkflowTest extends IntegrationTestCase {
 		return $job;
 	}
 
+	private function dump_workflow_debug( int $wf_id, string $label ): void {
+		$jobs_table = $this->conn->table( Config::table_jobs() );
+		$stmt       = $this->conn->pdo()->query(
+			"SELECT id, handler, status, step_index, payload, error_message
+			FROM {$jobs_table}
+			WHERE workflow_id = {$wf_id}
+			ORDER BY id ASC"
+		);
+		$jobs       = $stmt ? $stmt->fetchAll() : array();
+		$status     = $this->workflow->status( $wf_id );
+		$state      = $this->workflow->get_state( $wf_id );
+
+		fwrite(
+			STDERR,
+			$label . "\n" . json_encode(
+				array(
+					'status' => array(
+						'current_step' => $status?->current_step,
+						'status'       => $status?->status->value,
+					),
+					'state'  => $state,
+					'jobs'   => $jobs,
+				),
+				JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+			) . "\n"
+		);
+	}
+
 	public function test_dynamic_fan_out_collects_results_and_reducer_output(): void {
 		$builder = new WorkflowBuilder( 'fan_out_dynamic', $this->conn, $this->queue, $this->logger );
 		$wf_id   = $builder
@@ -85,6 +113,7 @@ class FanOutWorkflowTest extends IntegrationTestCase {
 		$this->process_one(); // branch 0
 		$this->process_one(); // branch 1
 
+		$this->dump_workflow_debug( $wf_id, 'dynamic_after_branches' );
 		$status = $this->workflow->status( $wf_id );
 
 		$this->assertSame( 2, $status->current_step );
@@ -135,6 +164,7 @@ class FanOutWorkflowTest extends IntegrationTestCase {
 
 		$this->worker->process_job( $job_fast );
 
+		$this->dump_workflow_debug( $wf_id, 'first_success_after_fast' );
 		$status = $this->workflow->status( $wf_id );
 		$this->assertSame( 2, $status->current_step );
 		$this->assertSame( WorkflowStatus::Running, $status->status );
@@ -190,6 +220,7 @@ class FanOutWorkflowTest extends IntegrationTestCase {
 		$this->process_one(); // success 1
 		$this->process_one(); // success 2
 
+		$this->dump_workflow_debug( $wf_id, 'quorum_after_settle' );
 		$status = $this->workflow->status( $wf_id );
 		$this->assertSame( 2, $status->current_step );
 		$this->assertSame( 2, $status->state['task_results']['succeeded'] );
@@ -261,6 +292,7 @@ class FanOutWorkflowTest extends IntegrationTestCase {
 
 		$this->process_one(); // retried placeholder should enqueue only the failed branch
 
+		$this->dump_workflow_debug( $wf_id, 'retry_after_placeholder' );
 		$retry_branch = $this->queue->claim();
 		$this->assertNotNull( $retry_branch );
 		$this->assertSame( FlakyFanOutItemStep::class, $retry_branch->handler );
