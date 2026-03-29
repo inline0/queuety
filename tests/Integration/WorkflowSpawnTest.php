@@ -177,11 +177,11 @@ class WorkflowSpawnTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $parent_id );
-		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
-		$this->assertSame( 'all', $status->wait_mode );
-		$this->assertSame( array(), $status->wait_details['matched'] );
-		$this->assertCount( 2, $status->wait_details['remaining'] );
+		$this->assertSame( WorkflowStatus::Running, $status->status );
+		$this->assertSame( 1, $status->current_step );
+		$this->assertCount( 2, $status->state['agent_workflow_ids'] );
 
+		$this->process_one();
 		$this->process_one();
 		$this->process_one();
 
