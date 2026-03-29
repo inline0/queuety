@@ -1874,10 +1874,10 @@ class Workflow {
 			$state = json_decode( $wf_row['state'], true ) ?: array();
 
 			$upd = $pdo->prepare(
-					"UPDATE {$wf_tbl}
+				"UPDATE {$wf_tbl}
 				SET status = :status, completed_at = NOW()
 				WHERE id = :id"
-				);
+			);
 			$upd->execute(
 				array(
 					'status' => WorkflowStatus::Cancelled->value,
@@ -2079,13 +2079,13 @@ class Workflow {
 			}
 
 			$this->enqueue_step_def(
-					$steps[ $current_step ],
-					$workflow_id,
-					$current_step,
-					$queue_name,
-					$priority,
-					$max_attempts,
-				);
+				$steps[ $current_step ],
+				$workflow_id,
+				$current_step,
+				$queue_name,
+				$priority,
+				$max_attempts,
+			);
 
 			$pdo->commit();
 			$this->invalidate_workflow_cache( $workflow_id );
