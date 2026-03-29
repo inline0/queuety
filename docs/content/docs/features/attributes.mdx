@@ -13,7 +13,7 @@ Queuety supports PHP 8 attributes for zero-config handler registration. Annotate
 use Queuety\Handler;
 use Queuety\Attributes\QueuetyHandler;
 
-#[QueuetyHandler( name: 'send_email', queue: 'emails', needs_wordpress: true )]
+#[QueuetyHandler( name: 'send_email', queue: 'emails', max_attempts: 5 )]
 class SendEmailHandler implements Handler {
     public function handle( array $payload ): void {
         wp_mail( $payload['to'], $payload['subject'], $payload['body'] );
@@ -32,7 +32,6 @@ The attribute parameters:
 | `name` | `string` | (required) | Handler name used for dispatch |
 | `queue` | `string` | `'default'` | Default queue for this handler |
 | `max_attempts` | `int` | `3` | Maximum retry attempts |
-| `needs_wordpress` | `bool` | `false` | Whether the handler requires WordPress |
 
 ## Auto-discovery
 

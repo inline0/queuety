@@ -70,7 +70,7 @@ dispatch() -> running -> step 0 -> step 1 -> ... -> step N -> completed
 | `running` | Actively processing steps |
 | `completed` | All steps finished successfully |
 | `failed` | A step failed after exhausting retries |
-| `paused` | Manually paused, no steps will execute |
+| `paused` | Manually paused. Current in-flight work may finish, but later steps are not enqueued until resumed |
 | `waiting_signal` | Waiting for an external signal via `Queuety::signal()` |
 | `cancelled` | Explicitly cancelled via `Queuety::cancel_workflow()`. Pending jobs are buried and an optional cleanup handler runs. |
 

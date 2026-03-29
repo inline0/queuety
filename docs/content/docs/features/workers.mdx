@@ -5,7 +5,7 @@ description: Worker lifecycle, concurrency, and production deployment.
 
 # Workers
 
-Workers are long-running processes that poll the database for pending jobs, execute them, and advance workflows. They run from a minimal PHP bootstrap without loading WordPress.
+Workers are long-running processes that poll the database for pending jobs, execute them, and advance workflows. The `wp queuety work` command runs inside WP-CLI while the queue itself is claimed directly from MySQL via PDO.
 
 ## Starting a worker
 

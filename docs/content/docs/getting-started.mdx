@@ -19,7 +19,7 @@ composer require queuety/queuety
 wp plugin activate queuety
 ```
 
-On activation, Queuety creates its database tables (`queuety_jobs`, `queuety_workflows`, `queuety_logs`, `queuety_schedules`, `queuety_signals`, `queuety_chunks`, `queuety_queue_states`, `queuety_webhooks`) and installs a bootstrap file that allows workers to run without booting WordPress.
+On activation, Queuety creates its database tables (`queuety_jobs`, `queuety_workflows`, `queuety_logs`, `queuety_schedules`, `queuety_signals`, `queuety_chunks`, `queuety_queue_states`, `queuety_webhooks`) so workers can claim jobs directly from MySQL.
 
 ## Configuration
 
@@ -62,7 +62,6 @@ class SendEmailHandler implements Handler {
         return [
             'queue'           => 'emails',
             'max_attempts'    => 5,
-            'needs_wordpress' => true,
         ];
     }
 }
@@ -119,7 +118,7 @@ class FetchDataHandler implements Step {
     }
 
     public function config(): array {
-        return [ 'needs_wordpress' => true ];
+        return [];
     }
 }
 
@@ -132,7 +131,7 @@ class CallLLMHandler implements Step {
     }
 
     public function config(): array {
-        return [ 'needs_wordpress' => true, 'max_attempts' => 5 ];
+        return [ 'max_attempts' => 5 ];
     }
 }
 
@@ -143,7 +142,7 @@ class FormatOutputHandler implements Step {
     }
 
     public function config(): array {
-        return [ 'needs_wordpress' => true ];
+        return [];
     }
 }
 ```

@@ -34,6 +34,24 @@ class HandlerRegistry {
 	}
 
 	/**
+	 * Resolve a handler alias to a class name when possible.
+	 *
+	 * @param string $name Handler alias or class.
+	 * @return string|null Fully qualified class name, or null if unknown.
+	 */
+	public function class_name( string $name ): ?string {
+		$class = $this->handlers[ $name ] ?? $name;
+
+		if ( ! class_exists( $class ) ) {
+			return null;
+		}
+
+		$this->auto_register_from_attribute( $class );
+
+		return $class;
+	}
+
+	/**
 	 * Resolve a handler name to an instance.
 	 *
 	 * If the name is a registered alias, use the mapped class.
@@ -87,9 +105,9 @@ class HandlerRegistry {
 	 * @return bool True if the handler implements Contracts\Job.
 	 */
 	public function is_job_class( string $name ): bool {
-		$class = $this->handlers[ $name ] ?? $name;
+		$class = $this->class_name( $name );
 
-		if ( ! class_exists( $class ) ) {
+		if ( null === $class ) {
 			return false;
 		}
 

@@ -78,15 +78,60 @@ class BatchManager {
 	 */
 	public function record_completion( int $batch_id ): void {
 		$table = $this->conn->table( Config::table_batches() );
+		$pdo   = $this->conn->pdo();
 
-		$stmt = $this->conn->pdo()->prepare(
-			"UPDATE {$table}
-			SET pending_jobs = GREATEST(pending_jobs - 1, 0)
-			WHERE id = :id"
-		);
-		$stmt->execute( array( 'id' => $batch_id ) );
+		$run_then    = false;
+		$run_finally = false;
 
-		$this->check_finished( $batch_id );
+		$pdo->beginTransaction();
+		try {
+			$stmt = $pdo->prepare( "SELECT * FROM {$table} WHERE id = :id FOR UPDATE" );
+			$stmt->execute( array( 'id' => $batch_id ) );
+			$row = $stmt->fetch();
+
+			if ( ! $row || ! empty( $row['finished_at'] ) ) {
+				$pdo->commit();
+				return;
+			}
+
+			$pending_jobs    = max( (int) $row['pending_jobs'] - 1, 0 );
+			$failed_jobs     = (int) $row['failed_jobs'];
+			$options         = json_decode( $row['options'], true ) ?: array();
+			$allow_failures  = ! empty( $options['allow_failures'] );
+			$finished_at_sql = 0 === $pending_jobs ? ', finished_at = NOW()' : '';
+
+			$update = $pdo->prepare(
+				"UPDATE {$table}
+				SET pending_jobs = :pending_jobs{$finished_at_sql}
+				WHERE id = :id"
+			);
+			$update->execute(
+				array(
+					'pending_jobs' => $pending_jobs,
+					'id'           => $batch_id,
+				)
+			);
+
+			if ( 0 === $pending_jobs ) {
+				$run_then    = 0 === $failed_jobs || $allow_failures;
+				$run_finally = true;
+			}
+
+			$pdo->commit();
+		} catch ( \Throwable $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+			throw $e;
+		}
+
+		if ( $run_then ) {
+			$this->fire_callback( $batch_id, 'then' );
+		}
+
+		if ( $run_finally ) {
+			$this->fire_callback( $batch_id, 'finally' );
+		}
 	}
 
 	/**
@@ -100,36 +145,78 @@ class BatchManager {
 	 */
 	public function record_failure( int $batch_id, int $job_id ): void {
 		$table = $this->conn->table( Config::table_batches() );
+		$pdo   = $this->conn->pdo();
 
-		// Fetch current state for failed_job_ids update.
-		$batch = $this->find( $batch_id );
-		if ( null === $batch ) {
-			return;
+		$run_catch   = false;
+		$run_then    = false;
+		$run_finally = false;
+
+		$pdo->beginTransaction();
+		try {
+			$stmt = $pdo->prepare( "SELECT * FROM {$table} WHERE id = :id FOR UPDATE" );
+			$stmt->execute( array( 'id' => $batch_id ) );
+			$row = $stmt->fetch();
+
+			if ( ! $row || ! empty( $row['finished_at'] ) ) {
+				$pdo->commit();
+				return;
+			}
+
+			$pending_jobs   = max( (int) $row['pending_jobs'] - 1, 0 );
+			$failed_jobs    = (int) $row['failed_jobs'];
+			$failed_job_ids = json_decode( $row['failed_job_ids'], true ) ?: array();
+			$options        = json_decode( $row['options'], true ) ?: array();
+			$allow_failures = ! empty( $options['allow_failures'] );
+
+			if ( in_array( $job_id, $failed_job_ids, true ) ) {
+				$pdo->commit();
+				return;
+			}
+
+			$failed_job_ids[] = $job_id;
+
+			$update = $pdo->prepare(
+				"UPDATE {$table}
+				SET pending_jobs = :pending_jobs,
+					failed_jobs = :failed_jobs,
+					failed_job_ids = :failed_job_ids" . ( 0 === $pending_jobs ? ', finished_at = NOW()' : '' ) . '
+				WHERE id = :id'
+			);
+			$update->execute(
+				array(
+					'pending_jobs'   => $pending_jobs,
+					'failed_jobs'    => $failed_jobs + 1,
+					'failed_job_ids' => json_encode( $failed_job_ids, JSON_THROW_ON_ERROR ),
+					'id'             => $batch_id,
+				)
+			);
+
+			$run_catch = 0 === $failed_jobs;
+
+			if ( 0 === $pending_jobs ) {
+				$run_then    = $allow_failures;
+				$run_finally = true;
+			}
+
+			$pdo->commit();
+		} catch ( \Throwable $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+			throw $e;
 		}
 
-		$failed_ids   = $batch->failed_job_ids;
-		$failed_ids[] = $job_id;
-
-		$stmt = $this->conn->pdo()->prepare(
-			"UPDATE {$table}
-			SET pending_jobs = GREATEST(pending_jobs - 1, 0),
-				failed_jobs = failed_jobs + 1,
-				failed_job_ids = :failed_job_ids
-			WHERE id = :id"
-		);
-		$stmt->execute(
-			array(
-				'id'             => $batch_id,
-				'failed_job_ids' => json_encode( $failed_ids, JSON_THROW_ON_ERROR ),
-			)
-		);
-
-		// Fire catch callback on first failure.
-		if ( 0 === $batch->failed_jobs ) {
+		if ( $run_catch ) {
 			$this->fire_callback( $batch_id, 'catch' );
 		}
 
-		$this->check_finished( $batch_id );
+		if ( $run_then ) {
+			$this->fire_callback( $batch_id, 'then' );
+		}
+
+		if ( $run_finally ) {
+			$this->fire_callback( $batch_id, 'finally' );
+		}
 	}
 
 	/**
@@ -147,7 +234,9 @@ class BatchManager {
 		);
 		$stmt->execute( array( 'id' => $batch_id ) );
 
-		$this->fire_callback( $batch_id, 'finally' );
+		if ( $stmt->rowCount() > 0 ) {
+			$this->fire_callback( $batch_id, 'finally' );
+		}
 	}
 
 	/**
@@ -166,40 +255,6 @@ class BatchManager {
 		$stmt->execute( array( 'cutoff' => $cutoff ) );
 
 		return $stmt->rowCount();
-	}
-
-	/**
-	 * Check if a batch is finished and fire appropriate callbacks.
-	 *
-	 * @param int $batch_id Batch ID.
-	 */
-	private function check_finished( int $batch_id ): void {
-		$batch = $this->find( $batch_id );
-		if ( null === $batch || $batch->finished() ) {
-			return;
-		}
-
-		if ( $batch->pending_jobs > 0 ) {
-			return;
-		}
-
-		// Check allow_failures option.
-		$allow_failures = ! empty( $batch->options['allow_failures'] );
-
-		// All jobs are done. Mark as finished.
-		$table = $this->conn->table( Config::table_batches() );
-		$stmt  = $this->conn->pdo()->prepare(
-			"UPDATE {$table} SET finished_at = NOW() WHERE id = :id AND finished_at IS NULL"
-		);
-		$stmt->execute( array( 'id' => $batch_id ) );
-
-		// Fire then callback only if no failures (or allow_failures is set).
-		if ( ! $batch->has_failures() || $allow_failures ) {
-			$this->fire_callback( $batch_id, 'then' );
-		}
-
-		// Always fire finally callback.
-		$this->fire_callback( $batch_id, 'finally' );
 	}
 
 	/**

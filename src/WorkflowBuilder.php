@@ -474,12 +474,13 @@ class WorkflowBuilder {
 	private function enqueue_step( array $step_def, int $workflow_id, int $step_index ): void {
 		if ( 'parallel' === $step_def['type'] ) {
 			foreach ( $step_def['handlers'] as $handler_class ) {
+				$handler_defaults = HandlerMetadata::from_class( $handler_class );
 				$this->queue_ops->dispatch(
 					handler: $handler_class,
 					payload: array(),
 					queue: $this->queue,
 					priority: $this->priority,
-					max_attempts: $this->max_attempts,
+					max_attempts: $handler_defaults['max_attempts'] ?? $this->max_attempts,
 					workflow_id: $workflow_id,
 					step_index: $step_index,
 				);
@@ -523,12 +524,13 @@ class WorkflowBuilder {
 			);
 		} else {
 			// Single step.
+			$handler_defaults = HandlerMetadata::from_class( $step_def['class'] );
 			$this->queue_ops->dispatch(
 				handler: $step_def['class'],
 				payload: array(),
 				queue: $this->queue,
 				priority: $this->priority,
-				max_attempts: $this->max_attempts,
+				max_attempts: $handler_defaults['max_attempts'] ?? $this->max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 			);

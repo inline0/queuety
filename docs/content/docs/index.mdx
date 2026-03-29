@@ -5,7 +5,7 @@ description: Welcome to the Queuety documentation.
 
 # Introduction
 
-Queuety is a WordPress plugin that provides a fast job queue and durable workflow engine. Workers process jobs from a minimal PHP bootstrap without booting WordPress, connecting to MySQL directly via PDO for maximum throughput.
+Queuety is a WordPress plugin that provides a fast job queue and durable workflow engine. Workers claim jobs directly from MySQL via PDO and process them inside a long-running WP-CLI process.
 
 ## Why Queuety?
 
@@ -67,7 +67,7 @@ wp queuety work
 
 ## Key differentiators
 
-- **Fast execution.** Workers skip the WordPress boot, connecting to MySQL directly via PDO. ~5ms overhead per batch vs ~200ms when loading WordPress.
+- **Fast execution.** Workers use direct MySQL queue access and avoid the per-request cron pattern that slows down background work in WordPress.
 - **Durable workflows.** Multi-step processes with persistent state that survive PHP timeouts, crashes, and retries. Each step boundary is an atomic MySQL transaction.
 - **Modern dispatch API.** Self-contained readonly job classes with the `Dispatchable` trait, typed constructor properties as payload, and `$tries`/`$timeout`/`$backoff` declared on the class.
 - **Middleware pipeline.** Onion-style middleware for rate limiting, exception throttling, unique jobs, and custom logic. Declared per-job via a `middleware()` method.
@@ -81,7 +81,7 @@ wp queuety work
 - **Conditional branching.** Skip to named steps based on prior state using `_goto`.
 - **Sub-workflows.** Spawn child workflows that feed results back to the parent.
 - **Priority queues.** Four levels (Low, Normal, High, Urgent) via type-safe PHP enums.
-- **Multi-queue workers.** Process multiple queues with weighted priority ordering in a single worker.
+- **Multi-queue workers.** Process multiple queues with strict priority ordering in a single worker.
 - **Rate limiting.** Per-handler execution limits with sliding window.
 - **Recurring jobs.** Interval-based and cron-based scheduling with configurable overlap policies (Allow, Skip, Buffer).
 - **Workflow cancellation.** Cancel running workflows and trigger registered cleanup handlers.
@@ -93,7 +93,7 @@ wp queuety work
 
 ## How it works
 
-Workers boot from a minimal bootstrap that parses `wp-config.php` via regex (not `require`) to extract database credentials, then connects directly via PDO. No plugins, themes, or hooks are loaded. For handlers that need WordPress (like `wp_mail`), Queuety can optionally boot it per-handler.
+Workers run inside a long-lived WP-CLI process and claim jobs directly from MySQL via PDO. Queue rows, workflow state, logs, batches, signals, and streaming chunks all live in MySQL, so worker restarts do not lose orchestration state.
 
 Workflows break long-running work into steps. Each step persists its output to a shared state bag in the database. If PHP dies mid-step, the worker retries that step with all prior state intact. The step boundary is a single MySQL transaction: state update, job completion, and next step enqueue all happen atomically.
 

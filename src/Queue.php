@@ -196,8 +196,9 @@ class Queue {
 	 * @throws \Throwable If the database transaction fails.
 	 */
 	public function claim( string $queue = 'default' ): ?Job {
-		$table = $this->conn->table( Config::table_jobs() );
-		$pdo   = $this->conn->pdo();
+		$table  = $this->conn->table( Config::table_jobs() );
+		$wf_tbl = $this->conn->table( Config::table_workflows() );
+		$pdo    = $this->conn->pdo();
 
 		$pdo->beginTransaction();
 		try {
@@ -206,6 +207,13 @@ class Queue {
 				WHERE status = :status
 					AND queue = :queue
 					AND available_at <= NOW()
+					AND (
+						workflow_id IS NULL
+						OR workflow_id IN (
+							SELECT id FROM {$wf_tbl}
+							WHERE status IN (:workflow_running, :workflow_paused)
+						)
+					)
 					AND (depends_on IS NULL OR depends_on IN (SELECT id FROM {$table} AS dep WHERE dep.status = 'completed'))
 				ORDER BY priority DESC, id ASC
 				LIMIT 1
@@ -213,8 +221,10 @@ class Queue {
 			);
 			$stmt->execute(
 				array(
-					'status' => JobStatus::Pending->value,
-					'queue'  => $queue,
+					'status'           => JobStatus::Pending->value,
+					'queue'            => $queue,
+					'workflow_running' => 'running',
+					'workflow_paused'  => 'paused',
 				)
 			);
 

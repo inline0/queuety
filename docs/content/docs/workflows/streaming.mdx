@@ -27,7 +27,7 @@ interface StreamingStep {
 |---|---|
 | `stream( $state, $existing_chunks )` | Generator that yields string chunks. Each yield triggers an immediate DB write. |
 | `on_complete( $chunks, $state )` | Called after the stream finishes. Receives all chunks (previous + new) and returns data to merge into workflow state. |
-| `config()` | Optional configuration. Supports `needs_wordpress` and `max_attempts` keys. |
+| `config()` | Optional configuration. Supports `max_attempts` and `backoff` keys. |
 
 ## How chunks are persisted
 

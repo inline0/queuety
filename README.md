@@ -19,7 +19,7 @@
 
 ## What is Queuety?
 
-Queuety is a WordPress plugin that provides a fast job queue and durable workflow engine. Workers process jobs from a minimal PHP bootstrap without booting WordPress, connecting to MySQL directly via PDO for maximum throughput.
+Queuety is a WordPress plugin that provides a fast job queue and durable workflow engine. Workers claim jobs directly from MySQL via PDO and process them inside a long-running WP-CLI process.
 
 **The problem:** WordPress has no real background job system. `wp_cron` only fires on page visits. Action Scheduler boots the entire WordPress stack for every batch. An LLM API call that takes 60 seconds gets killed by PHP's 30-second timeout. There's no way to run multi-step processes that survive crashes and resume where they left off.
 
@@ -135,7 +135,7 @@ wp queuety work
 
 ## Features
 
-- **Fast execution** -- workers skip the WordPress boot, connecting to MySQL directly (~5ms vs ~200ms overhead per batch)
+- **Fast execution** -- workers use direct MySQL queue access and avoid per-job cron/bootstrap overhead
 - **Durable workflows** -- multi-step processes with persistent state that survive PHP timeouts, crashes, and retries
 - **Dispatchable jobs** -- self-contained readonly job classes with the `Dispatchable` trait and `Contracts\Job` interface
 - **Middleware pipeline** -- onion-style middleware for rate limiting, throttling, uniqueness, and custom logic
@@ -150,7 +150,7 @@ wp queuety work
 - **Workflow event log** -- full timeline of step transitions with state snapshots and time-travel debugging
 - **State pruning** -- automatic removal of old step outputs to keep workflow state lean
 - **Schedule overlap policies** -- Allow, Skip, or Buffer for recurring jobs
-- **Multi-queue worker priorities** -- process multiple queues with weighted priority ordering
+- **Multi-queue worker priorities** -- process multiple queues with strict priority ordering
 - **Parallel steps** -- run steps concurrently and wait for all to complete before advancing
 - **Conditional branching** -- skip to named steps based on prior state
 - **Sub-workflows** -- spawn child workflows that feed results back to the parent
@@ -175,7 +175,7 @@ wp queuety work
 
 ## How It Works
 
-Workers boot from a minimal bootstrap that parses `wp-config.php` via regex (not `require`) to extract database credentials, then connects directly via PDO. No plugins, themes, or hooks are loaded. For handlers that need WordPress (like `wp_mail`), Queuety can optionally boot it per-handler.
+Workers run inside a long-lived WP-CLI process and claim jobs directly from MySQL via PDO. The queue, workflow state, logs, batches, signals, and streaming chunks all live in MySQL, so worker restarts do not lose orchestration state.
 
 Workflows break long-running work into steps. Each step persists its output to a shared state bag in the database. If PHP dies mid-step, the worker retries that step with all prior state intact. The step boundary is a single MySQL transaction: state update, job completion, and next step enqueue all happen atomically.
 
@@ -203,7 +203,6 @@ class SendEmailHandler implements Queuety\Handler {
         return [
             'queue' => 'emails',
             'max_attempts' => 5,
-            'needs_wordpress' => true,
         ];
     }
 }

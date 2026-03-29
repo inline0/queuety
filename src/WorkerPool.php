@@ -7,6 +7,8 @@
 
 namespace Queuety;
 
+use Queuety\Cache\CacheFactory;
+
 /**
  * Forks multiple worker processes and monitors them.
  *
@@ -142,12 +144,46 @@ class WorkerPool {
 	 */
 	private function run_child_worker( string $queue ): void {
 		// Each child must create its own PDO connection.
-		$conn     = new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix );
-		$queue_op = new Queue( $conn );
-		$logger   = new Logger( $conn );
-		$workflow = new Workflow( $conn, $queue_op, $logger );
-		$registry = Queuety::registry();
-		$worker   = new Worker( $conn, $queue_op, $logger, $workflow, $registry, new Config() );
+		$conn              = new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix );
+		$cache             = null;
+
+		if ( null === Queuety::queue_fake() ) {
+			try {
+				$cache = Queuety::cache();
+			} catch ( \RuntimeException ) {
+				$cache = CacheFactory::create();
+			}
+		}
+
+		$queue_op          = new Queue( $conn, $cache );
+		$logger            = new Logger( $conn );
+		$event_log         = new WorkflowEventLog( $conn );
+		$workflow          = new Workflow( $conn, $queue_op, $logger, $cache, $event_log );
+		try {
+			$registry = Queuety::registry();
+		} catch ( \RuntimeException ) {
+			$registry = new HandlerRegistry();
+		}
+
+		$rate_limiter      = new RateLimiter( $conn, $cache );
+		$scheduler         = new Scheduler( $conn, $queue_op );
+		$webhook_notifier  = new WebhookNotifier( $conn );
+		$batch_manager     = new BatchManager( $conn );
+		$chunk_store       = new ChunkStore( $conn );
+		$worker            = new Worker(
+			$conn,
+			$queue_op,
+			$logger,
+			$workflow,
+			$registry,
+			new Config(),
+			$rate_limiter,
+			$scheduler,
+			$webhook_notifier,
+			$batch_manager,
+			$chunk_store,
+			$event_log,
+		);
 
 		// Install child signal handler.
 		pcntl_signal(

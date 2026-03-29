@@ -51,13 +51,8 @@ class Connection {
 	 */
 	public function pdo(): PDO {
 		if ( null === $this->pdo ) {
-			if ( str_starts_with( $this->host, '/' ) ) {
-				$dsn = "mysql:unix_socket={$this->host};dbname={$this->dbname};charset=utf8mb4";
-			} else {
-				$dsn = "mysql:host={$this->host};dbname={$this->dbname};charset=utf8mb4";
-			}
 			$this->pdo = new PDO(
-				$dsn,
+				$this->build_dsn(),
 				$this->user,
 				$this->password,
 				array(
@@ -68,6 +63,77 @@ class Connection {
 			);
 		}
 		return $this->pdo;
+	}
+
+	/**
+	 * Build a PDO DSN from a WordPress-style DB_HOST value.
+	 *
+	 * Supports:
+	 * - host
+	 * - host:port
+	 * - /path/to/mysql.sock
+	 * - host:/path/to/mysql.sock
+	 * - [ipv6-host]:port
+	 *
+	 * @return string
+	 */
+	private function build_dsn(): string {
+		$options = array(
+			'dbname'  => $this->dbname,
+			'charset' => 'utf8mb4',
+		);
+
+		$host = $this->host;
+
+		if ( str_starts_with( $host, '/' ) ) {
+			$options['unix_socket'] = $host;
+			return $this->stringify_dsn_options( $options );
+		}
+
+		if ( preg_match( '/^\[(.+)\](?::(\d+))?$/', $host, $matches ) ) {
+			$options['host'] = $matches[1];
+			if ( ! empty( $matches[2] ) ) {
+				$options['port'] = $matches[2];
+			}
+			return $this->stringify_dsn_options( $options );
+		}
+
+		if ( 1 === substr_count( $host, ':' ) ) {
+			list( $base_host, $suffix ) = explode( ':', $host, 2 );
+
+			if ( '' !== $suffix ) {
+				if ( ctype_digit( $suffix ) ) {
+					$options['host'] = $base_host;
+					$options['port'] = $suffix;
+					return $this->stringify_dsn_options( $options );
+				}
+
+				if ( str_starts_with( $suffix, '/' ) ) {
+					$options['unix_socket'] = $suffix;
+					return $this->stringify_dsn_options( $options );
+				}
+			}
+		}
+
+		$options['host'] = $host;
+
+		return $this->stringify_dsn_options( $options );
+	}
+
+	/**
+	 * Convert DSN options into a mysql:... string.
+	 *
+	 * @param array<string, string> $options DSN options.
+	 * @return string
+	 */
+	private function stringify_dsn_options( array $options ): string {
+		$parts = array();
+
+		foreach ( $options as $key => $value ) {
+			$parts[] = "{$key}={$value}";
+		}
+
+		return 'mysql:' . implode( ';', $parts );
 	}
 
 	/**

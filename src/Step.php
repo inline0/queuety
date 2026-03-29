@@ -20,7 +20,7 @@ namespace Queuety;
  *         return [ 'user_name' => $user->display_name ];
  *     }
  *     public function config(): array {
- *         return [ 'needs_wordpress' => true ];
+ *         return [ 'max_attempts' => 5 ];
  *     }
  * }
  */
@@ -37,7 +37,7 @@ interface Step {
 	/**
 	 * Optional step configuration.
 	 *
-	 * Supported keys: needs_wordpress, max_attempts, backoff.
+	 * Supported keys: max_attempts, backoff.
 	 *
 	 * @return array Configuration array.
 	 */

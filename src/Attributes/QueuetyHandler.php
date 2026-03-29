@@ -13,7 +13,7 @@ use Attribute;
  * Marks a class as a Queuety job handler with auto-registration metadata.
  *
  * @example
- * #[QueuetyHandler(name: 'send_email', queue: 'emails', needs_wordpress: true)]
+ * #[QueuetyHandler(name: 'send_email', queue: 'emails', max_attempts: 5)]
  * class SendEmailHandler implements Handler { ... }
  */
 #[Attribute( Attribute::TARGET_CLASS )]
@@ -25,7 +25,7 @@ readonly class QueuetyHandler {
 	 * @param string $name            Handler name used for dispatch.
 	 * @param string $queue           Default queue for this handler.
 	 * @param int    $max_attempts    Maximum retry attempts.
-	 * @param bool   $needs_wordpress Whether the handler requires WordPress to be loaded.
+	 * @param bool   $needs_wordpress Legacy compatibility flag. Ignored by the current worker runtime.
 	 */
 	public function __construct(
 		public string $name,

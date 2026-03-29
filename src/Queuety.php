@@ -13,6 +13,8 @@ use Queuety\Contracts\Job as JobContract;
 use Queuety\Enums\ExpressionType;
 use Queuety\Enums\Priority;
 use Queuety\Enums\WorkflowStatus;
+use Queuety\Testing\FakeBatchManager;
+use Queuety\Testing\FakeQueue;
 use Queuety\Testing\QueueFake;
 
 /**
@@ -143,6 +145,20 @@ class Queuety {
 	private static ?QueueFake $queue_fake = null;
 
 	/**
+	 * Queue driver used while the facade is faked.
+	 *
+	 * @var FakeQueue|null
+	 */
+	private static ?FakeQueue $fake_queue = null;
+
+	/**
+	 * Batch manager used while the facade is faked.
+	 *
+	 * @var FakeBatchManager|null
+	 */
+	private static ?FakeBatchManager $fake_batch_manager = null;
+
+	/**
 	 * Initialize Queuety with a database connection.
 	 *
 	 * @param Connection $conn Database connection.
@@ -195,21 +211,26 @@ class Queuety {
 	 * @return PendingJob Fluent builder for additional options.
 	 */
 	public static function dispatch( string|JobContract $handler, array $payload = array() ): PendingJob {
+		if ( null !== self::$queue_fake ) {
+			if ( $handler instanceof JobContract ) {
+				$serialized = JobSerializer::serialize( $handler );
+				$pending    = new PendingJob( $serialized['handler'], $serialized['payload'], self::fake_queue(), $handler );
+			} else {
+				$pending = new PendingJob( $handler, $payload, self::fake_queue() );
+			}
+
+			return self::apply_pending_defaults( $pending, $handler );
+		}
+
 		self::ensure_initialized();
 
-		// Record in fake if active.
-		if ( null !== self::$queue_fake ) {
-			self::$queue_fake->push( $handler, $payload );
-		}
-
 		if ( $handler instanceof JobContract ) {
-			$serialized   = JobSerializer::serialize( $handler );
-			$handler_name = $serialized['handler'];
-			$payload      = $serialized['payload'];
-			return new PendingJob( $handler_name, $payload, self::$queue, $handler );
+			$serialized = JobSerializer::serialize( $handler );
+			$pending    = new PendingJob( $serialized['handler'], $serialized['payload'], self::$queue, $handler );
+			return self::apply_pending_defaults( $pending, $handler );
 		}
 
-		return new PendingJob( $handler, $payload, self::$queue );
+		return self::apply_pending_defaults( new PendingJob( $handler, $payload, self::$queue ), $handler );
 	}
 
 	/**
@@ -251,6 +272,10 @@ class Queuety {
 	 * @return BatchBuilder Fluent builder for batch options.
 	 */
 	public static function create_batch( array $jobs ): BatchBuilder {
+		if ( null !== self::$queue_fake ) {
+			return new BatchBuilder( $jobs, self::fake_queue(), self::fake_batch_manager() );
+		}
+
 		self::ensure_initialized();
 		return new BatchBuilder( $jobs, self::$queue, self::$batch_manager );
 	}
@@ -262,6 +287,10 @@ class Queuety {
 	 * @return Batch|null
 	 */
 	public static function find_batch( int $id ): ?Batch {
+		if ( null !== self::$queue_fake ) {
+			return self::fake_batch_manager()->find( $id );
+		}
+
 		self::ensure_initialized();
 		return self::$batch_manager->find( $id );
 	}
@@ -273,6 +302,10 @@ class Queuety {
 	 * @return ChainBuilder Fluent builder for chain options.
 	 */
 	public static function chain( array $jobs ): ChainBuilder {
+		if ( null !== self::$queue_fake ) {
+			return new ChainBuilder( $jobs, self::fake_queue() );
+		}
+
 		self::ensure_initialized();
 		return new ChainBuilder( $jobs, self::$queue );
 	}
@@ -287,6 +320,10 @@ class Queuety {
 	 * @return int[] Array of new job IDs.
 	 */
 	public static function batch( array $jobs ): array {
+		if ( null !== self::$queue_fake ) {
+			return self::fake_queue()->batch( $jobs );
+		}
+
 		self::ensure_initialized();
 		return self::$queue->batch( $jobs );
 	}
@@ -537,6 +574,10 @@ class Queuety {
 	 * @return BatchManager
 	 */
 	public static function batch_manager(): BatchManager {
+		if ( null !== self::$queue_fake ) {
+			return self::fake_batch_manager();
+		}
+
 		self::ensure_initialized();
 		return self::$batch_manager;
 	}
@@ -829,7 +870,18 @@ class Queuety {
 	 * @return QueueFake The fake queue instance.
 	 */
 	public static function fake(): QueueFake {
-		self::$queue_fake = new QueueFake();
+		self::$queue_fake         = new QueueFake();
+		self::$fake_queue         = new FakeQueue( self::$queue_fake );
+		self::$fake_batch_manager = new FakeBatchManager( self::$queue_fake );
+		return self::$queue_fake;
+	}
+
+	/**
+	 * Get the active queue fake recorder, if any.
+	 *
+	 * @return QueueFake|null
+	 */
+	public static function queue_fake(): ?QueueFake {
 		return self::$queue_fake;
 	}
 
@@ -853,6 +905,8 @@ class Queuety {
 		self::$workflow_event_log = null;
 		self::$cache              = null;
 		self::$queue_fake         = null;
+		self::$fake_queue         = null;
+		self::$fake_batch_manager = null;
 	}
 
 	/**
@@ -864,5 +918,66 @@ class Queuety {
 		if ( null === self::$conn ) {
 			throw new \RuntimeException( 'Queuety not initialized. Call Queuety::init() first.' );
 		}
+	}
+
+	/**
+	 * Get the fake queue driver.
+	 *
+	 * @return FakeQueue
+	 */
+	private static function fake_queue(): FakeQueue {
+		if ( null === self::$fake_queue || null === self::$queue_fake ) {
+			self::fake();
+		}
+
+		return self::$fake_queue;
+	}
+
+	/**
+	 * Get the fake batch manager.
+	 *
+	 * @return FakeBatchManager
+	 */
+	private static function fake_batch_manager(): FakeBatchManager {
+		if ( null === self::$fake_batch_manager || null === self::$queue_fake ) {
+			self::fake();
+		}
+
+		return self::$fake_batch_manager;
+	}
+
+	/**
+	 * Apply queue and retry defaults derived from handler metadata.
+	 *
+	 * @param PendingJob         $pending Pending job builder.
+	 * @param string|JobContract $handler Handler alias, class, or job instance.
+	 * @return PendingJob
+	 */
+	private static function apply_pending_defaults( PendingJob $pending, string|JobContract $handler ): PendingJob {
+		$class = null;
+
+		if ( $handler instanceof JobContract ) {
+			$class = get_class( $handler );
+		} elseif ( null !== self::$registry ) {
+			$class = self::$registry->class_name( $handler );
+		} elseif ( class_exists( $handler ) ) {
+			$class = $handler;
+		}
+
+		if ( null === $class ) {
+			return $pending;
+		}
+
+		$defaults = HandlerMetadata::from_class( $class );
+
+		if ( null !== $defaults['queue'] ) {
+			$pending->on_queue( $defaults['queue'] );
+		}
+
+		if ( null !== $defaults['max_attempts'] ) {
+			$pending->max_attempts( $defaults['max_attempts'] );
+		}
+
+		return $pending;
 	}
 }

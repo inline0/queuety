@@ -16,7 +16,7 @@ class CreateAccount implements \Queuety\Step {
         return ['user_id' => $user->id, 'user_name' => $user->name];
     }
     public function config(): array {
-        return ['needs_wordpress' => true, 'max_attempts' => 3];
+        return ['max_attempts' => 3];
     }
 }
 
@@ -26,7 +26,7 @@ class SendWelcome implements \Queuety\Step {
         return ['welcomed' => true];
     }
     public function config(): array {
-        return ['needs_wordpress' => true];
+        return [];
     }
 }
 

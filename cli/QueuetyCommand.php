@@ -8,6 +8,7 @@
 namespace Queuety\CLI;
 
 use Queuety\Enums\JobStatus;
+use Queuety\Enums\Priority;
 use Queuety\Queuety;
 
 /**
@@ -128,6 +129,7 @@ class QueuetyCommand extends \WP_CLI_Command {
 
 		$pending = Queuety::dispatch( $handler, $payload )
 			->on_queue( $queue )
+			->with_priority( Priority::tryFrom( $priority ) ?? Priority::Low )
 			->delay( $delay );
 
 		$job_id = $pending->id();

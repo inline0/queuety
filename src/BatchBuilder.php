@@ -9,6 +9,7 @@ namespace Queuety;
 
 use Queuety\Contracts\Job as JobContract;
 use Queuety\Enums\Priority;
+use Queuety\Testing\FakeQueue;
 
 /**
  * Fluent builder for creating and dispatching job batches.
@@ -170,6 +171,15 @@ class BatchBuilder {
 			$options['allow_failures'] = true;
 		}
 
+		if ( $this->queue_ops instanceof FakeQueue ) {
+			$fake_options = $options;
+			if ( null !== $this->name ) {
+				$fake_options['name'] = $this->name;
+			}
+
+			$this->queue_ops->recorder()->push_batch( $this->jobs, $fake_options );
+		}
+
 		$batch_id = $this->batch_manager->create(
 			total_jobs: count( $this->jobs ),
 			name: $this->name,
@@ -186,18 +196,46 @@ class BatchBuilder {
 					batch_id: $batch_id,
 				);
 			} elseif ( is_array( $job ) && isset( $job['handler'] ) ) {
+				$handler_defaults = $this->handler_defaults( $job['handler'] );
+
 				$this->queue_ops->dispatch(
 					handler: $job['handler'],
 					payload: $job['payload'] ?? array(),
 					queue: $job['queue'] ?? $this->queue,
 					priority: $job['priority'] ?? Priority::Low,
 					delay: $job['delay'] ?? 0,
-					max_attempts: $job['max_attempts'] ?? 3,
+					max_attempts: $job['max_attempts'] ?? ( $handler_defaults['max_attempts'] ?? 3 ),
 					batch_id: $batch_id,
 				);
 			}
 		}
 
 		return $this->batch_manager->find( $batch_id );
+	}
+
+	/**
+	 * Resolve handler defaults for batch array jobs.
+	 *
+	 * @param string $handler Handler alias or class.
+	 * @return array{queue: string|null, max_attempts: int|null, backoff: string|array|null, rate_limit: array{int, int}|null}
+	 */
+	private function handler_defaults( string $handler ): array {
+		$class = null;
+
+		if ( class_exists( $handler ) ) {
+			$class = $handler;
+		} else {
+			try {
+				$class = Queuety::registry()->class_name( $handler );
+			} catch ( \RuntimeException ) {
+				$class = null;
+			}
+		}
+
+		if ( null === $class ) {
+			return HandlerMetadata::from_class( $handler );
+		}
+
+		return HandlerMetadata::from_class( $class );
 	}
 }

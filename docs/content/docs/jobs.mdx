@@ -49,7 +49,6 @@ class SendEmailHandler implements Handler {
         return [
             'queue'           => 'emails',
             'max_attempts'    => 5,
-            'needs_wordpress' => true,
             'backoff'         => 'exponential',
         ];
     }
@@ -62,7 +61,6 @@ The `handle()` method receives the job payload and performs the work. The `confi
 |---|---|---|
 | `queue` | `string` | Default queue name |
 | `max_attempts` | `int` | Maximum retry attempts |
-| `needs_wordpress` | `bool` | Whether to boot WordPress before executing |
 | `backoff` | `string` | Retry backoff strategy: `exponential`, `linear`, or `fixed` |
 | `rate_limit` | `array` | Rate limit as `[max_executions, window_seconds]` |
 
@@ -420,7 +418,7 @@ FetchDataJob::with_chain( [
 
 #### Chain failure handling
 
-Register a failure handler class using `catch()`. The handler class must have a `handle()` method. It is called when any job in the chain fails.
+Register a failure handler class using `catch()`. The handler class must have a `handle()` method. It is called when any job in the chain is permanently buried. The worker supports `handle()`, `handle( Job $job )`, and `handle( Job $job, \Throwable $exception )`.
 
 ```php
 class ChainFailedHandler {

@@ -282,6 +282,8 @@ class Worker {
 		$start_time       = hrtime( true );
 		$timeout_seconds  = Config::max_execution_time();
 		$max_attempts     = $job->max_attempts;
+		$backoff_strategy = null;
+		$custom_backoff   = null;
 		$pcntl_available  = function_exists( 'pcntl_alarm' ) && function_exists( 'pcntl_signal' );
 		$previous_handler = null;
 		$job_instance     = null;
@@ -295,6 +297,21 @@ class Worker {
 			}
 			if ( null !== $job_props['tries'] ) {
 				$max_attempts = $job_props['tries'];
+			}
+			if ( ! empty( $job_props['backoff'] ) ) {
+				$custom_backoff = $job_props['backoff'];
+			}
+		} else {
+			$handler_settings = $this->resolve_handler_retry_settings( $job->handler );
+
+			if ( null !== $handler_settings['max_attempts'] ) {
+				$max_attempts = $handler_settings['max_attempts'];
+			}
+
+			if ( is_array( $handler_settings['backoff'] ) ) {
+				$custom_backoff = $handler_settings['backoff'];
+			} elseif ( is_string( $handler_settings['backoff'] ) ) {
+				$backoff_strategy = BackoffStrategy::tryFrom( $handler_settings['backoff'] );
 			}
 		}
 
@@ -506,7 +523,7 @@ class Worker {
 					);
 				} else {
 					// Simple job.
-					$handler->handle( $job->payload );
+					$handler->handle( $this->public_payload( $job->payload ) );
 
 					$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
@@ -560,12 +577,10 @@ class Worker {
 			// Determine effective max_attempts (job property overrides DB value).
 			$effective_max = $max_attempts;
 
-			// Calculate backoff: check job class properties for escalating backoff.
-			$custom_backoff = null;
-			if ( isset( $job_props ) && ! empty( $job_props['backoff'] ) ) {
-				$backoff_array  = $job_props['backoff'];
-				$attempt_index  = min( $job->attempts - 1, count( $backoff_array ) - 1 );
-				$custom_backoff = $backoff_array[ max( 0, $attempt_index ) ];
+			// Calculate backoff from handler/job metadata when provided.
+			if ( is_array( $custom_backoff ) ) {
+				$attempt_index  = min( $job->attempts - 1, count( $custom_backoff ) - 1 );
+				$custom_backoff = $custom_backoff[ max( 0, $attempt_index ) ];
 			}
 
 			if ( $job->attempts >= $effective_max ) {
@@ -574,6 +589,7 @@ class Worker {
 
 				// Call failed() hook on the job instance if available.
 				$this->call_failed_hook( $job, $job_instance, $e );
+				$this->call_chain_catch( $job, $e );
 
 				$this->logger->log(
 					LogEvent::Buried,
@@ -620,7 +636,7 @@ class Worker {
 				$this->record_batch_failure( $job );
 			} else {
 				// Retry with backoff.
-				$backoff = $custom_backoff ?? Queue::calculate_backoff( $job->attempts, Config::retry_backoff() );
+				$backoff = $custom_backoff ?? Queue::calculate_backoff( $job->attempts, $backoff_strategy ?? Config::retry_backoff() );
 				$this->queue->retry( $job->id, $backoff );
 
 				$this->logger->log(
@@ -688,7 +704,31 @@ class Worker {
 		$count      = 0;
 
 		foreach ( $stale_jobs as $job ) {
-			if ( $job->attempts >= $job->max_attempts ) {
+			$effective_max     = $job->max_attempts;
+			$backoff_strategy  = Config::retry_backoff();
+			$handler_backoff   = null;
+
+			if ( $this->registry->is_job_class( $job->handler ) ) {
+				$job_props = $this->read_job_properties( $job->handler );
+				if ( null !== $job_props['tries'] ) {
+					$effective_max = $job_props['tries'];
+				}
+				if ( ! empty( $job_props['backoff'] ) ) {
+					$handler_backoff = $job_props['backoff'];
+				}
+			} else {
+				$handler_settings = $this->resolve_handler_retry_settings( $job->handler );
+				if ( null !== $handler_settings['max_attempts'] ) {
+					$effective_max = $handler_settings['max_attempts'];
+				}
+				if ( is_array( $handler_settings['backoff'] ) ) {
+					$handler_backoff = $handler_settings['backoff'];
+				} elseif ( is_string( $handler_settings['backoff'] ) ) {
+					$backoff_strategy = BackoffStrategy::tryFrom( $handler_settings['backoff'] ) ?? $backoff_strategy;
+				}
+			}
+
+			if ( $job->attempts >= $effective_max ) {
 				$this->queue->bury( $job->id, 'Stale: worker died without completing.' );
 
 				$this->logger->log(
@@ -707,7 +747,12 @@ class Worker {
 					$this->workflow->fail( $job->workflow_id, $job->id, 'Stale: worker died without completing.' );
 				}
 			} else {
-				$backoff = Queue::calculate_backoff( $job->attempts, Config::retry_backoff() );
+				if ( is_array( $handler_backoff ) ) {
+					$attempt_index   = min( $job->attempts - 1, count( $handler_backoff ) - 1 );
+					$backoff         = $handler_backoff[ max( 0, $attempt_index ) ];
+				} else {
+					$backoff = Queue::calculate_backoff( $job->attempts, $backoff_strategy );
+				}
 				$this->queue->retry( $job->id, $backoff );
 
 				$this->logger->log(
@@ -910,21 +955,87 @@ class Worker {
 			return;
 		}
 
-		try {
-			$instance = $this->registry->resolve( $handler );
-		} catch ( \Throwable ) {
+		$class = $this->registry->class_name( $handler );
+		if ( null === $class ) {
 			return;
 		}
 
-		if ( $instance instanceof Handler ) {
-			$config = $instance->config();
-			if ( isset( $config['rate_limit'] ) && is_array( $config['rate_limit'] ) ) {
-				$this->rate_limiter->register(
-					$handler,
-					(int) $config['rate_limit'][0],
-					(int) $config['rate_limit'][1],
-				);
+		$metadata = HandlerMetadata::from_class( $class );
+		if ( isset( $metadata['rate_limit'] ) && is_array( $metadata['rate_limit'] ) ) {
+			$this->rate_limiter->register(
+				$handler,
+				$metadata['rate_limit'][0],
+				$metadata['rate_limit'][1],
+			);
+		}
+	}
+
+	/**
+	 * Strip internal metadata keys before invoking a classic handler.
+	 *
+	 * @param array $payload Job payload.
+	 * @return array
+	 */
+	private function public_payload( array $payload ): array {
+		unset( $payload['__chain_catch'] );
+
+		return $payload;
+	}
+
+	/**
+	 * Resolve retry defaults from classic handler or step metadata.
+	 *
+	 * @param string $handler Handler alias or class.
+	 * @return array{max_attempts: int|null, backoff: string|array|null}
+	 */
+	private function resolve_handler_retry_settings( string $handler ): array {
+		$class = $this->registry->class_name( $handler ) ?? ( class_exists( $handler ) ? $handler : null );
+
+		if ( null === $class ) {
+			return array(
+				'max_attempts' => null,
+				'backoff'      => null,
+			);
+		}
+
+		$metadata = HandlerMetadata::from_class( $class );
+
+		return array(
+			'max_attempts' => $metadata['max_attempts'],
+			'backoff'      => $metadata['backoff'],
+		);
+	}
+
+	/**
+	 * Run the chain catch handler after a chain job is permanently buried.
+	 *
+	 * @param Job        $job       Failed job.
+	 * @param \Throwable $exception Failure cause.
+	 */
+	private function call_chain_catch( Job $job, \Throwable $exception ): void {
+		$handler_class = $job->payload['__chain_catch'] ?? null;
+		if ( ! is_string( $handler_class ) || ! class_exists( $handler_class ) ) {
+			return;
+		}
+
+		try {
+			$handler = new $handler_class();
+
+			if ( ! method_exists( $handler, 'handle' ) ) {
+				return;
 			}
+
+			$method = new \ReflectionMethod( $handler, 'handle' );
+			$arity  = $method->getNumberOfParameters();
+
+			if ( 0 === $arity ) {
+				$handler->handle();
+			} elseif ( 1 === $arity ) {
+				$handler->handle( $job );
+			} else {
+				$handler->handle( $job, $exception );
+			}
+		} catch ( \Throwable ) {
 		}
 	}
 

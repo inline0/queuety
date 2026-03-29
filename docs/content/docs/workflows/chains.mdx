@@ -38,8 +38,7 @@ class CreateAccountHandler implements Step {
 
     public function config(): array {
         return [
-            'needs_wordpress' => true,
-            'max_attempts'    => 3,
+            'max_attempts' => 3,
         ];
     }
 }
@@ -66,7 +65,7 @@ class FetchUserHandler implements Step {
     }
 
     public function config(): array {
-        return [ 'needs_wordpress' => true ];
+        return [];
     }
 }
 
@@ -89,7 +88,6 @@ The `config()` method supports the following keys:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `needs_wordpress` | `bool` | `false` | Boot WordPress before executing this step |
 | `max_attempts` | `int` | `3` | Maximum retry attempts for this step |
 | `backoff` | `string` | `exponential` | Backoff strategy for retries |
 
@@ -112,7 +110,7 @@ class BuildPromptHandler implements Step {
     }
 
     public function config(): array {
-        return [ 'needs_wordpress' => true ];
+        return [];
     }
 }
 
@@ -135,7 +133,7 @@ class CallOpenAIHandler implements Step {
     }
 
     public function config(): array {
-        return [ 'needs_wordpress' => true, 'max_attempts' => 5 ];
+        return [ 'max_attempts' => 5 ];
     }
 }
 
@@ -150,7 +148,7 @@ class SaveSummaryHandler implements Step {
     }
 
     public function config(): array {
-        return [ 'needs_wordpress' => true ];
+        return [];
     }
 }
 ```

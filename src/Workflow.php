@@ -495,6 +495,11 @@ class Workflow {
 				throw new \RuntimeException( "Workflow {$workflow_id} not found." );
 			}
 
+			if ( ! in_array( $wf_row['status'], array( WorkflowStatus::Running->value, WorkflowStatus::Paused->value ), true ) ) {
+				$pdo->commit();
+				return;
+			}
+
 			$state        = json_decode( $wf_row['state'], true ) ?: array();
 			$current_step = (int) $wf_row['current_step'];
 			$total_steps  = (int) $wf_row['total_steps'];
@@ -1141,6 +1146,7 @@ class Workflow {
 			);
 
 			$pdo->commit();
+			$this->invalidate_workflow_cache( $workflow_id );
 		} catch ( \Throwable $e ) {
 			if ( $pdo->inTransaction() ) {
 				$pdo->rollBack();
@@ -1162,14 +1168,21 @@ class Workflow {
 		$stmt = $this->conn->pdo()->prepare(
 			"UPDATE {$wf_tbl}
 			SET status = 'failed', failed_at = NOW(), error_message = :error
-			WHERE id = :id"
+			WHERE id = :id
+				AND status IN (:running, :paused)"
 		);
 		$stmt->execute(
 			array(
-				'error' => $error_message,
-				'id'    => $workflow_id,
+				'error'   => $error_message,
+				'id'      => $workflow_id,
+				'running' => WorkflowStatus::Running->value,
+				'paused'  => WorkflowStatus::Paused->value,
 			)
 		);
+
+		if ( 0 === $stmt->rowCount() ) {
+			return;
+		}
 
 		$this->logger->log(
 			LogEvent::WorkflowFailed,
@@ -1180,6 +1193,9 @@ class Workflow {
 				'error_message' => $error_message,
 			)
 		);
+
+		$this->bury_active_jobs_for_workflow( $workflow_id, $error_message, $failed_job_id );
+		$this->invalidate_workflow_cache( $workflow_id );
 	}
 
 	/**
@@ -1291,6 +1307,7 @@ class Workflow {
 			);
 
 			$pdo->commit();
+			$this->invalidate_workflow_cache( $workflow_id );
 		} catch ( \Throwable $e ) {
 			$pdo->rollBack();
 			throw $e;
@@ -1317,6 +1334,8 @@ class Workflow {
 				'handler'     => '',
 			)
 		);
+
+		$this->invalidate_workflow_cache( $workflow_id );
 	}
 
 	/**
@@ -1376,6 +1395,7 @@ class Workflow {
 			);
 
 			$pdo->commit();
+			$this->invalidate_workflow_cache( $workflow_id );
 		} catch ( \Throwable $e ) {
 			$pdo->rollBack();
 			throw $e;
@@ -1753,6 +1773,8 @@ class Workflow {
 			$upd->execute( array( 'id' => $wf_row['id'] ) );
 
 			if ( $upd->rowCount() > 0 ) {
+				$this->bury_active_jobs_for_workflow( (int) $wf_row['id'], 'Deadline exceeded' );
+
 				$this->logger->log(
 					LogEvent::WorkflowDeadlineExceeded,
 					array(
@@ -1768,6 +1790,38 @@ class Workflow {
 		}
 
 		return $count;
+	}
+
+	/**
+	 * Bury any active jobs that belong to a terminal workflow.
+	 *
+	 * @param int      $workflow_id Workflow ID.
+	 * @param string   $message     Error message to store on buried jobs.
+	 * @param int|null $except_job  Optional job ID to leave untouched.
+	 */
+	private function bury_active_jobs_for_workflow( int $workflow_id, string $message, ?int $except_job = null ): void {
+		$jb_tbl = $this->conn->table( Config::table_jobs() );
+
+		$sql = "UPDATE {$jb_tbl}
+			SET status = :status, failed_at = NOW(), error_message = :message
+			WHERE workflow_id = :workflow_id
+				AND status IN (:pending, :processing)";
+
+		$params = array(
+			'status'      => JobStatus::Buried->value,
+			'message'     => $message,
+			'workflow_id' => $workflow_id,
+			'pending'     => JobStatus::Pending->value,
+			'processing'  => JobStatus::Processing->value,
+		);
+
+		if ( null !== $except_job ) {
+			$sql               .= ' AND id != :except_job';
+			$params['except_job'] = $except_job;
+		}
+
+		$stmt = $this->conn->pdo()->prepare( $sql );
+		$stmt->execute( $params );
 	}
 
 	/**

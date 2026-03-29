@@ -56,7 +56,7 @@ interface StreamingStep {
 	/**
 	 * Optional configuration.
 	 *
-	 * Supported keys: needs_wordpress, max_attempts.
+	 * Supported keys: max_attempts, backoff.
 	 *
 	 * @return array Configuration array.
 	 */

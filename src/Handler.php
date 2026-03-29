@@ -16,7 +16,7 @@ namespace Queuety;
  *         wp_mail( $payload['to'], $payload['subject'], $payload['body'] );
  *     }
  *     public function config(): array {
- *         return [ 'queue' => 'emails', 'needs_wordpress' => true ];
+ *         return [ 'queue' => 'emails', 'max_attempts' => 5 ];
  *     }
  * }
  */
@@ -32,7 +32,7 @@ interface Handler {
 	/**
 	 * Optional handler configuration.
 	 *
-	 * Supported keys: queue, max_attempts, needs_wordpress, backoff, rate_limit.
+	 * Supported keys: queue, max_attempts, backoff, rate_limit.
 	 *
 	 * @return array Configuration array.
 	 */

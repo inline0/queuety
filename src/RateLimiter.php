@@ -112,6 +112,9 @@ class RateLimiter {
 			$this->counters[ $handler ]      = 0;
 			$this->window_starts[ $handler ] = time();
 			$this->last_refresh[ $handler ]  = 0.0;
+			if ( null !== $this->cache ) {
+				$this->cache->delete( "queuety:rate_limit:{$handler}" );
+			}
 		}
 
 		// Try reading from shared cache before querying DB.
@@ -120,7 +123,7 @@ class RateLimiter {
 			$cached    = $this->cache->get( $cache_key );
 
 			if ( null !== $cached ) {
-				$this->counters[ $handler ]     = (int) $cached;
+				$this->counters[ $handler ]     = max( $this->counters[ $handler ], (int) $cached );
 				$this->last_refresh[ $handler ] = microtime( true );
 
 				return $this->counters[ $handler ] >= $limit['max'];
@@ -147,6 +150,15 @@ class RateLimiter {
 		}
 
 		++$this->counters[ $handler ];
+		$this->last_refresh[ $handler ] = microtime( true );
+
+		if ( null !== $this->cache ) {
+			$this->cache->set(
+				"queuety:rate_limit:{$handler}",
+				$this->counters[ $handler ],
+				Config::cache_ttl()
+			);
+		}
 	}
 
 	/**

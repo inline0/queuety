@@ -158,7 +158,7 @@ $first_job_id = Queuety::chain( [
 | Method | Returns | Description |
 |---|---|---|
 | `on_queue( string $queue )` | `self` | Set the queue for all jobs in the chain |
-| `catch( string $handler_class )` | `self` | Handler called when any job in the chain fails |
+| `catch( string $handler_class )` | `self` | Handler called when any job in the chain is permanently buried |
 | `dispatch()` | `int` | Create all jobs with sequential dependencies, returns the first job ID |
 
 ### `Queuety::retry( $job_id )`
@@ -288,7 +288,7 @@ Queuety::retry_workflow( $workflow_id );
 
 ### `Queuety::pause_workflow( $workflow_id )`
 
-Pause a running workflow.
+Pause a running workflow. Already queued work for the current step may still finish, but later steps are not enqueued until you resume the workflow.
 
 ```php
 Queuety::pause_workflow( $workflow_id );
@@ -630,7 +630,7 @@ These methods return internal instances for advanced use cases.
 
 ### `Queuety::fake()`
 
-Replace the queue with an in-memory fake for testing. Returns a `QueueFake` instance that records all dispatched jobs.
+Replace the queue with an in-memory fake for testing. Returns a `QueueFake` instance that records dispatched jobs, chains, and batches without touching the database.
 
 ```php
 $fake = Queuety::fake();
@@ -756,7 +756,7 @@ interface StreamingStep {
 |---|---|
 | `stream( $state, $existing_chunks )` | Generator that yields string chunks. Each yield triggers an immediate DB write. On retry, `$existing_chunks` contains previously persisted chunks. |
 | `on_complete( $chunks, $state )` | Called after the stream finishes. Returns data to merge into workflow state. |
-| `config()` | Optional configuration. Supports `needs_wordpress` and `max_attempts`. |
+| `config()` | Optional configuration. Supports `max_attempts` and `backoff`. |
 
 ### `ChunkStore`
 
@@ -968,7 +968,7 @@ PHP 8 attribute for auto-registration. See [PHP Attributes](/docs/features/attri
 ```php
 use Queuety\Attributes\QueuetyHandler;
 
-#[QueuetyHandler( name: 'send_email', queue: 'emails', max_attempts: 5, needs_wordpress: true )]
+#[QueuetyHandler( name: 'send_email', queue: 'emails', max_attempts: 5 )]
 class SendEmailHandler implements Handler {
     // ...
 }
