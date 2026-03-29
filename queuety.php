@@ -66,7 +66,42 @@ register_activation_hook(
 	}
 );
 
-// WP-CLI commands.
+// Default processing via wp_cron: works on every host, no shell access needed.
+// WP-CLI workers are the upgrade path for better performance.
+add_action(
+	'init',
+	function () {
+		// Register the cron schedule if not already.
+		if ( ! wp_next_scheduled( 'queuety_cron_process' ) ) {
+			wp_schedule_event( time(), 'every_minute', 'queuety_cron_process' );
+		}
+	}
+);
+
+add_filter(
+	'cron_schedules',
+	function ( $schedules ) {
+		$schedules['every_minute'] = array(
+			'interval' => 60,
+			'display'  => 'Every Minute',
+		);
+		return $schedules;
+	}
+);
+
+add_action(
+	'queuety_cron_process',
+	function () {
+		try {
+			$worker = Queuety\Queuety::worker();
+			$worker->run( 'default', once: true );
+		} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Cron errors are non-fatal.
+			unset( $e );
+		}
+	}
+);
+
+// WP-CLI commands (upgrade path for dedicated workers).
 if ( defined( 'WP_CLI' ) && WP_CLI ) {
 	\WP_CLI::add_command( 'queuety', Queuety\CLI\QueuetyCommand::class );
 	\WP_CLI::add_command( 'queuety workflow', Queuety\CLI\WorkflowCommand::class );
