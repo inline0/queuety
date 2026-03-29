@@ -630,7 +630,7 @@ These methods return internal instances for advanced use cases.
 
 ### `Queuety::fake()`
 
-Replace the queue with an in-memory fake for testing. Returns a `QueueFake` instance that records dispatched jobs, chains, and batches without touching the database.
+Replace the queue with an in-memory fake for testing. Returns a `QueueFake` instance that records dispatched jobs without touching the database. `create_batch()` also records fake batch metadata; chains are asserted via the individual pushed jobs they dispatch.
 
 ```php
 $fake = Queuety::fake();

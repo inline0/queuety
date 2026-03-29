@@ -5,7 +5,7 @@ description: Fake the queue and assert job dispatch behavior in your test suite.
 
 # Testing
 
-Queuety provides a `QueueFake` class that replaces the real queue with an in-memory store. Dispatched jobs, chains, and batches are recorded instead of being written to the database, letting you assert dispatch behavior without running workers or requiring a database connection.
+Queuety provides a `QueueFake` class that replaces the real queue with an in-memory store. Dispatched jobs are recorded instead of being written to the database, and `create_batch()` records batch metadata in memory as well. That lets you assert dispatch behavior without running workers or requiring a database connection.
 
 ## Setting up the fake
 
@@ -25,7 +25,7 @@ class SendEmailTest extends \PHPUnit\Framework\TestCase {
 }
 ```
 
-`Queuety::fake()` creates a new `QueueFake` and wires it into the `Queuety` facade. `Queuety::dispatch()`, `Dispatchable::dispatch()`, `Queuety::chain()`, `Queuety::batch()`, and `Queuety::create_batch()` all record against the fake without touching the database.
+`Queuety::fake()` creates a new `QueueFake` and wires it into the `Queuety` facade. `Queuety::dispatch()` and `Dispatchable::dispatch()` record pushed jobs. `Queuety::chain()` records each chained job as a normal push in dispatch order. `Queuety::create_batch()` records both the pushed jobs and the batch metadata used by `assert_batched()`. `Queuety::batch()` records the pushed jobs, but it does not create fake batch metadata.
 
 Call `Queuety::reset()` in `tearDown()` to clear the fake and restore normal behavior between tests.
 

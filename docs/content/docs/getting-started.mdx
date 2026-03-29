@@ -38,6 +38,8 @@ wp plugin activate queuety
 
 On activation, Queuety creates or upgrades its database tables (`queuety_jobs`, `queuety_workflows`, `queuety_logs`, `queuety_schedules`, `queuety_queue_states`, `queuety_webhooks`, `queuety_locks`, `queuety_signals`, `queuety_batches`, `queuety_chunks`, `queuety_workflow_events`) so workers can claim jobs directly from MySQL.
 
+By default, the plugin also schedules a one-shot worker through WordPress cron every minute. That gives you a no-shell baseline that can still process jobs and workflows. For heavier workloads, move to dedicated `wp queuety work` processes.
+
 ## Configuration
 
 All constants are optional. Define them in `wp-config.php` before the plugin loads:
@@ -181,6 +183,8 @@ wp queuety work
 ```
 
 The worker polls for pending jobs, executes them, advances workflows, and sleeps when the queue is empty. Press `Ctrl+C` to stop.
+
+If you do not run a dedicated worker, Queuety still has the default once-per-minute WordPress cron fallback described above. The dedicated worker is the higher-throughput, lower-latency option.
 
 For production, run multiple workers:
 
