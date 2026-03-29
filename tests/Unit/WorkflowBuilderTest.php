@@ -244,4 +244,31 @@ class WorkflowBuilderTest extends TestCase {
 		$this->assertNull( $steps[0]['workflow_ids'] );
 		$this->assertSame( 'child_state', $steps[0]['result_key'] );
 	}
+
+	public function test_spawn_workflows_builds_serializable_definition(): void {
+		$child = $this->make_builder( 'agent_task' )
+			->version( 'agent-task.v1' )
+			->then( 'ProcessTopicStep' );
+
+		$steps = $this->make_builder( 'planner' )
+			->spawn_workflows(
+				items_key: 'topics',
+				workflow_builder: $child,
+				result_key: 'child_workflow_ids',
+				payload_key: 'topic',
+				inherit_state: true,
+				name: 'spawn_agents',
+			)
+			->build_steps();
+
+		$this->assertSame( 'spawn_workflows', $steps[0]['type'] );
+		$this->assertSame( 'spawn_agents', $steps[0]['name'] );
+		$this->assertSame( 'topics', $steps[0]['items_key'] );
+		$this->assertSame( 'child_workflow_ids', $steps[0]['result_key'] );
+		$this->assertSame( 'topic', $steps[0]['payload_key'] );
+		$this->assertTrue( $steps[0]['inherit_state'] );
+		$this->assertSame( 'agent_task', $steps[0]['workflow_definition']['name'] );
+		$this->assertSame( 'agent-task.v1', $steps[0]['workflow_definition']['definition_version'] );
+		$this->assertSame( 64, strlen( $steps[0]['workflow_definition']['definition_hash'] ) );
+	}
 }

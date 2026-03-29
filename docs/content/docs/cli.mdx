@@ -392,7 +392,7 @@ See [Forking](/docs/workflows/forking) for details.
 
 ### `wp queuety workflow export`
 
-Export a workflow's full execution history to JSON. Includes the workflow row, all jobs, events, and log entries.
+Export a workflow's full execution history to JSON. Includes the workflow row, jobs, workflow events, log entries, stored signals, and workflow dependency waits.
 
 ```bash
 wp queuety workflow export <id> [--output=<file>]
@@ -415,7 +415,7 @@ See [Export and Replay](/docs/workflows/export-replay) for details on the JSON s
 
 ### `wp queuety workflow replay`
 
-Replay an exported workflow from a JSON file. Creates a new workflow with the exported state and step definitions.
+Replay an exported workflow from a JSON file. Creates a new workflow with the exported state, metadata, and historical timeline.
 
 ```bash
 wp queuety workflow replay <file>

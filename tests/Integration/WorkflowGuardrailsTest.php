@@ -68,6 +68,8 @@ class WorkflowGuardrailsTest extends IntegrationTestCase {
 
 		$status = $this->workflow->status( $first );
 		$this->assertSame( 'research.v2', $status->definition_version );
+		$this->assertNotNull( $status->definition_hash );
+		$this->assertSame( 64, strlen( $status->definition_hash ) );
 		$this->assertSame( 'agent-run:42', $status->idempotency_key );
 
 		$job = $this->queue->claim();

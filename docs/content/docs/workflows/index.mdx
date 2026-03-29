@@ -134,15 +134,16 @@ The `prune_state_after()` method enables automatic removal of old step outputs t
 
 Use `compensate_with()` to attach a per-step compensation handler. Use `compensate_on_failure()` when you want completed step compensations to run automatically after a workflow failure, not just on explicit cancellation. See [Compensation](/docs/workflows/compensation).
 
-Use workflow guardrails when you need safer long-running orchestration: `version()` tags a definition with an application-level version, `idempotency_key()` makes dispatch durable across retries or duplicate requests, and `max_transitions()`, `max_fan_out_items()`, and `max_state_bytes()` fail runaway runs before they spiral. See [Guardrails](/docs/workflows/guardrails).
+Use workflow guardrails when you need safer long-running orchestration: `version()` tags a definition with an application-level version, Queuety also stores a deterministic definition hash for each run, `idempotency_key()` makes dispatch durable across retries or duplicate requests, and `max_transitions()`, `max_fan_out_items()`, and `max_state_bytes()` fail runaway runs before they spiral. See [Guardrails](/docs/workflows/guardrails).
 
 ## Step types
 
-Queuety supports nine types of steps within a workflow:
+Queuety supports ten types of steps within a workflow:
 
 - [Sequential chains](/docs/workflows/chains) using `->then()` for one-at-a-time execution
 - [Parallel groups](/docs/workflows/parallel) using `->parallel()` for concurrent execution
 - [Dynamic fan-out](/docs/workflows/fan-out) using `->fan_out()` for runtime-discovered branch work and explicit join semantics
+- [Async handoffs](/docs/workflows/async-handoffs) using `->spawn_workflows()` to dispatch independent child workflows from runtime-discovered items
 - [Conditional branching](/docs/workflows/conditional) using named steps and `_goto`
 - [Sub-workflows](/docs/workflows/sub-workflows) using `->sub_workflow()` for nested composition
 - [Durable timers](/docs/workflows/timers) using `->sleep()` for time-based delays

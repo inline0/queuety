@@ -21,6 +21,8 @@ Queuety::workflow( 'research_run' )
 
 The version is stored with the workflow state, exposed through `workflow_status()`, printed by `wp queuety workflow status`, and included in workflow exports.
 
+Queuety also stores a deterministic `definition_hash` for every workflow run. The hash is derived from the serialised workflow definition and is useful when you need to identify exactly which workflow shape an in-flight run is executing after a deploy.
+
 ## Make dispatch idempotent
 
 Use `idempotency_key()` when callers may retry the same request:
@@ -75,6 +77,7 @@ When a budget is exceeded, Queuety fails the workflow immediately instead of ret
 Workflow status exposes:
 
 - `definition_version`
+- `definition_hash`
 - `idempotency_key`
 - `budget`
 
@@ -86,6 +89,7 @@ Example:
 $state = Queuety::workflow_status( $workflow_id );
 
 $state->definition_version; // 'research.v2'
+$state->definition_hash;    // '4c7a...'
 $state->idempotency_key;    // 'brief:42:research'
 $state->budget;             // [ 'max_transitions' => 20, ... ]
 ```

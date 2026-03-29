@@ -77,7 +77,7 @@ wp queuety workflow replay /tmp/workflow-42.json
 
 ## JSON structure
 
-The export contains the full workflow state, all associated jobs, workflow events, and log entries:
+The export contains the full workflow state, associated jobs, workflow events, log entries, stored signals, and any workflow-dependency wait rows:
 
 ```json
 {
@@ -128,14 +128,16 @@ The export contains the full workflow state, all associated jobs, workflow event
             "created_at": "2026-03-28 10:00:00"
         }
     ],
+    "signals": [],
+    "wait_dependencies": [],
     "exported_at": "2026-03-28T12:00:00+00:00",
-    "queuety_version": "0.14.0"
+    "queuety_version": "0.15.0"
 }
 ```
 
 Some fields are abbreviated in the example above. The actual export includes all columns from each table row.
 
-Workflow exports also preserve workflow metadata such as `definition_version` and `idempotency_key` when those were set on the original run.
+Workflow exports also preserve workflow metadata such as `definition_version`, `definition_hash`, and `idempotency_key` when those were set on the original run.
 
 ## How replay works
 
@@ -143,11 +145,14 @@ When you replay an exported workflow:
 
 1. A new workflow row is created with the exported state and step definitions
 2. The new workflow's name is `{original_name}_replay_{timestamp}`
-3. Historical `step_completed` events are re-inserted into the event log (without re-executing the steps)
-4. If the original workflow was still running (not completed), the current step is enqueued for processing
-5. If the original workflow was completed, the replayed workflow is created in `completed` status
+3. Historical workflow events and logs are re-inserted into the new environment
+4. Stored signals and workflow-wait dependency rows are replayed as historical state
+5. If the original workflow was still `running`, the current step is enqueued for processing
+6. If the original workflow was `waiting_signal`, `waiting_workflow`, `paused`, `failed`, or `completed`, that status is preserved on the replayed workflow
 
 The replayed workflow gets a new ID and operates independently. It does not affect the original.
+
+For `waiting_workflow` replays, the exported dependency rows are recreated with the same workflow IDs. That is useful for auditing and for environments where those dependency workflows also exist, but it does not automatically remap dependency IDs across environments.
 
 ## Use cases
 
@@ -165,7 +170,7 @@ wp queuety workflow export 42 --output=/tmp/workflow-42.json
 wp queuety workflow replay /tmp/workflow-42.json
 ```
 
-The replayed workflow has the exact same state and step definitions. The worker will re-execute from the point where it left off, letting you debug in your local environment.
+The replayed workflow has the exact same state and step definitions. Running workflows re-enqueue the current step so you can continue execution from the point where they left off, while paused or waiting workflows are recreated in that blocked state for inspection.
 
 ### Migrate workflows between environments
 

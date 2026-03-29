@@ -149,6 +149,64 @@ class WorkflowEventLogTest extends TestCase {
 		$this->assertSame( 'Something went wrong', $timeline[0]['error_message'] );
 	}
 
+	public function test_record_workflow_waiting_and_resumed_events(): void {
+		$this->skip_without_db();
+
+		$wf_id = $this->create_workflow();
+		$this->event_log->record_workflow_waiting(
+			workflow_id: $wf_id,
+			step_index: 1,
+			handler: '__queuety_signal',
+			state_snapshot: array( 'counter' => 1 ),
+			wait_type: 'signal',
+			waiting_for: array( 'approval' ),
+		);
+		$this->event_log->record_workflow_resumed(
+			workflow_id: $wf_id,
+			step_index: 1,
+			handler: '__queuety_signal',
+			state_snapshot: array( 'counter' => 1, 'approval' => array( 'approved' => true ) ),
+			step_output: array( 'approval' => array( 'approved' => true ) ),
+		);
+
+		$timeline = $this->event_log->get_timeline( $wf_id );
+		$this->assertCount( 2, $timeline );
+		$this->assertSame( 'workflow_waiting', $timeline[0]['event'] );
+		$this->assertSame(
+			array(
+				'wait_type'   => 'signal',
+				'waiting_for' => array( 'approval' ),
+			),
+			$timeline[0]['step_output']
+		);
+		$this->assertSame( 'workflow_resumed', $timeline[1]['event'] );
+		$this->assertSame(
+			array( 'approval' => array( 'approved' => true ) ),
+			$timeline[1]['step_output']
+		);
+	}
+
+	public function test_record_workflow_replayed_event(): void {
+		$this->skip_without_db();
+
+		$wf_id = $this->create_workflow();
+		$this->event_log->record_workflow_replayed(
+			workflow_id: $wf_id,
+			step_index: 0,
+			handler: '__queuety_replay',
+			state_snapshot: array( 'input' => 'data' ),
+			context: array(
+				'source_workflow_id' => 12,
+				'definition_hash'    => str_repeat( 'b', 64 ),
+			),
+		);
+
+		$timeline = $this->event_log->get_timeline( $wf_id );
+		$this->assertCount( 1, $timeline );
+		$this->assertSame( 'workflow_replayed', $timeline[0]['event'] );
+		$this->assertSame( 12, $timeline[0]['step_output']['source_workflow_id'] );
+	}
+
 	// -- get_timeline returns events in order --------------------------------
 
 	public function test_get_timeline_returns_events_in_order(): void {

@@ -17,6 +17,20 @@ namespace Queuety;
 class WorkflowReplayer {
 
 	/**
+	 * Strip reserved keys from workflow state for public event snapshots.
+	 *
+	 * @param array $state Internal workflow state.
+	 * @return array
+	 */
+	private static function public_state( array $state ): array {
+		return array_filter(
+			$state,
+			static fn( string $key ) => ! str_starts_with( $key, '_' ),
+			ARRAY_FILTER_USE_KEY
+		);
+	}
+
+	/**
 	 * Replay an exported workflow.
 	 *
 	 * Creates a new workflow from the export data, records historical event
@@ -35,10 +49,16 @@ class WorkflowReplayer {
 
 		$wf_data = $export_data['workflow'];
 		$events  = $export_data['events'] ?? array();
+		$logs    = $export_data['logs'] ?? array();
+		$signals = $export_data['signals'] ?? array();
+		$waits   = $export_data['wait_dependencies'] ?? array();
 
 		$pdo    = $conn->pdo();
 		$wf_tbl = $conn->table( Config::table_workflows() );
 		$ev_tbl = $conn->table( Config::table_workflow_events() );
+		$lg_tbl = $conn->table( Config::table_logs() );
+		$sig_tbl = $conn->table( Config::table_signals() );
+		$dep_tbl = $conn->table( Config::table_workflow_dependencies() );
 
 		$state        = $wf_data['state'] ?? array();
 		$current_step = (int) ( $wf_data['current_step'] ?? 0 );
@@ -47,49 +67,52 @@ class WorkflowReplayer {
 		$queue_name   = $state['_queue'] ?? 'default';
 		$priority_val = $state['_priority'] ?? 0;
 		$max_attempts = $state['_max_attempts'] ?? 3;
-
-		$replay_status = 'running';
-		$replay_step   = $current_step;
-
-		if ( 'completed' === $wf_data['status'] ) {
-			$replay_step   = $total_steps;
-			$replay_status = 'completed';
-		}
+		$source_status = (string) ( $wf_data['status'] ?? 'running' );
+		$replay_status = in_array(
+			$source_status,
+			array( 'running', 'completed', 'failed', 'paused', 'waiting_signal', 'waiting_workflow', 'cancelled' ),
+			true
+		) ? $source_status : 'running';
+		$replay_step   = 'completed' === $replay_status ? $total_steps : $current_step;
+		$failed_at     = 'failed' === $replay_status ? gmdate( 'Y-m-d H:i:s' ) : null;
+		$completed_at  = 'completed' === $replay_status ? gmdate( 'Y-m-d H:i:s' ) : null;
 
 		$pdo->beginTransaction();
 		try {
 			$stmt = $pdo->prepare(
 				"INSERT INTO {$wf_tbl}
-				(name, status, state, current_step, total_steps)
-				VALUES (:name, :status, :state, :step, :total)"
+				(name, status, state, current_step, total_steps, completed_at, failed_at, error_message)
+				VALUES (:name, :status, :state, :step, :total, :completed_at, :failed_at, :error_message)"
 			);
 			$stmt->execute(
 				array(
-					'name'   => $wf_data['name'] . '_replay_' . time(),
-					'status' => $replay_status,
-					'state'  => json_encode( $state, JSON_THROW_ON_ERROR ),
-					'step'   => $replay_step,
-					'total'  => $total_steps,
+					'name'          => $wf_data['name'] . '_replay_' . time(),
+					'status'        => $replay_status,
+					'state'         => json_encode( $state, JSON_THROW_ON_ERROR ),
+					'step'          => $replay_step,
+					'total'         => $total_steps,
+					'completed_at'  => $completed_at,
+					'failed_at'     => $failed_at,
+					'error_message' => 'failed' === $replay_status
+						? ( $wf_data['error_message'] ?? null )
+						: null,
 				)
 			);
 			$new_id = (int) $pdo->lastInsertId();
 
 			foreach ( $events as $event ) {
-				if ( 'step_completed' !== ( $event['event'] ?? '' ) ) {
-					continue;
-				}
-
 				$ins = $pdo->prepare(
 					"INSERT INTO {$ev_tbl}
-					(workflow_id, step_index, handler, event, state_snapshot, step_output, duration_ms)
+					(workflow_id, step_index, handler, event, state_snapshot, step_output, duration_ms, error_message, created_at)
 					VALUES
-					(:workflow_id, :step_index, :handler, 'step_completed', :state_snapshot, :step_output, :duration_ms)"
+					(:workflow_id, :step_index, :handler, :event, :state_snapshot, :step_output, :duration_ms, :error_message, :created_at)"
 				);
 				$ins->execute(
 					array(
 						'workflow_id'    => $new_id,
-						'step_index'     => (int) $event['step_index'],
+						'step_index'     => (int) ( $event['step_index'] ?? 0 ),
 						'handler'        => $event['handler'] ?? '',
+						'event'          => $event['event'] ?? 'step_completed',
 						'state_snapshot' => null !== $event['state_snapshot']
 							? json_encode( $event['state_snapshot'], JSON_THROW_ON_ERROR )
 							: null,
@@ -97,9 +120,94 @@ class WorkflowReplayer {
 							? json_encode( $event['step_output'], JSON_THROW_ON_ERROR )
 							: null,
 						'duration_ms'    => $event['duration_ms'] ?? null,
+						'error_message'  => $event['error_message'] ?? null,
+						'created_at'     => $event['created_at'] ?? gmdate( 'Y-m-d H:i:s' ),
 					)
 				);
 			}
+
+			foreach ( $logs as $log ) {
+				$ins = $pdo->prepare(
+					"INSERT INTO {$lg_tbl}
+					(job_id, workflow_id, step_index, handler, queue, event, attempt, duration_ms, error_message, created_at)
+					VALUES
+					(:job_id, :workflow_id, :step_index, :handler, :queue, :event, :attempt, :duration_ms, :error_message, :created_at)"
+				);
+				$ins->execute(
+					array(
+						'job_id'        => null,
+						'workflow_id'   => $new_id,
+						'step_index'    => $log['step_index'] ?? null,
+						'handler'       => $log['handler'] ?? '',
+						'queue'         => $log['queue'] ?? 'default',
+						'event'         => $log['event'] ?? 'debug',
+						'attempt'       => $log['attempt'] ?? null,
+						'duration_ms'   => $log['duration_ms'] ?? null,
+						'error_message' => $log['error_message'] ?? null,
+						'created_at'    => $log['created_at'] ?? gmdate( 'Y-m-d H:i:s' ),
+					)
+				);
+			}
+
+			foreach ( $signals as $signal ) {
+				$ins = $pdo->prepare(
+					"INSERT INTO {$sig_tbl} (workflow_id, signal_name, payload, received_at)
+					VALUES (:workflow_id, :signal_name, :payload, :received_at)"
+				);
+				$ins->execute(
+					array(
+						'workflow_id' => $new_id,
+						'signal_name' => $signal['signal_name'] ?? '',
+						'payload'     => json_encode( $signal['payload'] ?? array(), JSON_THROW_ON_ERROR ),
+						'received_at' => $signal['received_at'] ?? gmdate( 'Y-m-d H:i:s' ),
+					)
+				);
+			}
+
+			foreach ( $waits as $wait ) {
+				$dependency_workflow_id = (int) ( $wait['dependency_workflow_id'] ?? 0 );
+				if ( $dependency_workflow_id < 1 ) {
+					continue;
+				}
+
+				$ins = $pdo->prepare(
+					"INSERT INTO {$dep_tbl} (waiting_workflow_id, step_index, dependency_workflow_id, satisfied_at, created_at)
+					VALUES (:waiting_workflow_id, :step_index, :dependency_workflow_id, :satisfied_at, :created_at)"
+				);
+				$ins->execute(
+					array(
+						'waiting_workflow_id'    => $new_id,
+						'step_index'             => (int) ( $wait['step_index'] ?? 0 ),
+						'dependency_workflow_id' => $dependency_workflow_id,
+						'satisfied_at'           => $wait['satisfied_at'] ?? null,
+						'created_at'             => $wait['created_at'] ?? gmdate( 'Y-m-d H:i:s' ),
+					)
+				);
+			}
+
+			$replay_event = $pdo->prepare(
+				"INSERT INTO {$ev_tbl}
+				(workflow_id, step_index, handler, event, state_snapshot, step_output)
+				VALUES
+				(:workflow_id, :step_index, :handler, 'workflow_replayed', :state_snapshot, :step_output)"
+			);
+			$replay_event->execute(
+				array(
+					'workflow_id'    => $new_id,
+					'step_index'     => $replay_step,
+					'handler'        => '__queuety_replay',
+					'state_snapshot' => json_encode( self::public_state( $state ), JSON_THROW_ON_ERROR ),
+					'step_output'    => json_encode(
+						array(
+							'source_workflow_id' => (int) ( $wf_data['id'] ?? 0 ),
+							'source_status'      => $source_status,
+							'definition_version' => $wf_data['definition_version'] ?? null,
+							'definition_hash'    => $wf_data['definition_hash'] ?? null,
+						),
+						JSON_THROW_ON_ERROR
+					),
+				)
+			);
 
 			if ( 'running' === $replay_status && isset( $steps[ $replay_step ] ) ) {
 				$queue    = new Queue( $conn );

@@ -28,6 +28,7 @@ readonly class WorkflowState {
 	 * @param string|null    $wait_type          Wait primitive currently blocking the workflow, if any.
 	 * @param array|null     $waiting_for        Wait targets currently blocking the workflow, if any.
 	 * @param string|null    $definition_version Application-level workflow definition version, if set.
+	 * @param string|null    $definition_hash    Deterministic hash of the workflow definition.
 	 * @param string|null    $idempotency_key    Durable dispatch key, if set.
 	 * @param array|null     $budget             Public budget summary for the run, if configured.
 	 */
@@ -43,6 +44,7 @@ readonly class WorkflowState {
 		public ?string $wait_type = null,
 		public ?array $waiting_for = null,
 		public ?string $definition_version = null,
+		public ?string $definition_hash = null,
 		public ?string $idempotency_key = null,
 		public ?array $budget = null,
 	) {}

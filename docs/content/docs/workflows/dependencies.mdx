@@ -7,6 +7,8 @@ description: Pause one workflow until other workflows complete.
 
 Use workflow dependency waits when one top-level workflow should continue only after other workflows have completed. This gives you cross-workflow coordination without forcing everything into one giant workflow definition.
 
+These waits pair especially well with [Async Handoffs](/docs/workflows/async-handoffs), where one workflow first spawns independent child workflows and then joins them later.
+
 Queuety provides two builder methods:
 
 - `await_workflow()` for one workflow

@@ -53,6 +53,56 @@ class WorkflowExportTest extends IntegrationTestCase {
 		return $wf_id;
 	}
 
+	private function create_waiting_signal_workflow(): int {
+		$builder = new WorkflowBuilder( 'test_waiting_signal_export', $this->conn, $this->queue, $this->logger );
+		$builder->version( 'signals.v1' )
+			->then( 'StepA' )
+			->wait_for_signal( 'approval', 'approval_payload' )
+			->then( 'StepB' );
+		$wf_id = $builder->dispatch( array( 'input' => 'data' ) );
+
+		$job0 = $this->queue->claim();
+		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ), 10 );
+
+		$state = $this->workflow->get_state( $wf_id );
+		$this->assertIsArray( $state );
+		$job1 = $this->queue->claim();
+		$this->assertNotNull( $job1 );
+		$this->queue->complete( $job1->id );
+		$this->workflow->handle_signal_step(
+			$wf_id,
+			$state['_steps'][1],
+			1,
+		);
+
+		return $wf_id;
+	}
+
+	private function create_waiting_workflow_dependency(): array {
+		$dependency_id = ( new WorkflowBuilder( 'dependency_export', $this->conn, $this->queue, $this->logger ) )
+			->then( 'StepA' )
+			->dispatch();
+
+		$parent_id = ( new WorkflowBuilder( 'parent_export', $this->conn, $this->queue, $this->logger ) )
+			->await_workflow( $dependency_id, 'dependency' )
+			->then( 'StepB' )
+			->dispatch();
+
+		$state = $this->workflow->get_state( $parent_id );
+		$this->assertIsArray( $state );
+		$job = $this->queue->claim();
+		$this->assertNotNull( $job );
+		$this->queue->complete( $job->id );
+		$this->workflow->handle_workflow_wait_step(
+			$parent_id,
+			$state['_steps'][0],
+			0,
+			$state,
+		);
+
+		return array( $parent_id, $dependency_id );
+	}
+
 	public function test_export_completed_workflow_has_all_fields(): void {
 		$wf_id = $this->create_and_complete_workflow();
 
@@ -72,6 +122,7 @@ class WorkflowExportTest extends IntegrationTestCase {
 		$this->assertSame( 'completed', $wf['status'] );
 		$this->assertSame( 2, $wf['total_steps'] );
 		$this->assertSame( 'export.v1', $wf['definition_version'] );
+		$this->assertSame( 64, strlen( $wf['definition_hash'] ) );
 		$this->assertSame( 'export:123', $wf['idempotency_key'] );
 	}
 
@@ -95,6 +146,22 @@ class WorkflowExportTest extends IntegrationTestCase {
 			fn( array $e ) => 'step_completed' === $e['event']
 		);
 		$this->assertCount( 2, $completed_events );
+	}
+
+	public function test_export_includes_signals_and_wait_dependencies(): void {
+		$signal_workflow_id = $this->create_waiting_signal_workflow();
+		$this->workflow->handle_signal( $signal_workflow_id, 'approval', array( 'approved' => false ) );
+		$signal_export = WorkflowExporter::export( $signal_workflow_id, $this->conn );
+
+		$this->assertArrayHasKey( 'signals', $signal_export );
+		$this->assertCount( 1, $signal_export['signals'] );
+		$this->assertSame( 'approval', $signal_export['signals'][0]['signal_name'] );
+
+		[ $waiting_workflow_id ] = $this->create_waiting_workflow_dependency();
+		$wait_export             = WorkflowExporter::export( $waiting_workflow_id, $this->conn );
+
+		$this->assertArrayHasKey( 'wait_dependencies', $wait_export );
+		$this->assertCount( 1, $wait_export['wait_dependencies'] );
 	}
 
 	public function test_export_json_returns_valid_json(): void {
@@ -144,6 +211,26 @@ class WorkflowExportTest extends IntegrationTestCase {
 			fn( array $e ) => 'step_completed' === $e['event']
 		);
 		$this->assertCount( 2, $completed );
+	}
+
+	public function test_replay_preserves_waiting_signal_status_and_history(): void {
+		$wf_id = $this->create_waiting_signal_workflow();
+		$data  = WorkflowExporter::export( $wf_id, $this->conn );
+
+		$this->assertSame( 'waiting_signal', $data['workflow']['status'] );
+
+		$new_id = WorkflowReplayer::replay( $data, $this->conn );
+		$status = $this->workflow->status( $new_id );
+
+		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( 1, $status->current_step );
+		$this->assertSame( 'signal', $status->wait_type );
+		$this->assertSame( array( 'approval' ), $status->waiting_for );
+		$this->assertNull( $this->queue->claim() );
+
+		$timeline = $this->event_log->get_timeline( $new_id );
+		$this->assertContains( 'workflow_waiting', array_column( $timeline, 'event' ) );
+		$this->assertContains( 'workflow_replayed', array_column( $timeline, 'event' ) );
 	}
 
 	public function test_replay_running_workflow_enqueues_current_step(): void {

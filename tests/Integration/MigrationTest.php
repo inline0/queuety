@@ -212,6 +212,38 @@ class MigrationTest extends IntegrationTestCase {
 		);
 	}
 
+	public function test_migrate_0150_on_fresh_install(): void {
+		Schema::migrate_0150( $this->conn );
+
+		$this->assertTrue(
+			$this->workflow_events_enum_contains( 'workflow_waiting' )
+		);
+	}
+
+	public function test_migrate_0150_is_idempotent(): void {
+		Schema::migrate_0150( $this->conn );
+		Schema::migrate_0150( $this->conn );
+
+		$this->assertTrue(
+			$this->workflow_events_enum_contains( 'workflow_replayed' )
+		);
+	}
+
+	private function workflow_events_enum_contains( string $value ): bool {
+		$table = $this->conn->table( 'queuety_workflow_events' );
+		$stmt  = $this->conn->pdo()->prepare(
+			"SHOW COLUMNS FROM {$table} LIKE 'event'"
+		);
+		$stmt->execute();
+		$row = $stmt->fetch();
+
+		if ( ! $row || ! isset( $row['Type'] ) ) {
+			return false;
+		}
+
+		return str_contains( (string) $row['Type'], "'" . $value . "'" );
+	}
+
 	// -- uninstall drops everything ------------------------------------------
 
 	public function test_uninstall_drops_all_tables(): void {

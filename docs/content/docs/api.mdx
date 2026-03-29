@@ -262,6 +262,7 @@ $workflow_id = Queuety::workflow( 'generate_report' )
 | `await_input( string $signal_name = 'input', ?string $result_key = 'input', ?string $name = null )` | Wait for a human input signal. |
 | `await_workflow( int|string $workflow, ?string $result_key = null, ?string $name = null )` | Wait for one workflow ID, or a workflow ID stored in public state, to complete. |
 | `await_workflows( array|string $workflows, WaitMode $mode = WaitMode::All, ?string $result_key = null, ?string $name = null )` | Wait for all or any of several workflows to complete. |
+| `spawn_workflows( string $items_key, WorkflowBuilder $workflow_builder, string $result_key = 'spawned_workflow_ids', string $payload_key = 'item', bool $inherit_state = true, ?string $name = null )` | Dispatch one top-level workflow per runtime item and store the spawned workflow IDs in state. |
 | `version( string $version )` | Tag the workflow definition with an application-level version for inspection and exports. |
 | `idempotency_key( string $key )` | Make workflow dispatch durable for a caller-supplied key. Dispatching again with the same key returns the original workflow ID. |
 | `max_transitions( int $max )` | Fail the workflow if more than `$max` step transitions complete. |
@@ -291,6 +292,7 @@ echo $state->total_steps;   // 3
 echo $state->state;         // accumulated state array
 echo $state->wait_type;     // 'signal' or 'workflow' while blocked
 echo $state->definition_version; // 'research.v2'
+echo $state->definition_hash;    // '4c7a...'
 echo $state->idempotency_key;    // 'brief:42:research'
 print_r( $state->budget );       // configured workflow budget + current usage
 ```
@@ -299,6 +301,7 @@ print_r( $state->budget );       // configured workflow budget + current usage
 
 - `waiting_for`: the signal names or workflow IDs currently blocking the run
 - `definition_version`: the value set by `version()`, if any
+- `definition_hash`: a deterministic hash of the workflow definition
 - `idempotency_key`: the durable dispatch key, if any
 - `budget`: configured limits plus current usage, if guardrails are enabled
 

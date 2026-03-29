@@ -5,17 +5,20 @@ description: Full event timeline and state snapshots for workflow debugging and 
 
 # Workflow Event Log
 
-The workflow event log records every step transition with full state snapshots. Each time a step starts, completes, or fails, an event row is written to the `queuety_workflow_events` table. This gives you a complete timeline of exactly what happened during a workflow and what the state looked like after each step.
+The workflow event log records step transitions and workflow wait/resume events with state snapshots. This gives you a complete timeline of exactly what happened during a workflow and what the state looked like at each durable boundary.
 
 ## What gets recorded
 
-The worker automatically records three types of events for workflow steps:
+The worker automatically records these event types:
 
 | Event | When | Data captured |
 |---|---|---|
 | `step_started` | Before a step handler runs | Workflow ID, step index, handler class |
 | `step_completed` | After a step handler succeeds | Full state snapshot, step output, duration in milliseconds |
 | `step_failed` | When a step handler throws | Error message, duration in milliseconds |
+| `workflow_waiting` | When a signal or workflow wait parks the run | Full public state, wait type, wait targets |
+| `workflow_resumed` | When a signal or workflow wait settles | Full public state after resuming, wait output |
+| `workflow_replayed` | When an export is recreated in a new environment | Full public state plus replay metadata |
 
 The `step_completed` event includes two key pieces of data:
 
@@ -42,6 +45,11 @@ foreach ( $events as $event ) {
 
     if ( 'step_failed' === $event['event'] ) {
         echo 'Error: ' . $event['error_message'] . "\n";
+    }
+
+    if ( 'workflow_waiting' === $event['event'] ) {
+        // $event['step_output']['wait_type'] is 'signal' or 'workflow'
+        // $event['step_output']['waiting_for'] contains the current blockers
     }
 }
 ```

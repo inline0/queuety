@@ -438,6 +438,56 @@ class WorkflowBuilder {
 	}
 
 	/**
+	 * Spawn one top-level workflow per runtime item and store the workflow IDs.
+	 *
+	 * @param string          $items_key        Public state key containing child payload items.
+	 * @param WorkflowBuilder $workflow_builder Builder defining each spawned workflow.
+	 * @param string          $result_key       Public state key to store spawned workflow IDs under.
+	 * @param string          $payload_key      Key used when an item is scalar instead of an array.
+	 * @param bool            $inherit_state    Whether to merge parent public state into each child.
+	 * @param string|null     $name             Optional step name.
+	 * @return self
+	 * @throws \InvalidArgumentException If a required key is empty.
+	 */
+	public function spawn_workflows(
+		string $items_key,
+		WorkflowBuilder $workflow_builder,
+		string $result_key = 'spawned_workflow_ids',
+		string $payload_key = 'item',
+		bool $inherit_state = true,
+		?string $name = null,
+	): self {
+		$items_key   = trim( $items_key );
+		$result_key  = trim( $result_key );
+		$payload_key = trim( $payload_key );
+
+		if ( '' === $items_key ) {
+			throw new \InvalidArgumentException( 'Workflow spawn steps require a non-empty items key.' );
+		}
+
+		if ( '' === $result_key ) {
+			throw new \InvalidArgumentException( 'Workflow spawn steps require a non-empty result key.' );
+		}
+
+		if ( '' === $payload_key ) {
+			throw new \InvalidArgumentException( 'Workflow spawn steps require a non-empty payload key.' );
+		}
+
+		$index         = count( $this->steps );
+		$this->steps[] = array(
+			'type'                => 'spawn_workflows',
+			'name'                => $name ?? 'spawn_workflows_' . $index,
+			'items_key'           => $items_key,
+			'result_key'          => $result_key,
+			'payload_key'         => $payload_key,
+			'inherit_state'       => $inherit_state,
+			'workflow_definition' => $workflow_builder->build_runtime_definition(),
+		);
+
+		return $this;
+	}
+
+	/**
 	 * Attach a compensation handler to the most recently added step.
 	 *
 	 * @param string $handler_class Fully qualified compensation handler class.
@@ -743,6 +793,17 @@ class WorkflowBuilder {
 					'result_key'      => $step['result_key'],
 					'compensation'    => $step['compensation'] ?? null,
 				);
+			} elseif ( 'spawn_workflows' === $step['type'] ) {
+				$result[] = array(
+					'type'                => 'spawn_workflows',
+					'name'                => $step['name'],
+					'items_key'           => $step['items_key'],
+					'result_key'          => $step['result_key'],
+					'payload_key'         => $step['payload_key'],
+					'inherit_state'       => (bool) $step['inherit_state'],
+					'workflow_definition' => $step['workflow_definition'],
+					'compensation'        => $step['compensation'] ?? null,
+				);
 			} else {
 				$entry = array(
 					'type' => $step['type'],
@@ -760,6 +821,77 @@ class WorkflowBuilder {
 			}
 		}
 		return $result;
+	}
+
+	/**
+	 * Compute a deterministic hash for the workflow definition.
+	 *
+	 * The hash captures the parts of a workflow that materially affect runtime
+	 * behaviour so long-running runs can be identified across deploys.
+	 *
+	 * @param array $built_steps Serialised step definitions from build_steps().
+	 * @return string
+	 */
+	private function definition_hash( array $built_steps ): string {
+		$definition = array(
+			'name'                  => $this->name,
+			'steps'                 => $built_steps,
+			'queue'                 => $this->queue,
+			'priority'              => $this->priority->value,
+			'max_attempts'          => $this->max_attempts,
+			'cancel_handler'        => $this->cancel_handler,
+			'prune_after'           => $this->prune_after,
+			'deadline_seconds'      => $this->deadline_seconds,
+			'deadline_handler'      => $this->deadline_handler,
+			'definition_version'    => $this->definition_version,
+			'max_transitions'       => $this->max_transitions,
+			'max_fan_out_items'     => $this->max_fan_out_items,
+			'max_state_bytes'       => $this->max_state_bytes,
+			'compensate_on_failure' => $this->compensate_on_failure,
+		);
+
+		return hash( 'sha256', json_encode( $definition, JSON_THROW_ON_ERROR ) );
+	}
+
+	/**
+	 * Build the configured workflow budget definition.
+	 *
+	 * @return array<string,int>
+	 */
+	private function workflow_budget_definition(): array {
+		return array_filter(
+			array(
+				'max_transitions'   => $this->max_transitions,
+				'max_fan_out_items' => $this->max_fan_out_items,
+				'max_state_bytes'   => $this->max_state_bytes,
+			),
+			static fn( mixed $value ): bool => null !== $value
+		);
+	}
+
+	/**
+	 * Build a serialisable workflow definition bundle for nested orchestration.
+	 *
+	 * @return array
+	 */
+	public function build_runtime_definition(): array {
+		$steps = $this->build_steps();
+
+		return array(
+			'name'                  => $this->name,
+			'steps'                 => $steps,
+			'queue'                 => $this->queue,
+			'priority'              => $this->priority->value,
+			'max_attempts'          => $this->max_attempts,
+			'cancel_handler'        => $this->cancel_handler,
+			'prune_after'           => $this->prune_after,
+			'deadline_seconds'      => $this->deadline_seconds,
+			'deadline_handler'      => $this->deadline_handler,
+			'definition_version'    => $this->definition_version,
+			'definition_hash'       => $this->definition_hash( $steps ),
+			'workflow_budget'       => $this->workflow_budget_definition(),
+			'compensate_on_failure' => $this->compensate_on_failure,
+		);
 	}
 
 	/**
@@ -786,6 +918,7 @@ class WorkflowBuilder {
 		$state['_queue']        = $this->queue;
 		$state['_priority']     = $this->priority->value;
 		$state['_max_attempts'] = $this->max_attempts;
+		$state['_definition_hash'] = $this->definition_hash( $built_steps );
 
 		if ( null !== $this->cancel_handler ) {
 			$state['_on_cancel'] = $this->cancel_handler;
@@ -812,14 +945,7 @@ class WorkflowBuilder {
 			$state['_idempotency_key'] = $this->idempotency_key;
 		}
 
-		$workflow_budget = array_filter(
-			array(
-				'max_transitions'  => $this->max_transitions,
-				'max_fan_out_items' => $this->max_fan_out_items,
-				'max_state_bytes'  => $this->max_state_bytes,
-			),
-			static fn( mixed $value ): bool => null !== $value
-		);
+		$workflow_budget = $this->workflow_budget_definition();
 		if ( ! empty( $workflow_budget ) ) {
 			$state['_workflow_budget']   = $workflow_budget;
 			$state['_workflow_counters'] = array( 'transitions' => 0 );
@@ -1019,6 +1145,16 @@ class WorkflowBuilder {
 		} elseif ( 'workflow_wait' === $step_def['type'] ) {
 			$this->queue_ops->dispatch(
 				handler: '__queuety_workflow_wait',
+				payload: array( 'step_index' => $step_index ),
+				queue: $this->queue,
+				priority: $this->priority,
+				max_attempts: $this->max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
+		} elseif ( 'spawn_workflows' === $step_def['type'] ) {
+			$this->queue_ops->dispatch(
+				handler: '__queuety_spawn_workflows',
 				payload: array( 'step_index' => $step_index ),
 				queue: $this->queue,
 				priority: $this->priority,

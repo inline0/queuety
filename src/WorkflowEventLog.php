@@ -34,21 +34,7 @@ class WorkflowEventLog {
 	 * @param string $handler     The handler class name.
 	 */
 	public function record_step_started( int $workflow_id, int $step_index, string $handler ): void {
-		$table = $this->conn->table( Config::table_workflow_events() );
-
-		$stmt = $this->conn->pdo()->prepare(
-			"INSERT INTO {$table}
-				(workflow_id, step_index, handler, event)
-			VALUES
-				(:workflow_id, :step_index, :handler, 'step_started')"
-		);
-		$stmt->execute(
-			array(
-				'workflow_id' => $workflow_id,
-				'step_index'  => $step_index,
-				'handler'     => $handler,
-			)
-		);
+		$this->record_event( $workflow_id, $step_index, $handler, 'step_started' );
 	}
 
 	/**
@@ -69,23 +55,14 @@ class WorkflowEventLog {
 		array $step_output,
 		int $duration_ms,
 	): void {
-		$table = $this->conn->table( Config::table_workflow_events() );
-
-		$stmt = $this->conn->pdo()->prepare(
-			"INSERT INTO {$table}
-				(workflow_id, step_index, handler, event, state_snapshot, step_output, duration_ms)
-			VALUES
-				(:workflow_id, :step_index, :handler, 'step_completed', :state_snapshot, :step_output, :duration_ms)"
-		);
-		$stmt->execute(
-			array(
-				'workflow_id'    => $workflow_id,
-				'step_index'     => $step_index,
-				'handler'        => $handler,
-				'state_snapshot' => json_encode( $state_snapshot, JSON_THROW_ON_ERROR ),
-				'step_output'    => json_encode( $step_output, JSON_THROW_ON_ERROR ),
-				'duration_ms'    => $duration_ms,
-			)
+		$this->record_event(
+			$workflow_id,
+			$step_index,
+			$handler,
+			'step_completed',
+			$state_snapshot,
+			$step_output,
+			$duration_ms,
 		);
 	}
 
@@ -105,21 +82,145 @@ class WorkflowEventLog {
 		string $error,
 		int $duration_ms,
 	): void {
+		$this->record_event(
+			$workflow_id,
+			$step_index,
+			$handler,
+			'step_failed',
+			null,
+			null,
+			$duration_ms,
+			$error,
+		);
+	}
+
+	/**
+	 * Record that a workflow entered a durable wait state.
+	 *
+	 * @param int    $workflow_id    The workflow ID.
+	 * @param int    $step_index     The wait step index.
+	 * @param string $handler        Wait placeholder handler.
+	 * @param array  $state_snapshot Public workflow state while waiting.
+	 * @param string $wait_type      Wait primitive type.
+	 * @param array  $waiting_for    Wait targets currently blocking the workflow.
+	 */
+	public function record_workflow_waiting(
+		int $workflow_id,
+		int $step_index,
+		string $handler,
+		array $state_snapshot,
+		string $wait_type,
+		array $waiting_for,
+	): void {
+		$this->record_event(
+			$workflow_id,
+			$step_index,
+			$handler,
+			'workflow_waiting',
+			$state_snapshot,
+			array(
+				'wait_type'   => $wait_type,
+				'waiting_for' => array_values( array_map( 'strval', $waiting_for ) ),
+			),
+		);
+	}
+
+	/**
+	 * Record that a workflow resumed from a durable wait.
+	 *
+	 * @param int    $workflow_id    The workflow ID.
+	 * @param int    $step_index     The wait step index.
+	 * @param string $handler        Wait placeholder handler.
+	 * @param array  $state_snapshot Public workflow state after resuming.
+	 * @param array  $step_output    Output produced by satisfying the wait.
+	 */
+	public function record_workflow_resumed(
+		int $workflow_id,
+		int $step_index,
+		string $handler,
+		array $state_snapshot,
+		array $step_output,
+	): void {
+		$this->record_event(
+			$workflow_id,
+			$step_index,
+			$handler,
+			'workflow_resumed',
+			$state_snapshot,
+			$step_output,
+		);
+	}
+
+	/**
+	 * Record that a workflow was recreated from an export.
+	 *
+	 * @param int    $workflow_id    The new workflow ID.
+	 * @param int    $step_index     The current step index on the replayed workflow.
+	 * @param string $handler        Replay marker handler.
+	 * @param array  $state_snapshot Public workflow state after the replay row was created.
+	 * @param array  $context        Replay metadata such as source workflow ID or version.
+	 */
+	public function record_workflow_replayed(
+		int $workflow_id,
+		int $step_index,
+		string $handler,
+		array $state_snapshot,
+		array $context,
+	): void {
+		$this->record_event(
+			$workflow_id,
+			$step_index,
+			$handler,
+			'workflow_replayed',
+			$state_snapshot,
+			$context,
+		);
+	}
+
+	/**
+	 * Insert one workflow event row.
+	 *
+	 * @param int         $workflow_id    Workflow ID.
+	 * @param int         $step_index     Step index.
+	 * @param string      $handler        Handler or placeholder name.
+	 * @param string      $event          Event name.
+	 * @param array|null  $state_snapshot Public state snapshot, if any.
+	 * @param array|null  $step_output    Event payload, if any.
+	 * @param int|null    $duration_ms    Duration in milliseconds, if any.
+	 * @param string|null $error_message  Error message, if any.
+	 */
+	private function record_event(
+		int $workflow_id,
+		int $step_index,
+		string $handler,
+		string $event,
+		?array $state_snapshot = null,
+		?array $step_output = null,
+		?int $duration_ms = null,
+		?string $error_message = null,
+	): void {
 		$table = $this->conn->table( Config::table_workflow_events() );
 
 		$stmt = $this->conn->pdo()->prepare(
 			"INSERT INTO {$table}
-				(workflow_id, step_index, handler, event, error_message, duration_ms)
+				(workflow_id, step_index, handler, event, state_snapshot, step_output, duration_ms, error_message)
 			VALUES
-				(:workflow_id, :step_index, :handler, 'step_failed', :error_message, :duration_ms)"
+				(:workflow_id, :step_index, :handler, :event, :state_snapshot, :step_output, :duration_ms, :error_message)"
 		);
 		$stmt->execute(
 			array(
-				'workflow_id'   => $workflow_id,
-				'step_index'    => $step_index,
-				'handler'       => $handler,
-				'error_message' => $error,
-				'duration_ms'   => $duration_ms,
+				'workflow_id'    => $workflow_id,
+				'step_index'     => $step_index,
+				'handler'        => $handler,
+				'event'          => $event,
+				'state_snapshot' => null !== $state_snapshot
+					? json_encode( $state_snapshot, JSON_THROW_ON_ERROR )
+					: null,
+				'step_output'    => null !== $step_output
+					? json_encode( $step_output, JSON_THROW_ON_ERROR )
+					: null,
+				'duration_ms'    => $duration_ms,
+				'error_message'  => $error_message,
 			)
 		);
 	}

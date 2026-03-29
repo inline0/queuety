@@ -39,6 +39,10 @@ class WorkflowCommand extends \WP_CLI_Command {
 			\WP_CLI::log( "Version:  {$state->definition_version}" );
 		}
 
+		if ( null !== $state->definition_hash ) {
+			\WP_CLI::log( "Hash:     {$state->definition_hash}" );
+		}
+
 		if ( null !== $state->idempotency_key ) {
 			\WP_CLI::log( "Key:      {$state->idempotency_key}" );
 		}
@@ -148,6 +152,7 @@ class WorkflowCommand extends \WP_CLI_Command {
 				'ID'      => $wf->workflow_id,
 				'Name'    => $wf->name,
 				'Version' => $wf->definition_version ?? '-',
+				'Hash'    => null !== $wf->definition_hash ? substr( $wf->definition_hash, 0, 12 ) : '-',
 				'Status'  => $wf->status->value,
 				'Step'    => "{$wf->current_step}/{$wf->total_steps}",
 				'Waiting' => null !== $wf->wait_type && ! empty( $wf->waiting_for )
@@ -157,7 +162,7 @@ class WorkflowCommand extends \WP_CLI_Command {
 			$workflows
 		);
 
-		\WP_CLI\Utils\format_items( $format, $items, array( 'ID', 'Name', 'Version', 'Status', 'Step', 'Waiting' ) );
+		\WP_CLI\Utils\format_items( $format, $items, array( 'ID', 'Name', 'Version', 'Hash', 'Status', 'Step', 'Waiting' ) );
 	}
 
 	/**

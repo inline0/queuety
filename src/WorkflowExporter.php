@@ -30,6 +30,8 @@ class WorkflowExporter {
 		$jb_tbl = $conn->table( Config::table_jobs() );
 		$lg_tbl = $conn->table( Config::table_logs() );
 		$ev_tbl = $conn->table( Config::table_workflow_events() );
+		$sig_tbl = $conn->table( Config::table_signals() );
+		$dep_tbl = $conn->table( Config::table_workflow_dependencies() );
 
 		$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id" );
 		$stmt->execute( array( 'id' => $workflow_id ) );
@@ -56,6 +58,7 @@ class WorkflowExporter {
 			'error_message'      => $wf_row['error_message'],
 			'deadline_at'        => $wf_row['deadline_at'] ?? null,
 			'definition_version' => $workflow_state['_definition_version'] ?? null,
+			'definition_hash'    => $workflow_state['_definition_hash'] ?? null,
 			'idempotency_key'    => $workflow_state['_idempotency_key'] ?? null,
 		);
 
@@ -133,11 +136,48 @@ class WorkflowExporter {
 			);
 		}
 
+		$stmt = $pdo->prepare(
+			"SELECT * FROM {$sig_tbl} WHERE workflow_id = :workflow_id ORDER BY id ASC"
+		);
+		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
+		$signal_rows = $stmt->fetchAll();
+
+		$signals = array();
+		foreach ( $signal_rows as $row ) {
+			$signals[] = array(
+				'id'          => (int) $row['id'],
+				'workflow_id' => (int) $row['workflow_id'],
+				'signal_name' => $row['signal_name'],
+				'payload'     => json_decode( $row['payload'], true ) ?: array(),
+				'received_at' => $row['received_at'],
+			);
+		}
+
+		$stmt = $pdo->prepare(
+			"SELECT * FROM {$dep_tbl} WHERE waiting_workflow_id = :workflow_id ORDER BY id ASC"
+		);
+		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
+		$dependency_rows = $stmt->fetchAll();
+
+		$wait_dependencies = array();
+		foreach ( $dependency_rows as $row ) {
+			$wait_dependencies[] = array(
+				'id'                     => (int) $row['id'],
+				'waiting_workflow_id'    => (int) $row['waiting_workflow_id'],
+				'step_index'             => (int) $row['step_index'],
+				'dependency_workflow_id' => (int) $row['dependency_workflow_id'],
+				'satisfied_at'           => $row['satisfied_at'],
+				'created_at'             => $row['created_at'],
+			);
+		}
+
 		return array(
 			'workflow'        => $wf_data,
 			'jobs'            => $jobs,
 			'events'          => $events,
 			'logs'            => $logs,
+			'signals'         => $signals,
+			'wait_dependencies' => $wait_dependencies,
 			'exported_at'     => gmdate( 'c' ),
 			'queuety_version' => Schema::CURRENT_VERSION,
 		);

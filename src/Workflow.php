@@ -67,13 +67,38 @@ class Workflow {
 	 * Resolve the step type from a step definition.
 	 *
 	 * @param array|string $step_def Step definition.
-	 * @return string Step type: 'single', 'parallel', 'fan_out', 'sub_workflow', 'timer', or 'signal'.
+	 * @return string Step type: 'single', 'parallel', 'fan_out', 'sub_workflow', 'spawn_workflows', 'timer', 'signal', or 'workflow_wait'.
 	 */
 	private function resolve_step_type( array|string $step_def ): string {
 		if ( is_string( $step_def ) ) {
 			return 'single';
 		}
 		return $step_def['type'] ?? 'single';
+	}
+
+	/**
+	 * Resolve the workflow-event handler label for a step definition.
+	 *
+	 * Wait and orchestration placeholders are logged under their internal
+	 * placeholder handlers so the timeline shows how the engine moved the run.
+	 *
+	 * @param array|string|null $step_def Step definition.
+	 * @return string
+	 */
+	private function event_handler_for_step( array|string|null $step_def ): string {
+		if ( null === $step_def ) {
+			return '';
+		}
+
+		return match ( $this->resolve_step_type( $step_def ) ) {
+			'signal' => '__queuety_signal',
+			'workflow_wait' => '__queuety_workflow_wait',
+			'fan_out' => '__queuety_fan_out',
+			'sub_workflow' => '__queuety_sub_workflow',
+			'spawn_workflows' => '__queuety_spawn_workflows',
+			'timer' => '__queuety_timer',
+			default => $this->resolve_step_handler( $step_def ),
+		};
 	}
 
 	/**
@@ -148,6 +173,22 @@ class Workflow {
 
 		$version = trim( $version );
 		return '' === $version ? null : $version;
+	}
+
+	/**
+	 * Resolve the deterministic workflow definition hash from persisted state.
+	 *
+	 * @param array $state Workflow state.
+	 * @return string|null
+	 */
+	private function definition_hash_from_state( array $state ): ?string {
+		$hash = $state['_definition_hash'] ?? null;
+		if ( ! is_string( $hash ) ) {
+			return null;
+		}
+
+		$hash = trim( $hash );
+		return '' === $hash ? null : $hash;
 	}
 
 	/**
@@ -809,6 +850,16 @@ class Workflow {
 			)
 		);
 
+		if ( null !== $this->event_log ) {
+			$this->event_log->record_workflow_resumed(
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+				handler: $this->event_handler_for_step( $current_step_def ),
+				state_snapshot: $this->public_state( $state ),
+				step_output: $step_output,
+			);
+		}
+
 		if ( $is_last ) {
 			$this->logger->log(
 				LogEvent::WorkflowCompleted,
@@ -1385,6 +1436,16 @@ class Workflow {
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 			);
+		} elseif ( 'spawn_workflows' === $type ) {
+			$this->queue->dispatch(
+				handler: '__queuety_spawn_workflows',
+				payload: array( 'step_index' => $step_index ),
+				queue: $queue_name,
+				priority: $priority,
+				max_attempts: $max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
 		} elseif ( 'timer' === $type ) {
 			$this->queue->dispatch(
 				handler: '__queuety_timer',
@@ -1504,6 +1565,17 @@ class Workflow {
 						'id'     => $workflow_id,
 					)
 				);
+
+				if ( null !== $this->event_log ) {
+					$this->event_log->record_workflow_waiting(
+						workflow_id: $workflow_id,
+						step_index: $step_index,
+						handler: '__queuety_signal',
+						state_snapshot: $this->public_state( $state ),
+						wait_type: 'signal',
+						waiting_for: $this->signal_names_for_step( $step_def ),
+					);
+				}
 			}
 
 			$pdo->commit();
@@ -1924,6 +1996,17 @@ class Workflow {
 						'id'     => $workflow_id,
 					)
 				);
+
+				if ( null !== $this->event_log ) {
+					$this->event_log->record_workflow_waiting(
+						workflow_id: $workflow_id,
+						step_index: $step_index,
+						handler: '__queuety_workflow_wait',
+						state_snapshot: $this->public_state( $state ),
+						wait_type: 'workflow',
+						waiting_for: array_map( 'strval', $workflow_ids ),
+					);
+				}
 			} else {
 				$this->clear_workflow_dependencies( $workflow_id, $step_index );
 				$this->clear_wait_context( $state );
@@ -2670,6 +2753,177 @@ class Workflow {
 	}
 
 	/**
+	 * Materialize persisted workflow state from a serialised definition bundle.
+	 *
+	 * @param array    $definition          Workflow definition bundle.
+	 * @param array    $initial_state       Initial public state.
+	 * @param int|null $spawned_by_workflow Workflow ID that spawned this workflow, if any.
+	 * @param int|null $spawned_by_step     Parent step index that spawned this workflow, if any.
+	 * @return array{state: array, deadline_at: string|null}
+	 * @throws \RuntimeException If the definition requires an initial-state budget that is already exceeded.
+	 */
+	private function materialize_defined_workflow_state(
+		array $definition,
+		array $initial_state,
+		?int $spawned_by_workflow = null,
+		?int $spawned_by_step = null,
+	): array {
+		$state                  = $initial_state;
+		$state['_steps']        = is_array( $definition['steps'] ?? null ) ? $definition['steps'] : array();
+		$state['_queue']        = is_string( $definition['queue'] ?? null ) && '' !== trim( $definition['queue'] )
+			? trim( $definition['queue'] )
+			: 'default';
+		$state['_priority']     = (int) ( $definition['priority'] ?? 0 );
+		$state['_max_attempts'] = max( 1, (int) ( $definition['max_attempts'] ?? 3 ) );
+
+		$cancel_handler = $definition['cancel_handler'] ?? null;
+		if ( is_string( $cancel_handler ) && '' !== trim( $cancel_handler ) ) {
+			$state['_on_cancel'] = trim( $cancel_handler );
+		}
+
+		$prune_after = $definition['prune_after'] ?? null;
+		if ( is_int( $prune_after ) && $prune_after > 0 ) {
+			$state['_prune_state_after'] = $prune_after;
+			$state['_step_outputs']      = array();
+		}
+
+		$deadline_seconds = $definition['deadline_seconds'] ?? null;
+		$deadline_at      = null;
+		if ( is_int( $deadline_seconds ) && $deadline_seconds > 0 ) {
+			$state['_deadline_seconds'] = $deadline_seconds;
+			$deadline_at                = gmdate( 'Y-m-d H:i:s', time() + $deadline_seconds );
+		}
+
+		$deadline_handler = $definition['deadline_handler'] ?? null;
+		if ( is_string( $deadline_handler ) && '' !== trim( $deadline_handler ) ) {
+			$state['_on_deadline'] = trim( $deadline_handler );
+		}
+
+		$definition_version = $definition['definition_version'] ?? null;
+		if ( is_string( $definition_version ) && '' !== trim( $definition_version ) ) {
+			$state['_definition_version'] = trim( $definition_version );
+		}
+
+		$definition_hash = $definition['definition_hash'] ?? null;
+		if ( is_string( $definition_hash ) && '' !== trim( $definition_hash ) ) {
+			$state['_definition_hash'] = trim( $definition_hash );
+		}
+
+		$workflow_budget = $definition['workflow_budget'] ?? null;
+		if ( is_array( $workflow_budget ) && ! empty( $workflow_budget ) ) {
+			$normalized_budget = array();
+			foreach ( array( 'max_transitions', 'max_fan_out_items', 'max_state_bytes' ) as $key ) {
+				$value = $workflow_budget[ $key ] ?? null;
+				if ( is_int( $value ) && $value > 0 ) {
+					$normalized_budget[ $key ] = $value;
+				}
+			}
+
+			if ( ! empty( $normalized_budget ) ) {
+				$state['_workflow_budget']   = $normalized_budget;
+				$state['_workflow_counters'] = array( 'transitions' => 0 );
+
+				$max_state_bytes = $normalized_budget['max_state_bytes'] ?? null;
+				if ( null !== $max_state_bytes && strlen( json_encode( $initial_state, JSON_THROW_ON_ERROR ) ) > $max_state_bytes ) {
+					throw new \RuntimeException(
+						sprintf(
+							'Workflow initial state exceeds configured max_state_bytes budget of %d.',
+							$max_state_bytes
+						)
+					);
+				}
+			}
+		}
+
+		if ( ! empty( $definition['compensate_on_failure'] ) ) {
+			$state['_compensate_on_failure'] = true;
+		}
+
+		if ( null !== $spawned_by_workflow ) {
+			$state['_spawned_by_workflow_id'] = $spawned_by_workflow;
+			$state['_spawned_by_step_index']  = $spawned_by_step;
+		}
+
+		return array(
+			'state'       => $state,
+			'deadline_at' => $deadline_at,
+		);
+	}
+
+	/**
+	 * Dispatch a workflow from a serialised definition bundle.
+	 *
+	 * @param array    $definition          Workflow definition bundle.
+	 * @param array    $initial_state       Initial public state.
+	 * @param int|null $parent_workflow_id  Parent workflow ID when dispatching a sub-workflow.
+	 * @param int|null $parent_step_index   Parent step index when dispatching a sub-workflow.
+	 * @param int|null $spawned_by_workflow Workflow ID that spawned this workflow, if any.
+	 * @param int|null $spawned_by_step     Step index that spawned this workflow, if any.
+	 * @return int
+	 */
+	private function dispatch_defined_workflow(
+		array $definition,
+		array $initial_state,
+		?int $parent_workflow_id = null,
+		?int $parent_step_index = null,
+		?int $spawned_by_workflow = null,
+		?int $spawned_by_step = null,
+	): int {
+		$pdo    = $this->conn->pdo();
+		$wf_tbl = $this->conn->table( Config::table_workflows() );
+
+		$state_bundle  = $this->materialize_defined_workflow_state( $definition, $initial_state, $spawned_by_workflow, $spawned_by_step );
+		$state         = $state_bundle['state'];
+		$deadline_at   = $state_bundle['deadline_at'];
+		$steps         = $state['_steps'] ?? array();
+		$queue_name    = $state['_queue'] ?? 'default';
+		$priority      = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
+		$max_attempts  = $state['_max_attempts'] ?? 3;
+		$workflow_name = is_string( $definition['name'] ?? null ) && '' !== trim( $definition['name'] )
+			? trim( $definition['name'] )
+			: 'workflow';
+
+		$stmt = $pdo->prepare(
+			"INSERT INTO {$wf_tbl}
+			(name, status, state, current_step, total_steps, parent_workflow_id, parent_step_index, deadline_at)
+			VALUES (:name, 'running', :state, 0, :total_steps, :parent_id, :parent_step, :deadline_at)"
+		);
+		$stmt->execute(
+			array(
+				'name'        => $workflow_name,
+				'state'       => json_encode( $state, JSON_THROW_ON_ERROR ),
+				'total_steps' => count( $steps ),
+				'parent_id'   => $parent_workflow_id,
+				'parent_step' => $parent_step_index,
+				'deadline_at' => $deadline_at,
+			)
+		);
+		$workflow_id = (int) $pdo->lastInsertId();
+
+		if ( ! empty( $steps ) ) {
+			$this->enqueue_step_def(
+				$steps[0],
+				$workflow_id,
+				0,
+				$queue_name,
+				$priority,
+				$max_attempts,
+			);
+		}
+
+		$this->logger->log(
+			LogEvent::WorkflowStarted,
+			array(
+				'workflow_id' => $workflow_id,
+				'handler'     => $workflow_name,
+				'queue'       => $queue_name,
+			)
+		);
+
+		return $workflow_id;
+	}
+
+	/**
 	 * Dispatch a sub-workflow linked to a parent workflow.
 	 *
 	 * @param int    $parent_workflow_id The parent workflow ID.
@@ -2693,54 +2947,18 @@ class Workflow {
 		int $priority_value = 0,
 		int $max_attempts = 3,
 	): int {
-		$pdo    = $this->conn->pdo();
-		$wf_tbl = $this->conn->table( Config::table_workflows() );
-
-		$state                  = $initial_state;
-		$state['_steps']        = $steps;
-		$state['_queue']        = $queue_name;
-		$state['_priority']     = $priority_value;
-		$state['_max_attempts'] = $max_attempts;
-
-		$stmt = $pdo->prepare(
-			"INSERT INTO {$wf_tbl}
-			(name, status, state, current_step, total_steps, parent_workflow_id, parent_step_index)
-			VALUES (:name, 'running', :state, 0, :total_steps, :parent_id, :parent_step)"
-		);
-		$stmt->execute(
+		return $this->dispatch_defined_workflow(
 			array(
-				'name'        => $name,
-				'state'       => json_encode( $state, JSON_THROW_ON_ERROR ),
-				'total_steps' => count( $steps ),
-				'parent_id'   => $parent_workflow_id,
-				'parent_step' => $parent_step_index,
-			)
+				'name'         => $name,
+				'steps'        => $steps,
+				'queue'        => $queue_name,
+				'priority'     => $priority_value,
+				'max_attempts' => $max_attempts,
+			),
+			$initial_state,
+			$parent_workflow_id,
+			$parent_step_index,
 		);
-		$sub_id = (int) $pdo->lastInsertId();
-
-		$priority = Priority::tryFrom( $priority_value ) ?? Priority::Low;
-
-		if ( ! empty( $steps ) ) {
-			$this->enqueue_step_def(
-				$steps[0],
-				$sub_id,
-				0,
-				$queue_name,
-				$priority,
-				$max_attempts,
-			);
-		}
-
-		$this->logger->log(
-			LogEvent::WorkflowStarted,
-			array(
-				'workflow_id' => $sub_id,
-				'handler'     => $name,
-				'queue'       => $queue_name,
-			)
-		);
-
-		return $sub_id;
 	}
 
 	/**
@@ -2798,6 +3016,70 @@ class Workflow {
 		);
 
 		// The parent must stay parked on this step until the child reports completion.
+	}
+
+	/**
+	 * Spawn independent top-level workflows from runtime-discovered items.
+	 *
+	 * @param int   $workflow_id    Parent workflow ID.
+	 * @param int   $step_index     Step index.
+	 * @param array $workflow_state Parent workflow state.
+	 * @return array Step output containing the spawned workflow IDs.
+	 * @throws \RuntimeException If the step definition or source payloads are invalid.
+	 */
+	public function handle_spawn_workflows_step( int $workflow_id, int $step_index, array $workflow_state ): array {
+		$steps    = $workflow_state['_steps'] ?? array();
+		$step_def = $steps[ $step_index ] ?? null;
+
+		if ( ! is_array( $step_def ) || 'spawn_workflows' !== ( $step_def['type'] ?? '' ) ) {
+			throw new \RuntimeException( "Step {$step_index} is not a spawn_workflows definition." );
+		}
+
+		$items_key = trim( (string) ( $step_def['items_key'] ?? '' ) );
+		$items     = $workflow_state[ $items_key ] ?? array();
+		if ( ! is_array( $items ) ) {
+			throw new \RuntimeException( "Spawn step '{$step_def['name']}' requires state['{$items_key}'] to be an array." );
+		}
+
+		$definition = $step_def['workflow_definition'] ?? null;
+		if ( ! is_array( $definition ) || ! is_array( $definition['steps'] ?? null ) ) {
+			throw new \RuntimeException( "Spawn step '{$step_def['name']}' is missing a valid workflow definition." );
+		}
+
+		$result_key    = trim( (string) ( $step_def['result_key'] ?? 'spawned_workflow_ids' ) );
+		$payload_key   = trim( (string) ( $step_def['payload_key'] ?? 'item' ) );
+		$inherit_state = ! empty( $step_def['inherit_state'] );
+		$base_state    = $inherit_state ? $this->public_state( $workflow_state ) : array();
+
+		unset( $base_state[ $items_key ], $base_state[ $result_key ] );
+
+		$spawned_ids = array();
+		foreach ( array_values( $items ) as $index => $item ) {
+			$child_state = $base_state;
+
+			if ( is_array( $item ) ) {
+				foreach ( $item as $key => $value ) {
+					if ( is_string( $key ) && ! str_starts_with( $key, '_' ) ) {
+						$child_state[ $key ] = $value;
+					}
+				}
+			} else {
+				$child_state[ $payload_key ] = $item;
+			}
+
+			$child_state['spawn_item_index'] = $index;
+
+			$spawned_ids[] = $this->dispatch_defined_workflow(
+				$definition,
+				$child_state,
+				null,
+				null,
+				$workflow_id,
+				$step_index,
+			);
+		}
+
+		return array( $result_key => $spawned_ids );
 	}
 
 	/**
@@ -2992,6 +3274,7 @@ class Workflow {
 			wait_type: $wait['type'] ?? null,
 			waiting_for: $wait['waiting_for'] ?? ( $wait['signal_names'] ?? null ),
 			definition_version: $this->definition_version_from_state( $state ),
+			definition_hash: $this->definition_hash_from_state( $state ),
 			idempotency_key: $this->idempotency_key_from_state( $state ),
 			budget: $this->budget_summary_from_state( $state ),
 		);
@@ -3207,6 +3490,7 @@ class Workflow {
 				wait_type: $wait['type'] ?? null,
 				waiting_for: $wait['waiting_for'] ?? ( $wait['signal_names'] ?? null ),
 				definition_version: $this->definition_version_from_state( $state ),
+				definition_hash: $this->definition_hash_from_state( $state ),
 				idempotency_key: $this->idempotency_key_from_state( $state ),
 				budget: $this->budget_summary_from_state( $state ),
 			);

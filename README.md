@@ -143,6 +143,23 @@ Queuety::workflow( 'editorial_run' )
     ->dispatch();
 ```
 
+Hand work off to independent child workflows and join later:
+
+```php
+use Queuety\Enums\WaitMode;
+
+$agent_task = Queuety::workflow( 'agent_task' )
+    ->then( ResearchTopicStep::class )
+    ->then( SummarizeTopicStep::class );
+
+Queuety::workflow( 'brief_research' )
+    ->then( PlanTopicsStep::class )
+    ->spawn_workflows( 'topics', $agent_task, 'child_workflow_ids' )
+    ->await_workflows( 'child_workflow_ids', WaitMode::All, 'child_results' )
+    ->then( SynthesizeBriefStep::class )
+    ->dispatch( [ 'brief_id' => 42 ] );
+```
+
 Add workflow guardrails for agent runs:
 
 ```php
@@ -215,8 +232,9 @@ wp queuety work
 - **Durable timers** -- `sleep()` steps that survive process restarts and resume at the right time
 - **Signals and human gates** -- `wait_for_signal()`, `wait_for_signals()`, `await_approval()`, and `await_input()` pause workflows until external input arrives
 - **Workflow dependencies** -- `await_workflow()` and `await_workflows()` coordinate top-level workflows without forcing them into one workflow definition
+- **Async workflow handoffs** -- `spawn_workflows()` turns runtime-discovered items into independent top-level workflows that can be awaited later
 - **Dynamic fan-out** -- `fan_out()` expands runtime-discovered work with `All`, `FirstSuccess`, and `Quorum` join modes
-- **Workflow guardrails** -- `version()`, `idempotency_key()`, `max_transitions()`, `max_fan_out_items()`, and `max_state_bytes()` make long-running agent workflows easier to inspect and safer to operate
+- **Workflow guardrails** -- `version()`, a deterministic definition hash, `idempotency_key()`, `max_transitions()`, `max_fan_out_items()`, and `max_state_bytes()` make long-running agent workflows easier to inspect and safer to operate
 - **Step compensation** -- `compensate_with()` and `compensate_on_failure()` provide saga-style rollback hooks for completed steps
 - **Streaming steps** -- `StreamingStep` interface with `ChunkStore` for persisting streamed data chunk by chunk
 - **Cache layer** -- pluggable cache with `MemoryCache` and `ApcuCache` backends, auto-detected via `CacheFactory`

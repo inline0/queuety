@@ -65,6 +65,7 @@ class WorkflowStateTest extends TestCase {
 			total_steps: 3,
 			state: array(),
 			definition_version: 'agents.v2',
+			definition_hash: str_repeat( 'a', 64 ),
 			idempotency_key: 'run:12',
 			budget: array(
 				'max_transitions'   => 10,
@@ -75,6 +76,7 @@ class WorkflowStateTest extends TestCase {
 		);
 
 		$this->assertSame( 'agents.v2', $state->definition_version );
+		$this->assertSame( str_repeat( 'a', 64 ), $state->definition_hash );
 		$this->assertSame( 'run:12', $state->idempotency_key );
 		$this->assertSame( 10, $state->budget['max_transitions'] );
 		$this->assertSame( 128, $state->budget['public_state_bytes'] );

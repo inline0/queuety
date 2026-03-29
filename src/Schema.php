@@ -15,7 +15,7 @@ class Schema {
 	/**
 	 * Current schema version for plugin-managed upgrades.
 	 */
-	public const CURRENT_VERSION = '0.14.0';
+	public const CURRENT_VERSION = '0.15.0';
 
 	/**
 	 * Create all Queuety tables.
@@ -232,7 +232,7 @@ class Schema {
 				workflow_id BIGINT UNSIGNED NOT NULL,
 				step_index TINYINT UNSIGNED NOT NULL,
 				handler VARCHAR(255) NOT NULL,
-				event ENUM('step_started', 'step_completed', 'step_failed', 'state_snapshot', 'workflow_rewound', 'workflow_forked', 'workflow_deadline_exceeded') NOT NULL,
+				event ENUM('step_started', 'step_completed', 'step_failed', 'state_snapshot', 'workflow_rewound', 'workflow_forked', 'workflow_deadline_exceeded', 'workflow_waiting', 'workflow_resumed', 'workflow_replayed') NOT NULL,
 				state_snapshot LONGTEXT DEFAULT NULL,
 				step_output LONGTEXT DEFAULT NULL,
 				duration_ms INT UNSIGNED DEFAULT NULL,
@@ -298,6 +298,11 @@ class Schema {
 
 		if ( version_compare( $version, '0.14.0', '<' ) ) {
 			self::migrate_0140( $conn );
+			$version = '0.14.0';
+		}
+
+		if ( version_compare( $version, '0.15.0', '<' ) ) {
+			self::migrate_0150( $conn );
 		}
 
 		return self::CURRENT_VERSION;
@@ -323,6 +328,13 @@ class Schema {
 		$batches         = $conn->table( Config::table_batches() );
 		$chunks          = $conn->table( Config::table_chunks() );
 		$workflow_events = $conn->table( Config::table_workflow_events() );
+
+		if (
+			self::table_exists( $conn, $workflow_keys )
+			&& self::enum_contains( $conn, $workflow_events, 'event', 'workflow_waiting' )
+		) {
+			return '0.15.0';
+		}
 
 		if ( self::table_exists( $conn, $workflow_keys ) ) {
 			return '0.14.0';
@@ -640,6 +652,25 @@ class Schema {
 				UNIQUE INDEX idx_dispatch_key (dispatch_key),
 				UNIQUE INDEX idx_workflow_id (workflow_id)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
+	}
+
+	/**
+	 * Migrate from v0.14.x to v0.15.0.
+	 *
+	 * Extends workflow event timelines with wait/resume/replay events so
+	 * long-running orchestration can be inspected more faithfully.
+	 *
+	 * @param Connection $conn Database connection.
+	 */
+	public static function migrate_0150( Connection $conn ): void {
+		$pdo             = $conn->pdo();
+		$workflow_events = $conn->table( Config::table_workflow_events() );
+
+		$pdo->exec(
+			"ALTER TABLE {$workflow_events} MODIFY COLUMN event
+			ENUM('step_started', 'step_completed', 'step_failed', 'state_snapshot', 'workflow_rewound', 'workflow_forked', 'workflow_deadline_exceeded', 'workflow_waiting', 'workflow_resumed', 'workflow_replayed')
+			NOT NULL"
 		);
 	}
 

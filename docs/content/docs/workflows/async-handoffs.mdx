@@ -1,0 +1,109 @@
+---
+title: Async Handoffs
+description: Spawn independent workflows from runtime items and join them later.
+---
+
+# Async Handoffs
+
+Use `spawn_workflows()` when a workflow needs to hand discovered work off to independent top-level workflows instead of keeping everything inside one run.
+
+This is useful for agent-style orchestration:
+
+- a planner workflow discovers tasks at runtime
+- each task becomes its own durable workflow
+- the parent stores those workflow IDs in state
+- the parent can later wait for `all`, `any`, or a selected subset via `await_workflows()`
+
+## The `->spawn_workflows()` method
+
+```php
+use Queuety\Enums\WaitMode;
+use Queuety\Queuety;
+
+$agent_task = Queuety::workflow( 'agent_task' )
+    ->then( ResearchTopicStep::class )
+    ->then( SummarizeTopicStep::class );
+
+Queuety::workflow( 'brief_research' )
+    ->then( PlanTopicsStep::class )
+    ->spawn_workflows(
+        items_key: 'topics',
+        workflow_builder: $agent_task,
+        result_key: 'child_workflow_ids',
+    )
+    ->await_workflows( 'child_workflow_ids', WaitMode::All, 'child_results' )
+    ->then( SynthesizeBriefStep::class )
+    ->dispatch( [ 'brief_id' => 42 ] );
+```
+
+In that example:
+
+1. `PlanTopicsStep` writes an array of topic payloads to `$state['topics']`
+2. `spawn_workflows()` dispatches one `agent_task` workflow per topic
+3. the spawned workflow IDs are written to `$state['child_workflow_ids']`
+4. `await_workflows()` pauses until those workflows complete
+5. `SynthesizeBriefStep` receives the completed child states under `$state['child_results']`
+
+## Child payloads
+
+Each item in `items_key` becomes the initial payload for one spawned workflow.
+
+If the item is an array, its public keys are merged into the child payload:
+
+```php
+[
+    [ 'topic' => 'pricing', 'source' => 'competitors' ],
+    [ 'topic' => 'reviews', 'source' => 'customers' ],
+]
+```
+
+If the item is scalar, Queuety stores it under `payload_key`:
+
+```php
+->spawn_workflows(
+    items_key: 'topic_names',
+    workflow_builder: $agent_task,
+    payload_key: 'topic',
+)
+```
+
+## Inheriting parent state
+
+By default, `spawn_workflows()` merges the parent workflow's public state into every child payload.
+
+That means shared context such as `brief_id`, `account_id`, or `campaign` is automatically available in each spawned workflow.
+
+The source `items_key` and the `result_key` are excluded from inheritance so each child does not receive the whole task list or the final workflow ID array.
+
+Set `inherit_state: false` when each child should receive only its item payload.
+
+## Why not `sub_workflow()`?
+
+`sub_workflow()` creates a parent-child relationship where the parent parks on that step until the child completes.
+
+`spawn_workflows()` is looser:
+
+- the spawned workflows are independent top-level workflows
+- each spawned workflow can be inspected, retried, or exported on its own
+- the parent decides later whether and how to wait on them
+
+That makes `spawn_workflows()` a better fit for async agent task handoff, while `sub_workflow()` remains the better fit for nested composition inside one orchestration tree.
+
+## Joining later
+
+`spawn_workflows()` is designed to pair with [Workflow Dependencies](/docs/workflows/dependencies):
+
+```php
+use Queuety\Enums\WaitMode;
+
+Queuety::workflow( 'review_board' )
+    ->spawn_workflows( 'review_tasks', $review_task_workflow, 'review_workflow_ids' )
+    ->await_workflows( 'review_workflow_ids', WaitMode::Any, 'winner' )
+    ->then( FinalizeDecisionStep::class )
+    ->dispatch( $payload );
+```
+
+- `WaitMode::All` collects all completed child states
+- `WaitMode::Any` resumes on the first successful child workflow
+
+This gives you planner/executor orchestration without needing a full runtime-editable DAG engine.
