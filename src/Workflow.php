@@ -7,8 +7,11 @@
 
 namespace Queuety;
 
+use Queuety\Contracts\Compensation;
 use Queuety\Contracts\Cache;
+use Queuety\Contracts\JoinReducer;
 use Queuety\Enums\JobStatus;
+use Queuety\Enums\JoinMode;
 use Queuety\Enums\LogEvent;
 use Queuety\Enums\Priority;
 use Queuety\Enums\WorkflowStatus;
@@ -62,7 +65,7 @@ class Workflow {
 	 * Resolve the step type from a step definition.
 	 *
 	 * @param array|string $step_def Step definition.
-	 * @return string Step type: 'single', 'parallel', 'sub_workflow', 'timer', or 'signal'.
+	 * @return string Step type: 'single', 'parallel', 'fan_out', 'sub_workflow', 'timer', or 'signal'.
 	 */
 	private function resolve_step_type( array|string $step_def ): string {
 		if ( is_string( $step_def ) ) {
@@ -92,6 +95,438 @@ class Workflow {
 	}
 
 	/**
+	 * Strip reserved keys from workflow state for public consumption.
+	 *
+	 * @param array $state Full workflow state.
+	 * @return array
+	 */
+	private function public_state( array $state ): array {
+		return array_filter(
+			$state,
+			fn( string $key ) => ! str_starts_with( $key, '_' ),
+			ARRAY_FILTER_USE_KEY
+		);
+	}
+
+	/**
+	 * Merge step output into workflow state and track keys for pruning.
+	 *
+	 * @param array $state        Workflow state.
+	 * @param array $step_output  Step output.
+	 * @param int   $current_step Current step index.
+	 */
+	private function merge_step_output_into_state( array &$state, array $step_output, int $current_step ): void {
+		$output_keys = array();
+		foreach ( $step_output as $key => $value ) {
+			if ( ! str_starts_with( $key, '_' ) ) {
+				$state[ $key ] = $value;
+				$output_keys[] = $key;
+			}
+		}
+
+		if ( isset( $state['_prune_state_after'] ) && is_array( $state['_step_outputs'] ?? null ) ) {
+			$state['_step_outputs'][ $current_step ] = $output_keys;
+
+			$prune_after = (int) $state['_prune_state_after'];
+			if ( $current_step >= $prune_after ) {
+				$cutoff = $current_step - $prune_after;
+				foreach ( $state['_step_outputs'] as $step_idx => $keys ) {
+					if ( (int) $step_idx <= $cutoff ) {
+						foreach ( $keys as $key ) {
+							if ( ! str_starts_with( $key, '_' ) && isset( $state[ $key ] ) ) {
+								unset( $state[ $key ] );
+							}
+						}
+						unset( $state['_step_outputs'][ $step_idx ] );
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * Record a completed compensatable step on the compensation stack.
+	 *
+	 * @param array        $state      Workflow state.
+	 * @param array|string $step_def   Step definition.
+	 * @param int          $step_index Step index.
+	 */
+	private function push_compensation_snapshot( array &$state, array|string $step_def, int $step_index ): void {
+		if ( ! is_array( $step_def ) ) {
+			return;
+		}
+
+		$handler_class = $step_def['compensation'] ?? null;
+		if ( ! is_string( $handler_class ) || '' === trim( $handler_class ) ) {
+			return;
+		}
+
+		$state['_compensation_stack'] ??= array();
+		$state['_compensation_stack'][] = array(
+			'step_index' => $step_index,
+			'handler'    => $handler_class,
+			'state'      => $this->public_state( $state ),
+		);
+	}
+
+	/**
+	 * Run stored compensations in reverse order.
+	 *
+	 * @param int    $workflow_id Workflow ID.
+	 * @param array  $state       Workflow state.
+	 * @param string $reason      Reason for running compensation.
+	 * @return array Updated workflow state.
+	 */
+	private function run_compensations( int $workflow_id, array $state, string $reason ): array {
+		if ( ! empty( $state['_compensated'] ) ) {
+			return $state;
+		}
+
+		$stack = $state['_compensation_stack'] ?? array();
+		if ( ! is_array( $stack ) || empty( $stack ) ) {
+			$state['_compensated']        = true;
+			$state['_compensation_cause'] = $reason;
+			return $state;
+		}
+
+		for ( $i = count( $stack ) - 1; $i >= 0; --$i ) {
+			$entry         = $stack[ $i ];
+			$handler_class = $entry['handler'] ?? null;
+			$snapshot      = is_array( $entry['state'] ?? null ) ? $entry['state'] : array();
+
+			if ( ! is_string( $handler_class ) || ! class_exists( $handler_class ) ) {
+				continue;
+			}
+
+			try {
+				$instance = new $handler_class();
+
+				if ( $instance instanceof Compensation || method_exists( $instance, 'handle' ) ) {
+					$instance->handle( $snapshot );
+				}
+			} catch ( \Throwable $e ) {
+				$this->logger->log(
+					LogEvent::Debug,
+					array(
+						'workflow_id'   => $workflow_id,
+						'handler'       => $handler_class,
+						'error_message' => $e->getMessage(),
+						'context'       => array(
+							'type'   => 'compensation_failed',
+							'reason' => $reason,
+						),
+					)
+				);
+			}
+		}
+
+		$state['_compensated']        = true;
+		$state['_compensation_cause'] = $reason;
+
+		return $state;
+	}
+
+	/**
+	 * Persist updated internal workflow state without changing lifecycle status.
+	 *
+	 * @param int   $workflow_id Workflow ID.
+	 * @param array $state       Workflow state.
+	 */
+	private function persist_internal_state( int $workflow_id, array $state ): void {
+		$wf_tbl = $this->conn->table( Config::table_workflows() );
+		$stmt   = $this->conn->pdo()->prepare(
+			"UPDATE {$wf_tbl} SET state = :state WHERE id = :id"
+		);
+		$stmt->execute(
+			array(
+				'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
+				'id'    => $workflow_id,
+			)
+		);
+	}
+
+	/**
+	 * Build the public aggregate payload for a settled fan-out step.
+	 *
+	 * @param array $step_def Step definition.
+	 * @param array $runtime  Runtime fan-out state.
+	 * @return array
+	 */
+	private function build_fan_out_aggregate( array $step_def, array $runtime ): array {
+		$results  = array_values( $runtime['results'] ?? array() );
+		$failures = array_values( $runtime['failures'] ?? array() );
+
+		usort(
+			$results,
+			fn( array $a, array $b ) => (int) $a['index'] <=> (int) $b['index']
+		);
+		usort(
+			$failures,
+			fn( array $a, array $b ) => (int) $a['index'] <=> (int) $b['index']
+		);
+
+		$winner_index = $runtime['winner_index'] ?? null;
+		$winner       = null;
+		foreach ( $results as $entry ) {
+			if ( null !== $winner_index && (int) $entry['index'] === (int) $winner_index ) {
+				$winner = $entry;
+				break;
+			}
+		}
+
+		return array(
+			'mode'      => $step_def['join_mode'] ?? JoinMode::All->value,
+			'quorum'    => $step_def['quorum'] ?? null,
+			'total'     => count( $runtime['items'] ?? array() ),
+			'succeeded' => count( $results ),
+			'failed'    => count( $failures ),
+			'settled'   => true,
+			'winner'    => $winner,
+			'results'   => $results,
+			'failures'  => $failures,
+		);
+	}
+
+	/**
+	 * Determine whether a fan-out step has satisfied its join condition.
+	 *
+	 * @param array $step_def Step definition.
+	 * @param array $runtime  Runtime fan-out state.
+	 * @return bool
+	 */
+	private function fan_out_join_satisfied( array $step_def, array $runtime ): bool {
+		$mode      = JoinMode::from( $step_def['join_mode'] ?? JoinMode::All->value );
+		$successes = count( $runtime['results'] ?? array() );
+		$total     = count( $runtime['items'] ?? array() );
+
+		return match ( $mode ) {
+			JoinMode::All => $successes >= $total,
+			JoinMode::FirstSuccess => $successes >= 1,
+			JoinMode::Quorum => $successes >= max( 1, (int) ( $step_def['quorum'] ?? 1 ) ),
+		};
+	}
+
+	/**
+	 * Determine whether a fan-out step can no longer satisfy its join condition.
+	 *
+	 * @param array $step_def Step definition.
+	 * @param array $runtime  Runtime fan-out state.
+	 * @return bool
+	 */
+	private function fan_out_join_impossible( array $step_def, array $runtime ): bool {
+		$mode      = JoinMode::from( $step_def['join_mode'] ?? JoinMode::All->value );
+		$successes = count( $runtime['results'] ?? array() );
+		$failures  = count( $runtime['failures'] ?? array() );
+		$total     = count( $runtime['items'] ?? array() );
+		$remaining = max( 0, $total - $successes - $failures );
+
+		return match ( $mode ) {
+			JoinMode::All => $failures > 0,
+			JoinMode::FirstSuccess => 0 === $remaining && 0 === $successes,
+			JoinMode::Quorum => $successes + $remaining < max( 1, (int) ( $step_def['quorum'] ?? 1 ) ),
+		};
+	}
+
+	/**
+	 * Resolve the public result key for a fan-out aggregate.
+	 *
+	 * @param array $step_def    Step definition.
+	 * @param int   $step_index  Step index.
+	 * @return string
+	 */
+	private function fan_out_result_key( array $step_def, int $step_index ): string {
+		$result_key = $step_def['result_key'] ?? null;
+		if ( is_string( $result_key ) && '' !== trim( $result_key ) ) {
+			return trim( $result_key );
+		}
+
+		$name = $step_def['name'] ?? (string) $step_index;
+		return $name . '_results';
+	}
+
+	/**
+	 * Build final step output for a settled fan-out step.
+	 *
+	 * @param array $state      Workflow state.
+	 * @param array $step_def   Step definition.
+	 * @param array $runtime    Runtime fan-out state.
+	 * @param int   $step_index Step index.
+	 * @return array
+	 * @throws \RuntimeException If the reducer class is invalid or returns invalid output.
+	 */
+	private function fan_out_step_output( array $state, array $step_def, array $runtime, int $step_index ): array {
+		$result_key = $this->fan_out_result_key( $step_def, $step_index );
+		$aggregate  = $this->build_fan_out_aggregate( $step_def, $runtime );
+		$output     = array( $result_key => $aggregate );
+
+		$reducer_class = $step_def['reducer_class'] ?? null;
+		if ( ! is_string( $reducer_class ) || '' === trim( $reducer_class ) ) {
+			return $output;
+		}
+
+		if ( ! class_exists( $reducer_class ) ) {
+			throw new \RuntimeException( "Fan-out reducer class '{$reducer_class}' not found." );
+		}
+
+		$reducer = new $reducer_class();
+		if ( ! $reducer instanceof JoinReducer && ! method_exists( $reducer, 'reduce' ) ) {
+			throw new \RuntimeException( "Fan-out reducer '{$reducer_class}' must implement reduce()." );
+		}
+
+		$reducer_state                = $state;
+		$reducer_state[ $result_key ] = $aggregate;
+		$reducer_output               = $reducer->reduce( $this->public_state( $reducer_state ), $aggregate );
+
+		if ( ! is_array( $reducer_output ) ) {
+			throw new \RuntimeException( "Fan-out reducer '{$reducer_class}' must return an array." );
+		}
+
+		return array_merge( $output, $reducer_output );
+	}
+
+	/**
+	 * Finalise a settled step and enqueue the next transition.
+	 *
+	 * @param \PDO  $pdo              Active PDO connection.
+	 * @param array $wf_row           Locked workflow row.
+	 * @param array $job_row          Locked job row.
+	 * @param int   $workflow_id      Workflow ID.
+	 * @param int   $completed_job_id Completed job ID.
+	 * @param int   $current_step     Current step index.
+	 * @param array $state            Workflow state.
+	 * @param array $steps            All step definitions.
+	 * @param int   $total_steps      Total step count.
+	 * @param array $step_output      Step output to merge into state.
+	 * @param int   $duration_ms      Step duration.
+	 * @param bool  $log_job_completion Whether to emit the job completion log entry.
+	 * @throws \RuntimeException If `_goto` references an unknown step name.
+	 */
+	private function finalize_step_completion(
+		\PDO $pdo,
+		array $wf_row,
+		array $job_row,
+		int $workflow_id,
+		int $completed_job_id,
+		int $current_step,
+		array $state,
+		array $steps,
+		int $total_steps,
+		array $step_output,
+		int $duration_ms,
+		bool $log_job_completion = true,
+	): void {
+		$wf_tbl = $this->conn->table( Config::table_workflows() );
+		$jb_tbl = $this->conn->table( Config::table_jobs() );
+
+		$this->merge_step_output_into_state( $state, $step_output, $current_step );
+
+		$current_step_def = $steps[ $current_step ] ?? null;
+		$this->push_compensation_snapshot( $state, $current_step_def, $current_step );
+
+		$next_step = $current_step + 1;
+		if ( isset( $step_output['_goto'] ) ) {
+			$goto_name  = $step_output['_goto'];
+			$goto_index = $this->find_step_index_by_name( $steps, $goto_name );
+
+			if ( null === $goto_index ) {
+				throw new \RuntimeException(
+					"Workflow {$workflow_id}: _goto target '{$goto_name}' not found."
+				);
+			}
+
+			$next_step = $goto_index;
+		}
+
+		$is_last   = $next_step >= $total_steps;
+		$is_paused = WorkflowStatus::Paused->value === $wf_row['status'];
+
+		if ( $is_last ) {
+			$stmt = $pdo->prepare(
+				"UPDATE {$wf_tbl}
+				SET state = :state, current_step = :step, status = 'completed', completed_at = NOW()
+				WHERE id = :id"
+			);
+		} else {
+			$stmt = $pdo->prepare(
+				"UPDATE {$wf_tbl} SET state = :state, current_step = :step WHERE id = :id"
+			);
+		}
+
+		$stmt->execute(
+			array(
+				'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
+				'step'  => $next_step,
+				'id'    => $workflow_id,
+			)
+		);
+
+		$mark_stmt = $pdo->prepare(
+			"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id AND status = :processing"
+		);
+		$mark_stmt->execute(
+			array(
+				'status'     => JobStatus::Completed->value,
+				'id'         => $completed_job_id,
+				'processing' => JobStatus::Processing->value,
+			)
+		);
+
+		if ( $log_job_completion ) {
+			$this->logger->log(
+				LogEvent::Completed,
+				array(
+					'job_id'         => $completed_job_id,
+					'workflow_id'    => $workflow_id,
+					'step_index'     => $current_step,
+					'handler'        => $job_row['handler'] ?? '',
+					'queue'          => $job_row['queue'] ?? 'default',
+					'duration_ms'    => $duration_ms,
+					'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
+				)
+			);
+		}
+
+		if ( null !== $this->event_log ) {
+			$this->event_log->record_step_completed(
+				workflow_id: $workflow_id,
+				step_index: $current_step,
+				handler: $job_row['handler'] ?? '',
+				state_snapshot: $this->public_state( $state ),
+				step_output: $step_output,
+				duration_ms: $duration_ms,
+			);
+		}
+
+		if ( $is_last ) {
+			$this->logger->log(
+				LogEvent::WorkflowCompleted,
+				array(
+					'workflow_id' => $workflow_id,
+					'handler'     => $wf_row['name'],
+					'queue'       => $job_row['queue'] ?? 'default',
+				)
+			);
+			$this->on_workflow_completed( $workflow_id, $state, $pdo );
+			return;
+		}
+
+		if ( ! $is_paused && isset( $steps[ $next_step ] ) ) {
+			$queue_name   = $state['_queue'] ?? 'default';
+			$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
+			$max_attempts = $state['_max_attempts'] ?? 3;
+
+			$this->enqueue_step_def(
+				$steps[ $next_step ],
+				$workflow_id,
+				$next_step,
+				$queue_name,
+				$priority,
+				$max_attempts,
+			);
+		}
+	}
+
+	/**
 	 * Enqueue a step definition as one or more jobs within a transaction.
 	 *
 	 * @param array|string $step_def    Step definition.
@@ -114,16 +549,27 @@ class Workflow {
 		if ( 'parallel' === $type ) {
 			$handlers = $step_def['handlers'] ?? array();
 			foreach ( $handlers as $handler_class ) {
+				$handler_defaults = HandlerMetadata::from_class( $handler_class );
 				$this->queue->dispatch(
 					handler: $handler_class,
 					payload: array(),
 					queue: $queue_name,
 					priority: $priority,
-					max_attempts: $max_attempts,
+					max_attempts: $handler_defaults['max_attempts'] ?? $max_attempts,
 					workflow_id: $workflow_id,
 					step_index: $step_index,
 				);
 			}
+		} elseif ( 'fan_out' === $type ) {
+			$this->queue->dispatch(
+				handler: '__queuety_fan_out',
+				payload: array( 'step_index' => $step_index ),
+				queue: $queue_name,
+				priority: $priority,
+				max_attempts: $max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
 		} elseif ( 'sub_workflow' === $type ) {
 			$this->queue->dispatch(
 				handler: '__queuety_sub_workflow',
@@ -148,13 +594,14 @@ class Workflow {
 		} elseif ( 'signal' === $type ) {
 			$this->enqueue_signal_step( $step_def, $workflow_id, $step_index );
 		} else {
-			$handler = $this->resolve_step_handler( $step_def );
+			$handler          = $this->resolve_step_handler( $step_def );
+			$handler_defaults = HandlerMetadata::from_class( $handler );
 			$this->queue->dispatch(
 				handler: $handler,
 				payload: array(),
 				queue: $queue_name,
 				priority: $priority,
-				max_attempts: $max_attempts,
+				max_attempts: $handler_defaults['max_attempts'] ?? $max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 			);
@@ -202,10 +649,10 @@ class Workflow {
 				return;
 			}
 
-			$state       = json_decode( $wf_row['state'], true ) ?: array();
-			$signal_data = json_decode( $signal_row['payload'], true ) ?: array();
-			$steps       = $state['_steps'] ?? array();
-			$total_steps = (int) $wf_row['total_steps'];
+				$state       = json_decode( $wf_row['state'], true ) ?: array();
+				$signal_data = json_decode( $signal_row['payload'], true ) ?: array();
+				$steps       = $state['_steps'] ?? array();
+				$total_steps = (int) $wf_row['total_steps'];
 
 			// Merge signal data into state.
 			foreach ( $signal_data as $key => $value ) {
@@ -214,8 +661,11 @@ class Workflow {
 				}
 			}
 
-			$next_step = $step_index + 1;
-			$is_last   = $next_step >= $total_steps;
+				$current_step_def = $steps[ $step_index ] ?? null;
+				$this->push_compensation_snapshot( $state, $current_step_def, $step_index );
+
+				$next_step = $step_index + 1;
+				$is_last   = $next_step >= $total_steps;
 
 			if ( $is_last ) {
 				$upd = $pdo->prepare(
@@ -295,6 +745,309 @@ class Workflow {
 	}
 
 	/**
+	 * Expand a fan-out placeholder into branch jobs for the current workflow step.
+	 *
+	 * @param int   $workflow_id    Workflow ID.
+	 * @param int   $job_id         Placeholder job ID.
+	 * @param int   $step_index     Step index.
+	 * @param array $workflow_state Current workflow state.
+	 * @return bool True when the placeholder job should be logged as completed.
+	 * @throws \RuntimeException If the fan-out step definition or source state is invalid.
+	 * @throws \Throwable If the database transaction fails.
+	 */
+	public function handle_fan_out_step( int $workflow_id, int $job_id, int $step_index, array $workflow_state ): bool {
+		$pdo                   = $this->conn->pdo();
+		$wf_tbl                = $this->conn->table( Config::table_workflows() );
+		$jb_tbl                = $this->conn->table( Config::table_jobs() );
+		$state                 = $workflow_state;
+		$should_log_completion = false;
+		$should_compensate     = false;
+
+		$pdo->beginTransaction();
+		try {
+			$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+			$wf_stmt->execute( array( 'id' => $workflow_id ) );
+			$wf_row = $wf_stmt->fetch();
+
+			if ( ! $wf_row ) {
+				$pdo->rollBack();
+				return false;
+			}
+
+			$state    = json_decode( $wf_row['state'], true ) ?: $workflow_state;
+			$steps    = $state['_steps'] ?? array();
+			$step_def = $steps[ $step_index ] ?? null;
+
+			if ( ! is_array( $step_def ) || 'fan_out' !== ( $step_def['type'] ?? '' ) ) {
+				throw new \RuntimeException( "Step {$step_index} is not a fan_out definition." );
+			}
+
+			$job_stmt = $pdo->prepare( "SELECT * FROM {$jb_tbl} WHERE id = :id FOR UPDATE" );
+			$job_stmt->execute( array( 'id' => $job_id ) );
+			$job_row = $job_stmt->fetch();
+
+			if ( ! $job_row || JobStatus::Processing->value !== $job_row['status'] ) {
+				$pdo->commit();
+				return false;
+			}
+
+			$current_step = (int) $wf_row['current_step'];
+			if ( $current_step !== $step_index || ! in_array( $wf_row['status'], array( WorkflowStatus::Running->value, WorkflowStatus::Paused->value ), true ) ) {
+				$mark = $pdo->prepare(
+					"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
+				);
+				$mark->execute(
+					array(
+						'status' => JobStatus::Completed->value,
+						'id'     => $job_id,
+					)
+				);
+				$pdo->commit();
+				return true;
+			}
+
+			$runtime = $state['_fan_out_steps'][ $step_index ] ?? null;
+			if ( ! is_array( $runtime ) || empty( $runtime['initialized'] ) ) {
+				$items = $state[ $step_def['items_key'] ] ?? array();
+				if ( ! is_array( $items ) ) {
+					throw new \RuntimeException(
+						"Fan-out step '{$step_def['name']}' expected state key '{$step_def['items_key']}' to contain an array."
+					);
+				}
+
+				$runtime = array(
+					'initialized'  => true,
+					'items'        => array_values( $items ),
+					'results'      => array(),
+					'failures'     => array(),
+					'winner_index' => null,
+				);
+			}
+
+			$all_indexes = array_keys( $runtime['items'] ?? array() );
+			$done        = array_map( 'intval', array_merge( array_keys( $runtime['results'] ?? array() ), array_keys( $runtime['failures'] ?? array() ) ) );
+			$missing     = array_values( array_diff( $all_indexes, $done ) );
+
+			$state['_fan_out_steps'][ $step_index ] = $runtime;
+
+			if ( empty( $missing ) ) {
+				if ( $this->fan_out_join_satisfied( $step_def, $runtime ) ) {
+					$step_output = $this->fan_out_step_output( $state, $step_def, $runtime, $step_index );
+					$this->finalize_step_completion(
+						$pdo,
+						$wf_row,
+						$job_row,
+						$workflow_id,
+						$job_id,
+						$step_index,
+						$state,
+						$steps,
+						(int) $wf_row['total_steps'],
+						$step_output,
+						0,
+						false,
+					);
+					$should_log_completion = true;
+				} elseif ( $this->fan_out_join_impossible( $step_def, $runtime ) ) {
+					$state             = $this->mark_workflow_failed_locked( $pdo, $wf_row, $workflow_id, $job_id, 'Fan-out join could not be satisfied.', $state );
+					$should_compensate = ! empty( $state['_compensate_on_failure'] );
+				} else {
+					$mark = $pdo->prepare(
+						"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
+					);
+					$mark->execute(
+						array(
+							'status' => JobStatus::Completed->value,
+							'id'     => $job_id,
+						)
+					);
+					$this->persist_internal_state( $workflow_id, $state );
+					$should_log_completion = true;
+				}
+
+				$pdo->commit();
+				if ( $should_compensate ) {
+					$state = $this->run_compensations( $workflow_id, $state, 'failure' );
+					$this->persist_internal_state( $workflow_id, $state );
+				}
+				$this->invalidate_workflow_cache( $workflow_id );
+				return $should_log_completion;
+			}
+
+			$queue_name       = $state['_queue'] ?? 'default';
+			$priority         = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
+			$branch_handler   = $step_def['class'];
+			$handler_defaults = HandlerMetadata::from_class( $branch_handler );
+			$effective_max    = $handler_defaults['max_attempts'] ?? ( $state['_max_attempts'] ?? 3 );
+
+			foreach ( $missing as $item_index ) {
+				$this->queue->dispatch(
+					handler: $branch_handler,
+					payload: array(
+						'__fan_out' => array(
+							'item_index' => $item_index,
+							'item'       => $runtime['items'][ $item_index ],
+						),
+					),
+					queue: $queue_name,
+					priority: $priority,
+					max_attempts: $effective_max,
+					workflow_id: $workflow_id,
+					step_index: $step_index,
+				);
+			}
+
+			$this->persist_internal_state( $workflow_id, $state );
+
+			$mark = $pdo->prepare(
+				"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
+			);
+			$mark->execute(
+				array(
+					'status' => JobStatus::Completed->value,
+					'id'     => $job_id,
+				)
+			);
+			$should_log_completion = true;
+
+			$pdo->commit();
+			$this->invalidate_workflow_cache( $workflow_id );
+			return $should_log_completion;
+		} catch ( \Throwable $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+			throw $e;
+		}
+	}
+
+	/**
+	 * Record a terminal fan-out branch failure and decide whether the workflow should fail.
+	 *
+	 * @param int    $workflow_id   Workflow ID.
+	 * @param int    $failed_job_id Failed branch job ID.
+	 * @param string $error_message Error message.
+	 * @return bool True when the workflow failed as a result.
+	 * @throws \Throwable If the database transaction fails.
+	 */
+	public function handle_fan_out_terminal_failure( int $workflow_id, int $failed_job_id, string $error_message ): bool {
+		$pdo               = $this->conn->pdo();
+		$wf_tbl            = $this->conn->table( Config::table_workflows() );
+		$jb_tbl            = $this->conn->table( Config::table_jobs() );
+		$state             = array();
+		$should_compensate = false;
+		$workflow_failed   = false;
+
+		$pdo->beginTransaction();
+		try {
+			$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+			$wf_stmt->execute( array( 'id' => $workflow_id ) );
+			$wf_row = $wf_stmt->fetch();
+
+			$job_stmt = $pdo->prepare( "SELECT * FROM {$jb_tbl} WHERE id = :id FOR UPDATE" );
+			$job_stmt->execute( array( 'id' => $failed_job_id ) );
+			$job_row = $job_stmt->fetch();
+
+			if ( ! $wf_row || ! $job_row ) {
+				$pdo->commit();
+				return false;
+			}
+
+			if ( ! in_array( $job_row['status'], array( JobStatus::Pending->value, JobStatus::Processing->value ), true ) ) {
+				$pdo->commit();
+				return false;
+			}
+
+			$bury_stmt = $pdo->prepare(
+				"UPDATE {$jb_tbl}
+				SET status = :status, failed_at = NOW(), error_message = :error
+				WHERE id = :id"
+			);
+			$bury_stmt->execute(
+				array(
+					'status' => JobStatus::Buried->value,
+					'error'  => $error_message,
+					'id'     => $failed_job_id,
+				)
+			);
+
+			$state        = json_decode( $wf_row['state'], true ) ?: array();
+			$current_step = (int) $wf_row['current_step'];
+			$step_index   = $job_row['step_index'] !== null ? (int) $job_row['step_index'] : null;
+
+			if (
+				null === $step_index
+				|| $step_index !== $current_step
+				|| ! in_array( $wf_row['status'], array( WorkflowStatus::Running->value, WorkflowStatus::Paused->value ), true )
+			) {
+				$pdo->commit();
+				return false;
+			}
+
+			$steps    = $state['_steps'] ?? array();
+			$step_def = $steps[ $step_index ] ?? null;
+			if ( ! is_array( $step_def ) || 'fan_out' !== ( $step_def['type'] ?? '' ) ) {
+				$pdo->commit();
+				return false;
+			}
+
+				$runtime = $state['_fan_out_steps'][ $step_index ] ?? null;
+			if ( ! is_array( $runtime ) ) {
+				$runtime = array(
+					'initialized'  => true,
+					'items'        => array(),
+					'results'      => array(),
+					'failures'     => array(),
+					'winner_index' => null,
+				);
+			}
+
+				$payload     = $job_row['payload'] ? ( json_decode( $job_row['payload'], true ) ?: array() ) : array();
+				$branch_meta = $payload['__fan_out'] ?? array();
+				$item_index  = $branch_meta['item_index'] ?? null;
+				$item        = $branch_meta['item'] ?? null;
+
+			if ( null !== $item_index ) {
+				$runtime['failures'][ (string) $item_index ] = array(
+					'index'         => (int) $item_index,
+					'item'          => $item,
+					'error_message' => $error_message,
+					'job_id'        => $failed_job_id,
+				);
+				unset( $runtime['results'][ (string) $item_index ] );
+			}
+
+				$state['_fan_out_steps'][ $step_index ] = $runtime;
+
+			if ( ! $this->fan_out_join_impossible( $step_def, $runtime ) ) {
+				$this->persist_internal_state( $workflow_id, $state );
+				$pdo->commit();
+				$this->invalidate_workflow_cache( $workflow_id );
+				return false;
+			}
+
+				$state             = $this->mark_workflow_failed_locked( $pdo, $wf_row, $workflow_id, $failed_job_id, $error_message, $state );
+				$should_compensate = ! empty( $state['_compensate_on_failure'] );
+				$workflow_failed   = true;
+
+				$pdo->commit();
+		} catch ( \Throwable $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+			throw $e;
+		}
+
+		if ( $should_compensate ) {
+			$state = $this->run_compensations( $workflow_id, $state, 'failure' );
+			$this->persist_internal_state( $workflow_id, $state );
+		}
+
+		$this->invalidate_workflow_cache( $workflow_id );
+		return $workflow_failed;
+	}
+
+	/**
 	 * Handle a signal step dispatched via the worker.
 	 *
 	 * Called by the Worker when it encounters a __queuety_signal placeholder.
@@ -351,8 +1104,8 @@ class Workflow {
 				return;
 			}
 
-			$state          = json_decode( $wf_row['state'], true ) ?: array();
-			$waiting_signal = $state['_waiting_signal'] ?? null;
+				$state          = json_decode( $wf_row['state'], true ) ?: array();
+				$waiting_signal = $state['_waiting_signal'] ?? null;
 
 			if (
 				WorkflowStatus::WaitingSignal->value === $wf_row['status']
@@ -366,13 +1119,15 @@ class Workflow {
 				}
 
 				// Clear the waiting signal marker.
-				unset( $state['_waiting_signal'] );
+					unset( $state['_waiting_signal'] );
 
-				$current_step = (int) $wf_row['current_step'];
-				$total_steps  = (int) $wf_row['total_steps'];
-				$steps        = $state['_steps'] ?? array();
-				$next_step    = $current_step + 1;
-				$is_last      = $next_step >= $total_steps;
+					$current_step     = (int) $wf_row['current_step'];
+					$total_steps      = (int) $wf_row['total_steps'];
+					$steps            = $state['_steps'] ?? array();
+					$current_step_def = $steps[ $current_step ] ?? null;
+					$this->push_compensation_snapshot( $state, $current_step_def, $current_step );
+					$next_step = $current_step + 1;
+					$is_last   = $next_step >= $total_steps;
 
 				if ( $is_last ) {
 					$upd = $pdo->prepare(
@@ -495,51 +1250,167 @@ class Workflow {
 				throw new \RuntimeException( "Workflow {$workflow_id} not found." );
 			}
 
+				$job_stmt = $pdo->prepare( "SELECT * FROM {$jb_tbl} WHERE id = :id FOR UPDATE" );
+				$job_stmt->execute( array( 'id' => $completed_job_id ) );
+				$job_row = $job_stmt->fetch();
+
+			if ( ! $job_row ) {
+				throw new \RuntimeException( "Job {$completed_job_id} not found." );
+			}
+
 			if ( ! in_array( $wf_row['status'], array( WorkflowStatus::Running->value, WorkflowStatus::Paused->value ), true ) ) {
+				if ( JobStatus::Processing->value === $job_row['status'] ) {
+					$stmt = $pdo->prepare(
+						"UPDATE {$jb_tbl}
+							SET status = :status, failed_at = NOW(), error_message = :error
+							WHERE id = :id"
+					);
+					$stmt->execute(
+						array(
+							'status' => JobStatus::Buried->value,
+							'error'  => 'Workflow advanced before job completion.',
+							'id'     => $completed_job_id,
+						)
+					);
+				}
 				$pdo->commit();
 				return;
 			}
 
-			$state        = json_decode( $wf_row['state'], true ) ?: array();
-			$current_step = (int) $wf_row['current_step'];
-			$total_steps  = (int) $wf_row['total_steps'];
-			$steps        = $state['_steps'] ?? array();
-
-			// Merge step output into state (user data only, preserve reserved keys).
-			$output_keys = array();
-			foreach ( $step_output as $key => $value ) {
-				if ( ! str_starts_with( $key, '_' ) ) {
-					$state[ $key ] = $value;
-					$output_keys[] = $key;
-				}
+			if ( JobStatus::Processing->value !== $job_row['status'] ) {
+				$pdo->commit();
+				return;
 			}
 
-			// Track step output keys for pruning.
-			if ( isset( $state['_prune_state_after'] ) && is_array( $state['_step_outputs'] ?? null ) ) {
-				$state['_step_outputs'][ $current_step ] = $output_keys;
+				$state        = json_decode( $wf_row['state'], true ) ?: array();
+				$current_step = (int) $wf_row['current_step'];
+				$total_steps  = (int) $wf_row['total_steps'];
+				$steps        = $state['_steps'] ?? array();
 
-				// Prune old step data if configured.
-				$prune_after = (int) $state['_prune_state_after'];
-				if ( $current_step >= $prune_after ) {
-					$cutoff = $current_step - $prune_after;
-					foreach ( $state['_step_outputs'] as $step_idx => $keys ) {
-						if ( (int) $step_idx <= $cutoff ) {
-							foreach ( $keys as $key ) {
-								if ( ! str_starts_with( $key, '_' ) && isset( $state[ $key ] ) ) {
-									unset( $state[ $key ] );
-								}
-							}
-							unset( $state['_step_outputs'][ $step_idx ] );
-						}
-					}
-				}
+			if ( $job_row['step_index'] !== null && (int) $job_row['step_index'] !== $current_step ) {
+				$stmt = $pdo->prepare(
+					"UPDATE {$jb_tbl}
+						SET status = :status, failed_at = NOW(), error_message = :error
+						WHERE id = :id"
+				);
+				$stmt->execute(
+					array(
+						'status' => JobStatus::Buried->value,
+						'error'  => 'Workflow advanced before job completion.',
+						'id'     => $completed_job_id,
+					)
+				);
+				$pdo->commit();
+				return;
 			}
 
-			// Check if the current step is a parallel group.
-			$current_step_def  = $steps[ $current_step ] ?? null;
-			$current_step_type = $this->resolve_step_type( $current_step_def );
+				$current_step_def  = $steps[ $current_step ] ?? null;
+				$current_step_type = $this->resolve_step_type( $current_step_def );
+
+			if ( 'fan_out' === $current_step_type ) {
+				$payload     = json_decode( $job_row['payload'], true ) ?: array();
+				$branch_meta = $payload['__fan_out'] ?? null;
+
+				if ( ! is_array( $current_step_def ) || ! is_array( $branch_meta ) || ! array_key_exists( 'item_index', $branch_meta ) ) {
+					throw new \RuntimeException( "Workflow {$workflow_id}: invalid fan-out branch payload." );
+				}
+
+				$runtime = $state['_fan_out_steps'][ $current_step ] ?? null;
+				if ( ! is_array( $runtime ) || empty( $runtime['initialized'] ) ) {
+					throw new \RuntimeException( "Workflow {$workflow_id}: fan-out runtime state missing for step {$current_step}." );
+				}
+
+				if ( ! empty( $runtime['settled'] ) ) {
+					$stmt = $pdo->prepare(
+						"UPDATE {$jb_tbl}
+							SET status = :status, failed_at = NOW(), error_message = :error
+							WHERE id = :id"
+					);
+					$stmt->execute(
+						array(
+							'status' => JobStatus::Buried->value,
+							'error'  => 'Fan-out step already settled.',
+							'id'     => $completed_job_id,
+						)
+					);
+					$pdo->commit();
+					return;
+				}
+
+				$item_index = (int) $branch_meta['item_index'];
+				$item       = $runtime['items'][ $item_index ] ?? $branch_meta['item'] ?? null;
+
+				$runtime['results'][ (string) $item_index ] = array(
+					'index'  => $item_index,
+					'item'   => $item,
+					'output' => $step_output,
+					'job_id' => $completed_job_id,
+				);
+				unset( $runtime['failures'][ (string) $item_index ] );
+
+				if ( null === $runtime['winner_index'] ) {
+					$runtime['winner_index'] = $item_index;
+				}
+
+				$state['_fan_out_steps'][ $current_step ] = $runtime;
+
+				if ( ! $this->fan_out_join_satisfied( $current_step_def, $runtime ) ) {
+					$this->persist_internal_state( $workflow_id, $state );
+
+					$mark_stmt = $pdo->prepare(
+						"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
+					);
+					$mark_stmt->execute(
+						array(
+							'status' => JobStatus::Completed->value,
+							'id'     => $completed_job_id,
+						)
+					);
+
+					$this->logger->log(
+						LogEvent::Completed,
+						array(
+							'job_id'         => $completed_job_id,
+							'workflow_id'    => $workflow_id,
+							'step_index'     => $current_step,
+							'handler'        => $job_row['handler'] ?? '',
+							'queue'          => $job_row['queue'] ?? 'default',
+							'duration_ms'    => $duration_ms,
+							'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
+						)
+					);
+
+					$pdo->commit();
+					$this->invalidate_workflow_cache( $workflow_id );
+					return;
+				}
+
+				$runtime['settled']                       = true;
+				$state['_fan_out_steps'][ $current_step ] = $runtime;
+				$this->bury_active_jobs_for_step( $workflow_id, $current_step, 'Fan-out join settled early.', $completed_job_id );
+
+				$step_output = $this->fan_out_step_output( $state, $current_step_def, $runtime, $current_step );
+				$this->finalize_step_completion(
+					$pdo,
+					$wf_row,
+					$job_row,
+					$workflow_id,
+					$completed_job_id,
+					$current_step,
+					$state,
+					$steps,
+					$total_steps,
+					$step_output,
+					$duration_ms,
+				);
+
+				$pdo->commit();
+				$this->invalidate_workflow_cache( $workflow_id );
+				return;
+			}
 
 			if ( 'parallel' === $current_step_type ) {
+				$this->merge_step_output_into_state( $state, $step_output, $current_step );
 				$total_handlers = count( $current_step_def['handlers'] ?? array() );
 
 				// Mark the completed job first so count includes it.
@@ -555,11 +1426,6 @@ class Workflow {
 
 				// Count completed jobs for this step (including the one just marked).
 				$completed_count = $this->count_completed_jobs_for_step( $workflow_id, $current_step );
-
-				// Fetch the completed job for logging context.
-				$job_stmt = $pdo->prepare( "SELECT handler, queue FROM {$jb_tbl} WHERE id = :id" );
-				$job_stmt->execute( array( 'id' => $completed_job_id ) );
-				$job_row = $job_stmt->fetch();
 
 				// Always update state (merge partial results).
 				$state_stmt = $pdo->prepare(
@@ -620,6 +1486,7 @@ class Workflow {
 				$next_step = $current_step + 1;
 				$is_last   = $next_step >= $total_steps;
 				$is_paused = WorkflowStatus::Paused->value === $wf_row['status'];
+				$this->push_compensation_snapshot( $state, $current_step_def, $current_step );
 
 				// Update workflow state.
 				if ( $is_last ) {
@@ -679,131 +1546,22 @@ class Workflow {
 				return;
 			}
 
-			// --- Non-parallel step logic (single or sub_workflow) ---
-
-			// Check for conditional _goto branching.
-			$next_step = $current_step + 1;
-
-			if ( isset( $step_output['_goto'] ) ) {
-				$goto_name  = $step_output['_goto'];
-				$goto_index = $this->find_step_index_by_name( $steps, $goto_name );
-
-				if ( null === $goto_index ) {
-					$pdo->rollBack();
-					throw new \RuntimeException(
-						"Workflow {$workflow_id}: _goto target '{$goto_name}' not found."
-					);
-				}
-				$next_step = $goto_index;
-			}
-
-			$is_last   = $next_step >= $total_steps;
-			$is_paused = WorkflowStatus::Paused->value === $wf_row['status'];
-
-			// Update workflow state.
-			if ( $is_last ) {
-				$stmt = $pdo->prepare(
-					"UPDATE {$wf_tbl}
-					SET state = :state, current_step = :step, status = 'completed', completed_at = NOW()
-					WHERE id = :id"
-				);
-				$stmt->execute(
-					array(
-						'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
-						'step'  => $next_step,
-						'id'    => $workflow_id,
-					)
-				);
-			} else {
-				$stmt = $pdo->prepare(
-					"UPDATE {$wf_tbl} SET state = :state, current_step = :step WHERE id = :id"
-				);
-				$stmt->execute(
-					array(
-						'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
-						'step'  => $next_step,
-						'id'    => $workflow_id,
-					)
-				);
-			}
-
-			// Mark the completed job.
-			$stmt = $pdo->prepare(
-				"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
-			);
-			$stmt->execute(
-				array(
-					'status' => JobStatus::Completed->value,
-					'id'     => $completed_job_id,
-				)
-			);
-
-			// Fetch the completed job for logging context.
-			$stmt = $pdo->prepare( "SELECT handler, queue FROM {$jb_tbl} WHERE id = :id" );
-			$stmt->execute( array( 'id' => $completed_job_id ) );
-			$job_row = $stmt->fetch();
-
-			// Log step completion.
-			$this->logger->log(
-				LogEvent::Completed,
-				array(
-					'job_id'         => $completed_job_id,
-					'workflow_id'    => $workflow_id,
-					'step_index'     => $current_step,
-					'handler'        => $job_row['handler'] ?? '',
-					'queue'          => $job_row['queue'] ?? 'default',
-					'duration_ms'    => $duration_ms,
-					'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
-				)
-			);
-
-			// Record workflow event log (state snapshot).
-			if ( null !== $this->event_log ) {
-				// Build a public-only snapshot (strip reserved keys).
-				$snapshot = array_filter(
-					$state,
-					fn( string $key ) => ! str_starts_with( $key, '_' ),
-					ARRAY_FILTER_USE_KEY
-				);
-
-				$this->event_log->record_step_completed(
-					workflow_id: $workflow_id,
-					step_index: $current_step,
-					handler: $job_row['handler'] ?? '',
-					state_snapshot: $snapshot,
-					step_output: $step_output,
-					duration_ms: $duration_ms,
-				);
-			}
-
-			// Enqueue next step or log workflow completion.
-			if ( $is_last ) {
-				$this->logger->log(
-					LogEvent::WorkflowCompleted,
-					array(
-						'workflow_id' => $workflow_id,
-						'handler'     => $wf_row['name'],
-						'queue'       => $job_row['queue'] ?? 'default',
-					)
-				);
-				$this->on_workflow_completed( $workflow_id, $state, $pdo );
-			} elseif ( ! $is_paused && isset( $steps[ $next_step ] ) ) {
-				$queue_name   = $state['_queue'] ?? 'default';
-				$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
-				$max_attempts = $state['_max_attempts'] ?? 3;
-
-				$this->enqueue_step_def(
-					$steps[ $next_step ],
+				$this->finalize_step_completion(
+					$pdo,
+					$wf_row,
+					$job_row,
 					$workflow_id,
-					$next_step,
-					$queue_name,
-					$priority,
-					$max_attempts,
+					$completed_job_id,
+					$current_step,
+					$state,
+					$steps,
+					$total_steps,
+					$step_output,
+					$duration_ms,
 				);
-			}
 
-			$pdo->commit();
-			$this->invalidate_workflow_cache( $workflow_id );
+				$pdo->commit();
+				$this->invalidate_workflow_cache( $workflow_id );
 		} catch ( \Throwable $e ) {
 			if ( $pdo->inTransaction() ) {
 				$pdo->rollBack();
@@ -849,18 +1607,21 @@ class Workflow {
 
 		$parent_state = json_decode( $parent_row['state'], true ) ?: array();
 
-		// Merge non-reserved keys from sub-workflow state into parent state.
+			// Merge non-reserved keys from sub-workflow state into parent state.
 		foreach ( $state as $key => $value ) {
 			if ( ! str_starts_with( $key, '_' ) ) {
 				$parent_state[ $key ] = $value;
 			}
 		}
 
-		$parent_steps       = $parent_state['_steps'] ?? array();
-		$parent_total_steps = (int) $parent_row['total_steps'];
-		$next_step          = $parent_step + 1;
-		$is_last            = $next_step >= $parent_total_steps;
-		$is_paused          = WorkflowStatus::Paused->value === $parent_row['status'];
+			$parent_steps     = $parent_state['_steps'] ?? array();
+			$current_step_def = $parent_steps[ $parent_step ] ?? null;
+			$this->push_compensation_snapshot( $parent_state, $current_step_def, $parent_step );
+
+			$parent_total_steps = (int) $parent_row['total_steps'];
+			$next_step          = $parent_step + 1;
+		$is_last                = $next_step >= $parent_total_steps;
+		$is_paused              = WorkflowStatus::Paused->value === $parent_row['status'];
 
 		if ( $is_last ) {
 			$upd_stmt = $pdo->prepare(
@@ -1064,9 +1825,10 @@ class Workflow {
 	 * @throws \Throwable If the database transaction fails.
 	 */
 	public function cancel( int $workflow_id ): void {
-		$pdo    = $this->conn->pdo();
-		$wf_tbl = $this->conn->table( Config::table_workflows() );
-		$jb_tbl = $this->conn->table( Config::table_jobs() );
+		$pdo               = $this->conn->pdo();
+		$wf_tbl            = $this->conn->table( Config::table_workflows() );
+		$state             = array();
+		$should_compensate = false;
 
 		$pdo->beginTransaction();
 		try {
@@ -1090,69 +1852,62 @@ class Workflow {
 				);
 			}
 
-			$state = json_decode( $wf_row['state'], true ) ?: array();
+				$state = json_decode( $wf_row['state'], true ) ?: array();
 
-			// Run the cleanup handler if defined.
-			$cancel_handler = $state['_on_cancel'] ?? null;
-			if ( null !== $cancel_handler && class_exists( $cancel_handler ) ) {
-				// Build public state (strip reserved keys).
-				$public_state = array_filter(
-					$state,
-					fn( string $key ) => ! str_starts_with( $key, '_' ),
-					ARRAY_FILTER_USE_KEY
-				);
-
-				$handler_instance = new $cancel_handler();
-				$handler_instance->handle( $public_state );
-			}
-
-			// Set workflow status to cancelled.
-			$upd = $pdo->prepare(
-				"UPDATE {$wf_tbl}
+				// Set workflow status to cancelled.
+				$upd = $pdo->prepare(
+					"UPDATE {$wf_tbl}
 				SET status = :status, completed_at = NOW()
 				WHERE id = :id"
-			);
-			$upd->execute(
-				array(
-					'status' => WorkflowStatus::Cancelled->value,
-					'id'     => $workflow_id,
-				)
-			);
+				);
+				$upd->execute(
+					array(
+						'status' => WorkflowStatus::Cancelled->value,
+						'id'     => $workflow_id,
+					)
+				);
 
-			// Bury any pending or processing jobs for this workflow.
-			$bury = $pdo->prepare(
-				"UPDATE {$jb_tbl}
-				SET status = :buried, failed_at = NOW(), error_message = :error
-				WHERE workflow_id = :workflow_id
-					AND status IN (:pending, :processing)"
-			);
-			$bury->execute(
-				array(
-					'buried'      => JobStatus::Buried->value,
-					'error'       => 'Workflow cancelled',
-					'workflow_id' => $workflow_id,
-					'pending'     => JobStatus::Pending->value,
-					'processing'  => JobStatus::Processing->value,
-				)
-			);
+				$this->bury_active_jobs_for_workflow( $workflow_id, 'Workflow cancelled' );
 
-			$this->logger->log(
-				LogEvent::WorkflowCancelled,
-				array(
-					'workflow_id' => $workflow_id,
-					'handler'     => $wf_row['name'],
-					'queue'       => $state['_queue'] ?? 'default',
-				)
-			);
+				$this->logger->log(
+					LogEvent::WorkflowCancelled,
+					array(
+						'workflow_id' => $workflow_id,
+						'handler'     => $wf_row['name'],
+						'queue'       => $state['_queue'] ?? 'default',
+					)
+				);
 
-			$pdo->commit();
-			$this->invalidate_workflow_cache( $workflow_id );
+				$pdo->commit();
 		} catch ( \Throwable $e ) {
 			if ( $pdo->inTransaction() ) {
 				$pdo->rollBack();
 			}
 			throw $e;
 		}
+
+			$state = $this->run_compensations( $workflow_id, $state, 'cancel' );
+			$this->persist_internal_state( $workflow_id, $state );
+
+			$cancel_handler = $state['_on_cancel'] ?? null;
+		if ( null !== $cancel_handler && class_exists( $cancel_handler ) ) {
+			try {
+				$handler_instance = new $cancel_handler();
+				$handler_instance->handle( $this->public_state( $state ) );
+			} catch ( \Throwable $e ) {
+				$this->logger->log(
+					LogEvent::Debug,
+					array(
+						'workflow_id'   => $workflow_id,
+						'handler'       => $cancel_handler,
+						'error_message' => $e->getMessage(),
+						'context'       => array( 'type' => 'cancel_handler_failed' ),
+					)
+				);
+			}
+		}
+
+			$this->invalidate_workflow_cache( $workflow_id );
 	}
 
 	/**
@@ -1161,40 +1916,39 @@ class Workflow {
 	 * @param int    $workflow_id   The workflow ID.
 	 * @param int    $failed_job_id The job that caused the failure.
 	 * @param string $error_message Error description.
+	 * @throws \Throwable If the database transaction fails.
 	 */
 	public function fail( int $workflow_id, int $failed_job_id, string $error_message ): void {
+		$pdo    = $this->conn->pdo();
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
+		$state  = array();
 
-		$stmt = $this->conn->pdo()->prepare(
-			"UPDATE {$wf_tbl}
-			SET status = 'failed', failed_at = NOW(), error_message = :error
-			WHERE id = :id
-				AND status IN (:running, :paused)"
-		);
-		$stmt->execute(
-			array(
-				'error'   => $error_message,
-				'id'      => $workflow_id,
-				'running' => WorkflowStatus::Running->value,
-				'paused'  => WorkflowStatus::Paused->value,
-			)
-		);
+		$pdo->beginTransaction();
+		try {
+			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+			$stmt->execute( array( 'id' => $workflow_id ) );
+			$wf_row = $stmt->fetch();
 
-		if ( 0 === $stmt->rowCount() ) {
-			return;
+			if ( ! $wf_row ) {
+				$pdo->rollBack();
+				return;
+			}
+
+			$should_compensate = in_array( $wf_row['status'], array( WorkflowStatus::Running->value, WorkflowStatus::Paused->value ), true );
+			$state             = $this->mark_workflow_failed_locked( $pdo, $wf_row, $workflow_id, $failed_job_id, $error_message );
+			$pdo->commit();
+		} catch ( \Throwable $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+			throw $e;
 		}
 
-		$this->logger->log(
-			LogEvent::WorkflowFailed,
-			array(
-				'workflow_id'   => $workflow_id,
-				'job_id'        => $failed_job_id,
-				'handler'       => '',
-				'error_message' => $error_message,
-			)
-		);
+		if ( $should_compensate && ! empty( $state['_compensate_on_failure'] ) ) {
+			$state = $this->run_compensations( $workflow_id, $state, 'failure' );
+			$this->persist_internal_state( $workflow_id, $state );
+		}
 
-		$this->bury_active_jobs_for_workflow( $workflow_id, $error_message, $failed_job_id );
 		$this->invalidate_workflow_cache( $workflow_id );
 	}
 
@@ -1282,6 +2036,10 @@ class Workflow {
 		$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
 		$max_attempts = $state['_max_attempts'] ?? 3;
 
+		if ( ! empty( $state['_compensated'] ) ) {
+			throw new \RuntimeException( "Workflow {$workflow_id} has already been compensated and cannot be retried." );
+		}
+
 		if ( ! isset( $steps[ $current_step ] ) ) {
 			throw new \RuntimeException( "No step handler found for step {$current_step}." );
 		}
@@ -1294,17 +2052,27 @@ class Workflow {
 				SET status = 'running', failed_at = NULL, error_message = NULL
 				WHERE id = :id"
 			);
-			$stmt->execute( array( 'id' => $workflow_id ) );
+				$stmt->execute( array( 'id' => $workflow_id ) );
 
-			// Enqueue the failed step again.
-			$this->enqueue_step_def(
-				$steps[ $current_step ],
-				$workflow_id,
-				$current_step,
-				$queue_name,
-				$priority,
-				$max_attempts,
-			);
+			if ( is_array( $steps[ $current_step ] ) && 'fan_out' === ( $steps[ $current_step ]['type'] ?? '' ) ) {
+				$runtime = $state['_fan_out_steps'][ $current_step ] ?? null;
+				if ( is_array( $runtime ) ) {
+					$runtime['failures']                      = array();
+					$runtime['settled']                       = false;
+					$state['_fan_out_steps'][ $current_step ] = $runtime;
+					$this->persist_internal_state( $workflow_id, $state );
+				}
+			}
+
+				// Enqueue the failed step again.
+				$this->enqueue_step_def(
+					$steps[ $current_step ],
+					$workflow_id,
+					$current_step,
+					$queue_name,
+					$priority,
+					$max_attempts,
+				);
 
 			$pdo->commit();
 			$this->invalidate_workflow_cache( $workflow_id );
@@ -1729,6 +2497,7 @@ class Workflow {
 	 * logs the WorkflowDeadlineExceeded event.
 	 *
 	 * @return int Number of workflows that exceeded their deadline.
+	 * @throws \Throwable If a deadline workflow transaction fails.
 	 */
 	public function check_deadlines(): int {
 		$pdo    = $this->conn->pdo();
@@ -1764,29 +2533,44 @@ class Workflow {
 				}
 			}
 
-			// Mark workflow as failed.
-			$upd = $pdo->prepare(
-				"UPDATE {$wf_tbl}
-				SET status = 'failed', failed_at = NOW(), error_message = 'Deadline exceeded'
-				WHERE id = :id AND status = 'running'"
-			);
-			$upd->execute( array( 'id' => $wf_row['id'] ) );
+			$workflow_id = (int) $wf_row['id'];
+			$pdo->beginTransaction();
+			try {
+				$lock_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+				$lock_stmt->execute( array( 'id' => $workflow_id ) );
+				$locked_row = $lock_stmt->fetch();
 
-			if ( $upd->rowCount() > 0 ) {
-				$this->bury_active_jobs_for_workflow( (int) $wf_row['id'], 'Deadline exceeded' );
+				if ( ! $locked_row || WorkflowStatus::Running->value !== $locked_row['status'] ) {
+					$pdo->rollBack();
+					continue;
+				}
+
+				$state = $this->mark_workflow_failed_locked( $pdo, $locked_row, $workflow_id, 0, 'Deadline exceeded' );
 
 				$this->logger->log(
 					LogEvent::WorkflowDeadlineExceeded,
 					array(
-						'workflow_id' => (int) $wf_row['id'],
-						'handler'     => $wf_row['name'],
+						'workflow_id' => $workflow_id,
+						'handler'     => $locked_row['name'],
 						'queue'       => $state['_queue'] ?? 'default',
 					)
 				);
 
-				$this->invalidate_workflow_cache( (int) $wf_row['id'] );
-				++$count;
+				$pdo->commit();
+			} catch ( \Throwable $e ) {
+				if ( $pdo->inTransaction() ) {
+					$pdo->rollBack();
+				}
+				throw $e;
 			}
+
+			if ( ! empty( $state['_compensate_on_failure'] ) ) {
+				$state = $this->run_compensations( $workflow_id, $state, 'deadline' );
+				$this->persist_internal_state( $workflow_id, $state );
+			}
+
+			$this->invalidate_workflow_cache( $workflow_id );
+			++$count;
 		}
 
 		return $count;
@@ -1816,12 +2600,97 @@ class Workflow {
 		);
 
 		if ( null !== $except_job ) {
-			$sql               .= ' AND id != :except_job';
+			$sql                 .= ' AND id != :except_job';
 			$params['except_job'] = $except_job;
 		}
 
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( $params );
+	}
+
+	/**
+	 * Bury active jobs for a specific workflow step.
+	 *
+	 * @param int      $workflow_id Workflow ID.
+	 * @param int      $step_index  Step index.
+	 * @param string   $message     Error message.
+	 * @param int|null $except_job  Optional job ID to leave untouched.
+	 */
+	private function bury_active_jobs_for_step( int $workflow_id, int $step_index, string $message, ?int $except_job = null ): void {
+		$jb_tbl = $this->conn->table( Config::table_jobs() );
+
+		$sql = "UPDATE {$jb_tbl}
+			SET status = :status, failed_at = NOW(), error_message = :message
+			WHERE workflow_id = :workflow_id
+				AND step_index = :step_index
+				AND status IN (:pending, :processing)";
+
+		$params = array(
+			'status'      => JobStatus::Buried->value,
+			'message'     => $message,
+			'workflow_id' => $workflow_id,
+			'step_index'  => $step_index,
+			'pending'     => JobStatus::Pending->value,
+			'processing'  => JobStatus::Processing->value,
+		);
+
+		if ( null !== $except_job ) {
+			$sql                 .= ' AND id != :except_job';
+			$params['except_job'] = $except_job;
+		}
+
+		$stmt = $this->conn->pdo()->prepare( $sql );
+		$stmt->execute( $params );
+	}
+
+	/**
+	 * Mark a locked workflow row as failed and bury active jobs.
+	 *
+	 * @param \PDO       $pdo          Active PDO connection.
+	 * @param array      $wf_row       Locked workflow row.
+	 * @param int        $workflow_id  Workflow ID.
+	 * @param int        $failed_job_id Failed job ID.
+	 * @param string     $error_message Error description.
+	 * @param array|null $state_override Optional in-memory state to persist with the failure.
+	 * @return array Decoded workflow state.
+	 */
+	private function mark_workflow_failed_locked( \PDO $pdo, array $wf_row, int $workflow_id, int $failed_job_id, string $error_message, ?array $state_override = null ): array {
+		$wf_tbl = $this->conn->table( Config::table_workflows() );
+		$state  = $state_override ?? ( json_decode( $wf_row['state'], true ) ?: array() );
+
+		$stmt = $pdo->prepare(
+			"UPDATE {$wf_tbl}
+			SET status = 'failed', failed_at = NOW(), error_message = :error, state = :state
+			WHERE id = :id
+				AND status IN (:running, :paused)"
+		);
+		$stmt->execute(
+			array(
+				'error'   => $error_message,
+				'id'      => $workflow_id,
+				'running' => WorkflowStatus::Running->value,
+				'paused'  => WorkflowStatus::Paused->value,
+				'state'   => json_encode( $state, JSON_THROW_ON_ERROR ),
+			)
+		);
+
+		if ( 0 === $stmt->rowCount() ) {
+			return $state;
+		}
+
+		$this->logger->log(
+			LogEvent::WorkflowFailed,
+			array(
+				'workflow_id'   => $workflow_id,
+				'job_id'        => $failed_job_id,
+				'handler'       => '',
+				'error_message' => $error_message,
+			)
+		);
+
+		$this->bury_active_jobs_for_workflow( $workflow_id, $error_message, $failed_job_id );
+
+		return $state;
 	}
 
 	/**

@@ -1,0 +1,85 @@
+---
+title: Compensation
+description: Attach per-step rollback handlers and control when they run.
+---
+
+# Workflow Compensation
+
+Compensation lets you attach a rollback handler to a completed workflow step. Queuety stores a public-state snapshot when that step finishes, then runs the compensation handlers in reverse order when the workflow is cancelled or, optionally, when it fails.
+
+## The `compensate_with()` method
+
+Call `compensate_with()` immediately after the step it should undo:
+
+```php
+use Queuety\Queuety;
+
+Queuety::workflow( 'provision_account' )
+    ->then( CreateRemoteUserStep::class )
+    ->compensate_with( DeleteRemoteUserCompensation::class )
+    ->then( CreateSubscriptionStep::class )
+    ->compensate_with( CancelSubscriptionCompensation::class )
+    ->then( SendWelcomeEmailStep::class )
+    ->dispatch( [ 'user_id' => 42 ] );
+```
+
+If the workflow is later cancelled, Queuety runs:
+
+1. `CancelSubscriptionCompensation`
+2. `DeleteRemoteUserCompensation`
+
+## Compensation handlers
+
+Compensation handlers implement `Contracts\Compensation`:
+
+```php
+use Queuety\Contracts\Compensation;
+
+final class DeleteRemoteUserCompensation implements Compensation {
+    public function handle( array $state ): void {
+        remote_api_delete_user( $state['remote_user_id'] );
+    }
+}
+```
+
+The handler receives the public workflow state as it looked immediately after the compensated step completed. Reserved internal keys are not included.
+
+## Cancellation vs. failure
+
+On explicit cancellation, completed step compensations always run before the optional `on_cancel()` handler.
+
+On failure, compensations only run if you opt in:
+
+```php
+Queuety::workflow( 'provision_account' )
+    ->then( CreateRemoteUserStep::class )
+    ->compensate_with( DeleteRemoteUserCompensation::class )
+    ->then( CreateSubscriptionStep::class )
+    ->compensate_with( CancelSubscriptionCompensation::class )
+    ->then( ChargeCardStep::class )
+    ->compensate_on_failure()
+    ->dispatch( $payload );
+```
+
+Without `compensate_on_failure()`, a failed workflow keeps its completed-step history intact and can be retried from the failed step.
+
+With `compensate_on_failure()`, completed step compensations run after the workflow is marked failed. After that, `retry_workflow()` throws because the workflow has already been compensated.
+
+## Supported step types
+
+Compensation can be attached to:
+
+- sequential `then()` steps
+- `parallel()` groups
+- `fan_out()` steps
+- `sub_workflow()` steps
+- `sleep()` timer steps
+- `wait_for_signal()` signal steps
+
+For `sub_workflow()` and `fan_out()`, the compensation snapshot is recorded after the nested or branched work has fully settled.
+
+## `on_cancel()` vs. compensation
+
+Use `compensate_with()` for undoing completed step side effects in reverse order.
+
+Use `on_cancel()` for one workflow-level cleanup hook that should run whenever the workflow is explicitly cancelled.

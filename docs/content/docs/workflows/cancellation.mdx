@@ -55,10 +55,11 @@ Queuety::cancel_workflow( $workflow_id );
 This method:
 
 1. Locks the workflow row
-2. Runs the `on_cancel` cleanup handler (if registered)
-3. Sets the workflow status to `cancelled`
-4. Buries all pending and processing jobs for the workflow with the message "Workflow cancelled"
-5. Logs a `workflow_cancelled` event
+2. Sets the workflow status to `cancelled`
+3. Buries all pending and processing jobs for the workflow with the message "Workflow cancelled"
+4. Runs completed-step compensations in reverse order (if any were registered via `compensate_with()`)
+5. Runs the `on_cancel` cleanup handler (if registered)
+6. Logs a `workflow_cancelled` event
 
 A `RuntimeException` is thrown if the workflow is already `completed` or `cancelled`.
 
@@ -81,7 +82,8 @@ wp queuety workflow cancel 42
 When a workflow is cancelled:
 
 - **Status** changes to `cancelled`
-- **Cleanup handler** runs synchronously inside the same database transaction
+- **Step compensations** run in reverse completion order if you attached them with `compensate_with()`
+- **Cleanup handler** runs after the workflow row has been marked `cancelled`
 - **Pending jobs** for the workflow are buried immediately
 - **Processing jobs** for the workflow are buried (they will fail when the worker tries to advance the workflow)
 - **Completed jobs** from prior steps are left as-is
@@ -93,7 +95,7 @@ When a workflow is cancelled:
 |---|---|---|
 | Trigger | A step exhausts its retry attempts | Explicit call to `cancel_workflow()` |
 | Status | `failed` | `cancelled` |
-| Can retry | Yes, via `retry_workflow()` | No |
+| Can retry | Yes, via `retry_workflow()`, unless the workflow has already been compensated | No |
 | Cleanup handler | Not called | Called if registered via `on_cancel()` |
 | Log event | `workflow_failed` | `workflow_cancelled` |
 

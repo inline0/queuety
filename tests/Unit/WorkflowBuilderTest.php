@@ -4,6 +4,7 @@ namespace Queuety\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
 use Queuety\Connection;
+use Queuety\Enums\JoinMode;
 use Queuety\Enums\Priority;
 use Queuety\Logger;
 use Queuety\Queue;
@@ -94,5 +95,66 @@ class WorkflowBuilderTest extends TestCase {
 		$this->expectException( \RuntimeException::class );
 
 		$builder->dispatch( array() );
+	}
+
+	public function test_compensate_with_throws_when_no_steps_exist(): void {
+		$builder = $this->make_builder();
+
+		$this->expectException( \RuntimeException::class );
+		$this->expectExceptionMessage( 'Cannot attach compensation before adding a step.' );
+
+		$builder->compensate_with( 'CleanupStep' );
+	}
+
+	public function test_fan_out_builds_serializable_definition(): void {
+		$builder = $this->make_builder();
+		$steps   = $builder
+			->fan_out(
+				items_key: 'tasks',
+				handler_class: 'ProcessTaskStep',
+				result_key: 'task_results',
+				join_mode: JoinMode::Quorum,
+				quorum: 2,
+				reducer_class: 'ReduceTasks',
+				name: 'task_fan_out',
+			)
+			->compensate_with( 'UndoFanOut' )
+			->build_steps();
+
+		$this->assertSame(
+			array(
+				'type'          => 'fan_out',
+				'name'          => 'task_fan_out',
+				'items_key'     => 'tasks',
+				'class'         => 'ProcessTaskStep',
+				'result_key'    => 'task_results',
+				'join_mode'     => 'quorum',
+				'quorum'        => 2,
+				'reducer_class' => 'ReduceTasks',
+				'compensation'  => 'UndoFanOut',
+			),
+			$steps[0]
+		);
+	}
+
+	public function test_special_steps_preserve_compensation_in_build_steps(): void {
+		$sub_builder = $this->make_builder( 'child' )->then( 'ChildStep' );
+
+		$timer_steps = $this->make_builder( 'timer' )
+			->sleep( seconds: 30 )
+			->compensate_with( 'UndoTimer' )
+			->build_steps();
+		$signal_steps = $this->make_builder( 'signal' )
+			->wait_for_signal( 'approved' )
+			->compensate_with( 'UndoSignal' )
+			->build_steps();
+		$sub_steps = $this->make_builder( 'parent' )
+			->sub_workflow( 'child', $sub_builder )
+			->compensate_with( 'UndoSubWorkflow' )
+			->build_steps();
+
+		$this->assertSame( 'UndoTimer', $timer_steps[0]['compensation'] );
+		$this->assertSame( 'UndoSignal', $signal_steps[0]['compensation'] );
+		$this->assertSame( 'UndoSubWorkflow', $sub_steps[0]['compensation'] );
 	}
 }

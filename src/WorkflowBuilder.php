@@ -7,6 +7,7 @@
 
 namespace Queuety;
 
+use Queuety\Enums\JoinMode;
 use Queuety\Enums\LogEvent;
 use Queuety\Enums\Priority;
 
@@ -82,6 +83,13 @@ class WorkflowBuilder {
 	private ?string $deadline_handler = null;
 
 	/**
+	 * Whether to automatically run compensations when the workflow fails.
+	 *
+	 * @var bool
+	 */
+	private bool $compensate_on_failure = false;
+
+	/**
 	 * Constructor.
 	 *
 	 * @param string     $name      Workflow name.
@@ -128,6 +136,45 @@ class WorkflowBuilder {
 			'type'     => 'parallel',
 			'handlers' => array_values( $handler_classes ),
 			'name'     => (string) $index,
+		);
+		return $this;
+	}
+
+	/**
+	 * Add a dynamic fan-out step.
+	 *
+	 * Reads an array of branch items from workflow state and dispatches one
+	 * branch job per item using the given handler. The step settles according
+	 * to the selected join mode and stores a structured aggregate in $result_key.
+	 *
+	 * @param string      $items_key      Public state key containing the branch items array.
+	 * @param string      $handler_class  Handler class implementing Contracts\FanOutHandler.
+	 * @param string|null $result_key     Public state key to store the settled aggregate under.
+	 * @param JoinMode    $join_mode      Join behaviour for the branches.
+	 * @param int|null    $quorum         Required successes when using JoinMode::Quorum.
+	 * @param string|null $reducer_class  Optional reducer class implementing Contracts\JoinReducer.
+	 * @param string|null $name           Optional step name.
+	 * @return self
+	 */
+	public function fan_out(
+		string $items_key,
+		string $handler_class,
+		?string $result_key = null,
+		JoinMode $join_mode = JoinMode::All,
+		?int $quorum = null,
+		?string $reducer_class = null,
+		?string $name = null,
+	): self {
+		$index         = count( $this->steps );
+		$this->steps[] = array(
+			'type'          => 'fan_out',
+			'name'          => $name ?? (string) $index,
+			'items_key'     => $items_key,
+			'class'         => $handler_class,
+			'result_key'    => $result_key,
+			'join_mode'     => $join_mode,
+			'quorum'        => $quorum,
+			'reducer_class' => $reducer_class,
 		);
 		return $this;
 	}
@@ -198,6 +245,36 @@ class WorkflowBuilder {
 			'signal_name' => $name,
 			'name'        => 'wait_for_' . $name,
 		);
+		return $this;
+	}
+
+	/**
+	 * Attach a compensation handler to the most recently added step.
+	 *
+	 * @param string $handler_class Fully qualified compensation handler class.
+	 * @return self
+	 * @throws \RuntimeException If the workflow has no steps yet.
+	 */
+	public function compensate_with( string $handler_class ): self {
+		if ( empty( $this->steps ) ) {
+			throw new \RuntimeException( 'Cannot attach compensation before adding a step.' );
+		}
+
+		$last_index                                 = count( $this->steps ) - 1;
+		$this->steps[ $last_index ]['compensation'] = $handler_class;
+
+		return $this;
+	}
+
+	/**
+	 * Automatically run step compensations when the workflow fails.
+	 *
+	 * Compensation also runs on explicit cancellation regardless of this flag.
+	 *
+	 * @return self
+	 */
+	public function compensate_on_failure(): self {
+		$this->compensate_on_failure = true;
 		return $this;
 	}
 
@@ -351,18 +428,33 @@ class WorkflowBuilder {
 					'sub_queue'        => $builder->get_queue(),
 					'sub_priority'     => $builder->get_priority()->value,
 					'sub_max_attempts' => $builder->get_max_attempts(),
+					'compensation'     => $step['compensation'] ?? null,
 				);
 			} elseif ( 'timer' === $step['type'] ) {
 				$result[] = array(
 					'type'          => 'timer',
 					'name'          => $step['name'],
 					'delay_seconds' => $step['delay_seconds'],
+					'compensation'  => $step['compensation'] ?? null,
+				);
+			} elseif ( 'fan_out' === $step['type'] ) {
+				$result[] = array(
+					'type'          => 'fan_out',
+					'name'          => $step['name'],
+					'items_key'     => $step['items_key'],
+					'class'         => $step['class'],
+					'result_key'    => $step['result_key'],
+					'join_mode'     => $step['join_mode']->value,
+					'quorum'        => $step['quorum'],
+					'reducer_class' => $step['reducer_class'],
+					'compensation'  => $step['compensation'] ?? null,
 				);
 			} elseif ( 'signal' === $step['type'] ) {
 				$result[] = array(
-					'type'        => 'signal',
-					'name'        => $step['name'],
-					'signal_name' => $step['signal_name'],
+					'type'         => 'signal',
+					'name'         => $step['name'],
+					'signal_name'  => $step['signal_name'],
+					'compensation' => $step['compensation'] ?? null,
 				);
 			} else {
 				$entry = array(
@@ -373,6 +465,9 @@ class WorkflowBuilder {
 					$entry['class'] = $step['class'];
 				} elseif ( 'parallel' === $step['type'] ) {
 					$entry['handlers'] = $step['handlers'];
+				}
+				if ( isset( $step['compensation'] ) ) {
+					$entry['compensation'] = $step['compensation'];
 				}
 				$result[] = $entry;
 			}
@@ -420,6 +515,10 @@ class WorkflowBuilder {
 
 		if ( null !== $this->deadline_handler ) {
 			$state['_on_deadline'] = $this->deadline_handler;
+		}
+
+		if ( $this->compensate_on_failure ) {
+			$state['_compensate_on_failure'] = true;
 		}
 
 		$deadline_at = null;
@@ -505,6 +604,16 @@ class WorkflowBuilder {
 				queue: $this->queue,
 				priority: $this->priority,
 				delay: $step_def['delay_seconds'] ?? 0,
+				max_attempts: $this->max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
+		} elseif ( 'fan_out' === $step_def['type'] ) {
+			$this->queue_ops->dispatch(
+				handler: '__queuety_fan_out',
+				payload: array( 'step_index' => $step_index ),
+				queue: $this->queue,
+				priority: $this->priority,
 				max_attempts: $this->max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,

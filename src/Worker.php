@@ -7,6 +7,7 @@
 
 namespace Queuety;
 
+use Queuety\Contracts\FanOutHandler;
 use Queuety\Contracts\Job as JobContract;
 use Queuety\Contracts\StreamingStep;
 use Queuety\Enums\BackoffStrategy;
@@ -374,6 +375,32 @@ class Worker {
 						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
 					)
 				);
+			} elseif ( $job->is_workflow_step() && '__queuety_fan_out' === $job->handler ) {
+				$state = $this->workflow->get_state( $job->workflow_id ) ?? array();
+
+				$placeholder_completed = $this->workflow->handle_fan_out_step(
+					workflow_id: $job->workflow_id,
+					job_id: $job->id,
+					step_index: $job->step_index,
+					workflow_state: $state,
+				);
+
+				if ( $placeholder_completed ) {
+					$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
+
+					$this->logger->log(
+						LogEvent::Completed,
+						array(
+							'job_id'         => $job->id,
+							'workflow_id'    => $job->workflow_id,
+							'step_index'     => $job->step_index,
+							'handler'        => $job->handler,
+							'queue'          => $job->queue,
+							'duration_ms'    => $duration_ms,
+							'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
+						)
+					);
+				}
 			} elseif ( $job->is_workflow_step() && '__queuety_timer' === $job->handler ) {
 				// Handle durable timer: the delay already happened via available_at.
 				// Mark the timer job as complete and advance the workflow.
@@ -508,6 +535,23 @@ class Worker {
 				if ( $job->is_workflow_step() && $handler instanceof StreamingStep ) {
 					// Streaming workflow step: stream chunks with persistence.
 					$this->process_streaming_step( $job, $handler, $start_time );
+				} elseif ( $job->is_workflow_step() && $handler instanceof FanOutHandler && $this->is_fan_out_workflow_job( $job ) ) {
+					$state       = $this->workflow->get_state( $job->workflow_id ) ?? array();
+					$branch_meta = $job->payload['__fan_out'] ?? array();
+					$output      = $handler->handle_item(
+						$state,
+						$branch_meta['item'] ?? null,
+						(int) ( $branch_meta['item_index'] ?? 0 ),
+					);
+
+					$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
+
+					$this->workflow->advance_step(
+						workflow_id: $job->workflow_id,
+						completed_job_id: $job->id,
+						step_output: $output,
+						duration_ms: $duration_ms,
+					);
 				} elseif ( $job->is_workflow_step() && $handler instanceof Step ) {
 					// Workflow step: load accumulated state and pass to handler.
 					$state  = $this->workflow->get_state( $job->workflow_id ) ?? array();
@@ -584,8 +628,12 @@ class Worker {
 			}
 
 			if ( $job->attempts >= $effective_max ) {
+				$is_fan_out_terminal = $job->is_workflow_step() && $this->is_fan_out_workflow_job( $job );
+
 				// Max attempts reached, bury the job.
-				$this->queue->bury( $job->id, $e->getMessage() );
+				if ( ! $is_fan_out_terminal ) {
+					$this->queue->bury( $job->id, $e->getMessage() );
+				}
 
 				// Call failed() hook on the job instance if available.
 				$this->call_failed_hook( $job, $job_instance, $e );
@@ -619,17 +667,30 @@ class Worker {
 
 				// If part of a workflow, mark the workflow as failed.
 				if ( $job->is_workflow_step() ) {
-					$this->workflow->fail( $job->workflow_id, $job->id, $e->getMessage() );
+					$workflow_failed = false;
 
-					$this->notify_webhook(
-						'workflow.failed',
-						array(
-							'workflow_id'   => $job->workflow_id,
-							'job_id'        => $job->id,
-							'handler'       => $job->handler,
-							'error_message' => $e->getMessage(),
-						)
-					);
+					if ( $is_fan_out_terminal ) {
+						$workflow_failed = $this->workflow->handle_fan_out_terminal_failure(
+							$job->workflow_id,
+							$job->id,
+							$e->getMessage(),
+						);
+					} else {
+						$this->workflow->fail( $job->workflow_id, $job->id, $e->getMessage() );
+						$workflow_failed = true;
+					}
+
+					if ( $workflow_failed ) {
+						$this->notify_webhook(
+							'workflow.failed',
+							array(
+								'workflow_id'   => $job->workflow_id,
+								'job_id'        => $job->id,
+								'handler'       => $job->handler,
+								'error_message' => $e->getMessage(),
+							)
+						);
+					}
 				}
 
 				// Record batch failure if part of a batch.
@@ -704,9 +765,9 @@ class Worker {
 		$count      = 0;
 
 		foreach ( $stale_jobs as $job ) {
-			$effective_max     = $job->max_attempts;
-			$backoff_strategy  = Config::retry_backoff();
-			$handler_backoff   = null;
+			$effective_max    = $job->max_attempts;
+			$backoff_strategy = Config::retry_backoff();
+			$handler_backoff  = null;
 
 			if ( $this->registry->is_job_class( $job->handler ) ) {
 				$job_props = $this->read_job_properties( $job->handler );
@@ -729,7 +790,10 @@ class Worker {
 			}
 
 			if ( $job->attempts >= $effective_max ) {
-				$this->queue->bury( $job->id, 'Stale: worker died without completing.' );
+					$is_fan_out_terminal = $job->is_workflow_step() && $this->is_fan_out_workflow_job( $job );
+				if ( ! $is_fan_out_terminal ) {
+					$this->queue->bury( $job->id, 'Stale: worker died without completing.' );
+				}
 
 				$this->logger->log(
 					LogEvent::Buried,
@@ -744,12 +808,20 @@ class Worker {
 				);
 
 				if ( $job->is_workflow_step() ) {
-					$this->workflow->fail( $job->workflow_id, $job->id, 'Stale: worker died without completing.' );
+					if ( $is_fan_out_terminal ) {
+						$this->workflow->handle_fan_out_terminal_failure(
+							$job->workflow_id,
+							$job->id,
+							'Stale: worker died without completing.',
+						);
+					} else {
+						$this->workflow->fail( $job->workflow_id, $job->id, 'Stale: worker died without completing.' );
+					}
 				}
 			} else {
 				if ( is_array( $handler_backoff ) ) {
-					$attempt_index   = min( $job->attempts - 1, count( $handler_backoff ) - 1 );
-					$backoff         = $handler_backoff[ max( 0, $attempt_index ) ];
+					$attempt_index = min( $job->attempts - 1, count( $handler_backoff ) - 1 );
+					$backoff       = $handler_backoff[ max( 0, $attempt_index ) ];
 				} else {
 					$backoff = Queue::calculate_backoff( $job->attempts, $backoff_strategy );
 				}
@@ -1004,6 +1076,24 @@ class Worker {
 			'max_attempts' => $metadata['max_attempts'],
 			'backoff'      => $metadata['backoff'],
 		);
+	}
+
+	/**
+	 * Whether the job belongs to a fan-out workflow step.
+	 *
+	 * @param Job $job Workflow job.
+	 * @return bool
+	 */
+	private function is_fan_out_workflow_job( Job $job ): bool {
+		if ( ! $job->is_workflow_step() || null === $job->step_index ) {
+			return false;
+		}
+
+		$state = $this->workflow->get_state( $job->workflow_id ) ?? array();
+		$steps = $state['_steps'] ?? array();
+		$step  = $steps[ $job->step_index ] ?? null;
+
+		return is_array( $step ) && 'fan_out' === ( $step['type'] ?? '' );
 	}
 
 	/**

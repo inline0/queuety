@@ -147,6 +147,16 @@ readonly class WorkflowTemplate {
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 			);
+		} elseif ( 'fan_out' === $type ) {
+			$queue_ops->dispatch(
+				handler: '__queuety_fan_out',
+				payload: array( 'step_index' => $step_index ),
+				queue: $this->queue,
+				priority: $this->priority,
+				max_attempts: $this->max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
 		} else {
 			$queue_ops->dispatch(
 				handler: $step_def['class'],

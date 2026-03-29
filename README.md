@@ -106,6 +106,27 @@ Queuety::workflow( 'approval_flow' )
 Queuety::signal( $workflow_id, 'approved', [ 'approved_by' => 'admin@example.com' ] );
 ```
 
+Build runtime-discovered branch work with compensation:
+
+```php
+use Queuety\Enums\JoinMode;
+
+Queuety::workflow( 'agent_run' )
+    ->then( PlanTasksStep::class )
+    ->fan_out(
+        items_key: 'tasks',
+        handler_class: ExecuteTaskStep::class,
+        result_key: 'task_results',
+        join_mode: JoinMode::Quorum,
+        quorum: 2,
+        reducer_class: SummarizeTaskResults::class,
+    )
+    ->compensate_with( ReleaseTaskLocks::class )
+    ->compensate_on_failure()
+    ->then( FinalizeRunStep::class )
+    ->dispatch( [ 'run_id' => 99 ] );
+```
+
 Dispatch a batch with callbacks:
 
 ```php
@@ -163,6 +184,8 @@ wp queuety work
 - **Job chaining** -- sequential job execution where each job depends on the previous one completing
 - **Durable timers** -- `sleep()` steps that survive process restarts and resume at the right time
 - **Signals** -- `wait_for_signal()` pauses a workflow until an external event arrives
+- **Dynamic fan-out** -- `fan_out()` expands runtime-discovered work with `All`, `FirstSuccess`, and `Quorum` join modes
+- **Step compensation** -- `compensate_with()` and `compensate_on_failure()` provide saga-style rollback hooks for completed steps
 - **Streaming steps** -- `StreamingStep` interface with `ChunkStore` for persisting streamed data chunk by chunk
 - **Cache layer** -- pluggable cache with `MemoryCache` and `ApcuCache` backends, auto-detected via `CacheFactory`
 - **Heartbeats** -- long-running steps send heartbeats to prevent premature stale-job recovery

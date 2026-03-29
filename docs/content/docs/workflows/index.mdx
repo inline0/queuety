@@ -128,12 +128,15 @@ The `on_cancel()` method registers a cleanup handler that runs when the workflow
 
 The `prune_state_after()` method enables automatic removal of old step outputs to keep the workflow state bounded. See [State Pruning](/docs/features/state-pruning).
 
+Use `compensate_with()` to attach a per-step compensation handler. Use `compensate_on_failure()` when you want completed step compensations to run automatically after a workflow failure, not just on explicit cancellation. See [Compensation](/docs/workflows/compensation).
+
 ## Step types
 
-Queuety supports seven types of steps within a workflow:
+Queuety supports eight types of steps within a workflow:
 
 - [Sequential chains](/docs/workflows/chains) using `->then()` for one-at-a-time execution
 - [Parallel groups](/docs/workflows/parallel) using `->parallel()` for concurrent execution
+- [Dynamic fan-out](/docs/workflows/fan-out) using `->fan_out()` for runtime-discovered branch work and explicit join semantics
 - [Conditional branching](/docs/workflows/conditional) using named steps and `_goto`
 - [Sub-workflows](/docs/workflows/sub-workflows) using `->sub_workflow()` for nested composition
 - [Durable timers](/docs/workflows/timers) using `->sleep()` for time-based delays

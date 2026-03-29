@@ -1,0 +1,116 @@
+---
+title: Dynamic Fan-Out
+description: Expand workflow work at runtime and join it back together with explicit semantics.
+---
+
+# Dynamic Fan-Out
+
+Use `->fan_out()` when the workflow does not know its branch count at build time. Queuety reads an array from workflow state, dispatches one branch job per item, and advances only when the configured join condition is satisfied.
+
+## The `->fan_out()` method
+
+```php
+use Queuety\Contracts\FanOutHandler;
+use Queuety\Contracts\JoinReducer;
+use Queuety\Enums\JoinMode;
+use Queuety\Queuety;
+
+Queuety::workflow( 'index_site' )
+    ->then( PlanPagesStep::class )
+    ->fan_out(
+        items_key: 'pages',
+        handler_class: IndexPageStep::class,
+        result_key: 'page_results',
+        join_mode: JoinMode::Quorum,
+        quorum: 2,
+        reducer_class: IndexSummaryReducer::class,
+        name: 'index_pages',
+    )
+    ->then( PublishIndexStep::class )
+    ->dispatch( [ 'site_id' => 42 ] );
+```
+
+The planner step writes `pages` into workflow state. The fan-out step reads that array and dispatches one branch job per item.
+
+## Branch handlers
+
+Fan-out branch handlers implement `Contracts\FanOutHandler`:
+
+```php
+use Queuety\Contracts\FanOutHandler;
+
+final class IndexPageStep implements FanOutHandler {
+    public function handle_item( array $state, mixed $item, int $index ): array {
+        $page = is_array( $item ) ? $item : [ 'url' => (string) $item ];
+
+        return [
+            'url' => $page['url'],
+            'title' => fetch_title( $page['url'] ),
+            'index' => $index,
+        ];
+    }
+
+    public function config(): array {
+        return [
+            'max_attempts' => 3,
+            'backoff' => [5, 30, 120],
+        ];
+    }
+}
+```
+
+`$state` contains the full workflow state, `$item` is the individual fan-out item, and `$index` is its zero-based position.
+
+## Join modes
+
+`JoinMode::All`
+
+The step only settles after every branch succeeds. Any permanent branch failure makes the fan-out step fail.
+
+`JoinMode::FirstSuccess`
+
+The step settles as soon as the first branch succeeds. Remaining active branches are buried as superseded.
+
+`JoinMode::Quorum`
+
+The step settles when at least `quorum` branches succeed. If the remaining branches can no longer satisfy the quorum, the workflow fails.
+
+## Reducers
+
+By default Queuety stores a structured aggregate under `result_key`:
+
+- `mode`
+- `quorum`
+- `total`
+- `succeeded`
+- `failed`
+- `winner`
+- `results`
+- `failures`
+
+If you want a custom summary, pass a reducer class implementing `Contracts\JoinReducer`:
+
+```php
+use Queuety\Contracts\JoinReducer;
+
+final class IndexSummaryReducer implements JoinReducer {
+    public function reduce( array $state, array $fan_out ): array {
+        return [
+            'indexed_count' => count( $fan_out['results'] ),
+            'winning_url' => $fan_out['winner']['output']['url'] ?? null,
+        ];
+    }
+}
+```
+
+Reducer output is merged into workflow state like any other step output. It may also return `_goto` to branch after the fan-out settles.
+
+## Retry behavior
+
+Fan-out branches retry independently according to the branch handler's `config()`. If the fan-out step fails and you call `retry_workflow()`, Queuety re-expands the fan-out step and only requeues branches that are still missing or failed. Successful branch results stay in workflow state.
+
+## Choosing between `parallel()` and `fan_out()`
+
+Use `parallel()` when the branch list is fixed in code.
+
+Use `fan_out()` when the branch list is discovered at runtime from workflow state and you need join modes like first-success or quorum.

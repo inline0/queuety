@@ -7,6 +7,7 @@
 
 namespace Queuety;
 
+use Queuety\Contracts\FanOutHandler;
 use Queuety\Attributes\QueuetyHandler;
 use Queuety\Attributes\QueuetyStep;
 use Queuety\Contracts\StreamingStep;
@@ -54,8 +55,8 @@ class HandlerMetadata {
 
 		$handler_attrs = $reflection->getAttributes( QueuetyHandler::class );
 		if ( ! empty( $handler_attrs ) ) {
-			$attr                    = $handler_attrs[0]->newInstance();
-			$defaults['queue']       = $attr->queue;
+			$attr                     = $handler_attrs[0]->newInstance();
+			$defaults['queue']        = $attr->queue;
 			$defaults['max_attempts'] = $attr->max_attempts;
 		}
 
@@ -67,6 +68,7 @@ class HandlerMetadata {
 
 		$implements_configurable = $reflection->implementsInterface( Handler::class )
 			|| $reflection->implementsInterface( Step::class )
+			|| $reflection->implementsInterface( FanOutHandler::class )
 			|| $reflection->implementsInterface( StreamingStep::class );
 
 		if ( ! $implements_configurable ) {

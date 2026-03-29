@@ -253,9 +253,12 @@ $workflow_id = Queuety::workflow( 'generate_report' )
 |---|---|
 | `then( string $class, ?string $name )` | Add a sequential step. Optional name for conditional branching. |
 | `parallel( array $classes )` | Add a parallel step group. |
+| `fan_out( string $items_key, string $handler_class, ?string $result_key = null, JoinMode $join_mode = JoinMode::All, ?int $quorum = null, ?string $reducer_class = null, ?string $name = null )` | Add a dynamic fan-out step that expands one branch job per item in workflow state. |
 | `sub_workflow( string $name, WorkflowBuilder $builder )` | Add a sub-workflow step. |
 | `sleep( int $seconds, int $minutes, int $hours, int $days )` | Add a durable timer step. All durations are summed. |
 | `wait_for_signal( string $name )` | Add a signal wait step. Pauses until the named signal is received. |
+| `compensate_with( string $class )` | Attach a compensation handler to the most recently added step. |
+| `compensate_on_failure()` | Run completed-step compensations automatically when the workflow fails. |
 | `on_queue( string $queue )` | Set the queue for all steps. |
 | `with_priority( Priority $priority )` | Set the priority for all steps. |
 | `max_attempts( int $max )` | Set max retry attempts per step. |
@@ -285,6 +288,8 @@ Retry a failed workflow from its failed step.
 ```php
 Queuety::retry_workflow( $workflow_id );
 ```
+
+Throws `RuntimeException` if the workflow has already been compensated after a failure.
 
 ### `Queuety::pause_workflow( $workflow_id )`
 
@@ -685,6 +690,43 @@ interface Step {
 }
 ```
 
+### `Contracts\FanOutHandler`
+
+Interface for dynamic fan-out branch handlers.
+
+```php
+namespace Queuety\Contracts;
+
+interface FanOutHandler {
+    public function handle_item( array $state, mixed $item, int $index ): array;
+    public function config(): array;
+}
+```
+
+### `Contracts\JoinReducer`
+
+Optional reducer for fan-out results.
+
+```php
+namespace Queuety\Contracts;
+
+interface JoinReducer {
+    public function reduce( array $state, array $fan_out ): array;
+}
+```
+
+### `Contracts\Compensation`
+
+Interface for step compensation handlers.
+
+```php
+namespace Queuety\Contracts;
+
+interface Compensation {
+    public function handle( array $state ): void;
+}
+```
+
 ### `Contracts\Job`
 
 Interface for self-contained dispatchable job classes. Job classes encapsulate their payload as public properties and execution logic in `handle()`.
@@ -922,6 +964,16 @@ enum BackoffStrategy: string {
     case Fixed       = 'fixed';
     case Linear      = 'linear';
     case Exponential = 'exponential';
+}
+```
+
+### `JoinMode`
+
+```php
+enum JoinMode: string {
+    case All = 'all';
+    case FirstSuccess = 'first_success';
+    case Quorum = 'quorum';
 }
 ```
 

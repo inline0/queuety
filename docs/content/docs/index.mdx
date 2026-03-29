@@ -75,6 +75,8 @@ wp queuety work
 - **Pluggable cache layer.** `CacheFactory` auto-detects APCu or falls back to an in-memory cache. Custom backends implement `Contracts\Cache`. Used internally for rate-limiter lookups and queue state.
 - **Batching and chaining.** Dispatch groups of jobs with `then`/`catch`/`finally` callbacks and progress tracking, or chain jobs sequentially where each depends on the previous one completing.
 - **Durable timers and signals.** `sleep()` adds process-restart-safe delays. `wait_for_signal()` pauses a workflow until an external event arrives.
+- **Dynamic fan-out.** `fan_out()` expands runtime-discovered branch work from workflow state and supports all-success, first-success, and quorum joins.
+- **Step compensation.** `compensate_with()` and `compensate_on_failure()` provide rollback hooks for completed steps when workflows are cancelled or fail.
 - **Heartbeats.** Long-running steps send heartbeats to prevent the stale-job recovery system from reclaiming active work.
 - **Workflow event log.** Every step transition is recorded with a full state snapshot, enabling time-travel debugging via `workflow_state_at()`.
 - **Parallel steps.** Run steps concurrently and wait for all to complete before advancing.

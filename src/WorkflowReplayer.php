@@ -206,6 +206,16 @@ class WorkflowReplayer {
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 			);
+		} elseif ( 'fan_out' === $type ) {
+			$queue->dispatch(
+				handler: '__queuety_fan_out',
+				payload: array( 'step_index' => $step_index ),
+				queue: $queue_name,
+				priority: $priority,
+				max_attempts: $max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
 		} elseif ( 'signal' === $type ) {
 			$queue->dispatch(
 				handler: '__queuety_signal',
