@@ -1035,7 +1035,7 @@ class Worker {
 			} else {
 				$handler->handle( $job, $exception );
 			}
-		} catch ( \Throwable ) {
+		} catch ( \Throwable ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Chain catch handlers are best-effort only.
 		}
 	}
 

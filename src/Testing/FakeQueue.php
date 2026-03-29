@@ -43,17 +43,17 @@ class FakeQueue extends Queue {
 	/**
 	 * Record a synthetic dispatch and return a fake job ID.
 	 *
-	 * @param string        $handler      Handler name or class.
-	 * @param array         $payload      Job payload.
-	 * @param string        $queue        Queue name.
-	 * @param Priority      $priority     Job priority.
-	 * @param int           $delay        Delay before availability.
-	 * @param int           $max_attempts Maximum attempts.
-	 * @param int|null      $workflow_id  Parent workflow ID.
-	 * @param int|null      $step_index   Step index within the workflow.
-	 * @param bool          $unique       Whether the job is unique.
-	 * @param int|null      $depends_on   Dependency job ID.
-	 * @param int|null      $batch_id     Parent batch ID.
+	 * @param string   $handler      Handler name or class.
+	 * @param array    $payload      Job payload.
+	 * @param string   $queue        Queue name.
+	 * @param Priority $priority     Job priority.
+	 * @param int      $delay        Delay before availability.
+	 * @param int      $max_attempts Maximum attempts.
+	 * @param int|null $workflow_id  Parent workflow ID.
+	 * @param int|null $step_index   Step index within the workflow.
+	 * @param bool     $unique       Whether the job is unique.
+	 * @param int|null $depends_on   Dependency job ID.
+	 * @param int|null $batch_id     Parent batch ID.
 	 * @return int
 	 */
 	public function dispatch(

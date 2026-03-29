@@ -75,6 +75,7 @@ class BatchManager {
 	 * and fires the then/finally callbacks.
 	 *
 	 * @param int $batch_id Batch ID.
+	 * @throws \Throwable If the transaction fails.
 	 */
 	public function record_completion( int $batch_id ): void {
 		$table = $this->conn->table( Config::table_batches() );
@@ -142,6 +143,7 @@ class BatchManager {
 	 *
 	 * @param int $batch_id Batch ID.
 	 * @param int $job_id   The failed job ID.
+	 * @throws \Throwable If the transaction fails.
 	 */
 	public function record_failure( int $batch_id, int $job_id ): void {
 		$table = $this->conn->table( Config::table_batches() );
