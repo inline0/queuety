@@ -7,6 +7,7 @@
 
 namespace Queuety\Tests\Integration;
 
+use Queuety\Config;
 use Queuety\Enums\Priority;
 use Queuety\Enums\WaitMode;
 use Queuety\Enums\WorkflowStatus;
