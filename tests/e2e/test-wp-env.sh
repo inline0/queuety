@@ -97,16 +97,31 @@ fi
 
 # Start wp-env.
 echo "Starting wp-env..."
-cd "$PROJECT_DIR" && npx wp-env start 2>/dev/null
+set +e
+WP_ENV_START_OUT="$(cd "$PROJECT_DIR" && npx wp-env start 2>&1)"
+WP_ENV_START_STATUS=$?
+set -e
+printf '%s\n' "$WP_ENV_START_OUT"
 
 # Wait for WordPress to be ready.
 echo "Waiting for WordPress..."
+WP_READY=0
 for i in $(seq 1 30); do
     if curl -s -o /dev/null -w "%{http_code}" http://localhost:8888/ | grep -q "200\|301\|302"; then
+        WP_READY=1
         break
     fi
     sleep 1
 done
+
+if [ "$WP_READY" -ne 1 ]; then
+    fail "wp-env startup" "WordPress did not become ready on http://localhost:8888/"
+    exit 1
+fi
+
+if [ "$WP_ENV_START_STATUS" -ne 0 ]; then
+    echo "wp-env start exited with status $WP_ENV_START_STATUS after the environment became ready."
+fi
 
 echo ""
 echo "--- Plugin Activation ---"
@@ -237,9 +252,19 @@ if [ -n "$WF_ID" ] && [ "$WF_ID" != "0" ]; then
     WF_PAUSED=$(wp_cli queuety workflow status "$WF_ID" 2>/dev/null || true)
     assert_contains "$WF_PAUSED" "paused" "workflow is paused"
 
+    # Process the current step while paused so resume can enqueue the next step.
+    wp_cli eval "Queuety\\Queuety::worker()->flush();" > /dev/null 2>&1 || true
+
+    WF_AFTER_PAUSED_FLUSH=$(wp_cli queuety workflow status "$WF_ID" 2>/dev/null || true)
+    assert_contains "$WF_AFTER_PAUSED_FLUSH" "paused" "workflow stays paused after current step finishes"
+    assert_contains "$WF_AFTER_PAUSED_FLUSH" "1/2" "workflow advanced while paused without enqueuing the next step"
+
     # Test: workflow resume.
     RESUME_OUT=$(wp_cli queuety workflow resume "$WF_ID" 2>/dev/null || true)
     assert_contains "$RESUME_OUT" "resumed" "workflow resume succeeds"
+
+    WF_RESUMED=$(wp_cli queuety workflow status "$WF_ID" 2>/dev/null || true)
+    assert_contains "$WF_RESUMED" "running" "workflow is running after resume"
 else
     fail "workflow dispatch via PHP API" "Could not create workflow"
 fi

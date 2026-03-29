@@ -53,7 +53,7 @@ php -r "
     \$pending = Queuety::dispatch('test_handler', ['key' => 'value']);
     \$job_id = \$pending->id();
     assert(\$job_id > 0, 'Job ID should be positive');
-    echo \"PASS: dispatch (job #{$job_id})\n\";
+    echo \"PASS: dispatch (job #\" . \$job_id . \")\n\";
 
     // Test 2: Stats show 1 pending.
     \$stats = Queuety::stats();

@@ -156,26 +156,26 @@ php -r "
         ->then(Step3::class)
         ->dispatch([]);
 
-    // Process step 0.
-    \$worker->flush('default');
-
-    // Pause before step 1 runs.
+    // Pause before step 0 completes so the current step can finish, but the next
+    // step is not enqueued until resume.
     Queuety::pause_workflow(\$wf_id2);
     \$status = Queuety::workflow_status(\$wf_id2);
     assert(\$status->status === WorkflowStatus::Paused, 'Should be paused');
 
-    // Step 1 is pending but workflow is paused, worker processes step 1 but won't enqueue step 2.
+    // Process step 0 while paused. The workflow advances, but step 1 is not enqueued yet.
     \$worker->flush('default');
     \$status = Queuety::workflow_status(\$wf_id2);
-    // After step 1 completes, advance_step checks for paused and doesn't enqueue step 2.
-    assert(\$status->current_step === 2, 'Should have advanced to step 2 position');
+    assert(\$status->status === WorkflowStatus::Paused, 'Should remain paused');
+    assert(\$status->current_step === 1, 'Should have advanced to step 1 position');
+    assert(\$queue_ops->claim('default') === null, 'Next step should not be enqueued while paused');
 
     // Resume.
     Queuety::resume_workflow(\$wf_id2);
     \$status = Queuety::workflow_status(\$wf_id2);
     assert(\$status->status === WorkflowStatus::Running, 'Should be running again');
 
-    // Process remaining.
+    // Process remaining steps.
+    \$worker->flush('default');
     \$worker->flush('default');
     \$status = Queuety::workflow_status(\$wf_id2);
     assert(\$status->status === WorkflowStatus::Completed, 'Should complete after resume');
