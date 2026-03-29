@@ -466,6 +466,39 @@ class Queuety {
 	}
 
 	/**
+	 * Send an approval signal to a workflow.
+	 *
+	 * @param int    $workflow_id Workflow ID.
+	 * @param array  $data        Optional approval payload.
+	 * @param string $signal_name Approval signal name.
+	 */
+	public static function approve_workflow( int $workflow_id, array $data = array(), string $signal_name = 'approval' ): void {
+		self::signal( $workflow_id, $signal_name, $data );
+	}
+
+	/**
+	 * Send a rejection signal to a workflow.
+	 *
+	 * @param int    $workflow_id Workflow ID.
+	 * @param array  $data        Optional rejection payload.
+	 * @param string $signal_name Rejection signal name.
+	 */
+	public static function reject_workflow( int $workflow_id, array $data = array(), string $signal_name = 'rejected' ): void {
+		self::signal( $workflow_id, $signal_name, $data );
+	}
+
+	/**
+	 * Send structured human input to a workflow.
+	 *
+	 * @param int    $workflow_id Workflow ID.
+	 * @param array  $data        Input payload.
+	 * @param string $signal_name Input signal name.
+	 */
+	public static function submit_workflow_input( int $workflow_id, array $data = array(), string $signal_name = 'input' ): void {
+		self::signal( $workflow_id, $signal_name, $data );
+	}
+
+	/**
 	 * Cancel a workflow and run any cleanup handlers.
 	 *
 	 * @param int $workflow_id Workflow ID.

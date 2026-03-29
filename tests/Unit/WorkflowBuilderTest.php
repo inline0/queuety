@@ -188,16 +188,35 @@ class WorkflowBuilderTest extends TestCase {
 
 		$this->assertSame(
 			array(
-				'type'         => 'signal',
-				'name'         => 'wait_gate',
-				'signal_name'  => 'approved',
-				'signal_names' => array( 'approved', 'reviewed' ),
-				'wait_mode'    => 'any',
-				'result_key'   => 'gate_result',
-				'compensation' => null,
+				'type'            => 'signal',
+				'name'            => 'wait_gate',
+				'signal_name'     => 'approved',
+				'signal_names'    => array( 'approved', 'reviewed' ),
+				'wait_mode'       => 'any',
+				'result_key'      => 'gate_result',
+				'match_payload'   => array(),
+				'correlation_key' => null,
+				'decision_map'    => null,
+				'compensation'    => null,
 			),
 			$steps[0]
 		);
+	}
+
+	public function test_wait_for_signal_supports_matching_and_correlation(): void {
+		$steps = $this->make_builder( 'signals' )
+			->wait_for_signal(
+				name: 'approval',
+				result_key: 'approval_data',
+				step_name: 'await_review',
+				match_payload: array( 'source' => 'moderation' ),
+				correlation_key: 'review_id',
+			)
+			->build_steps();
+
+		$this->assertSame( 'signal', $steps[0]['type'] );
+		$this->assertSame( array( 'source' => 'moderation' ), $steps[0]['match_payload'] );
+		$this->assertSame( 'review_id', $steps[0]['correlation_key'] );
 	}
 
 	public function test_await_approval_uses_namespaced_result_key(): void {
@@ -208,6 +227,28 @@ class WorkflowBuilderTest extends TestCase {
 		$this->assertSame( 'signal', $steps[0]['type'] );
 		$this->assertSame( 'approval', $steps[0]['signal_name'] );
 		$this->assertSame( 'approval', $steps[0]['result_key'] );
+	}
+
+	public function test_await_decision_builds_decision_mapping(): void {
+		$steps = $this->make_builder( 'approval' )
+			->await_decision(
+				approve_signal: 'approved',
+				reject_signal: 'rejected',
+				result_key: 'review',
+				name: 'await_review_decision',
+			)
+			->build_steps();
+
+		$this->assertSame( 'signal', $steps[0]['type'] );
+		$this->assertSame( 'any', $steps[0]['wait_mode'] );
+		$this->assertSame(
+			array(
+				'approved' => 'approved',
+				'rejected' => 'rejected',
+			),
+			$steps[0]['decision_map']
+		);
+		$this->assertSame( 'review', $steps[0]['result_key'] );
 	}
 
 	public function test_await_workflows_builds_serializable_definition(): void {
@@ -270,5 +311,24 @@ class WorkflowBuilderTest extends TestCase {
 		$this->assertSame( 'agent_task', $steps[0]['workflow_definition']['name'] );
 		$this->assertSame( 'agent-task.v1', $steps[0]['workflow_definition']['definition_version'] );
 		$this->assertSame( 64, strlen( $steps[0]['workflow_definition']['definition_hash'] ) );
+	}
+
+	public function test_spawn_agents_alias_uses_agent_defaults(): void {
+		$child = $this->make_builder( 'agent_task' )
+			->then( 'ProcessTopicStep' );
+
+		$steps = $this->make_builder( 'planner' )
+			->spawn_agents( 'tasks', $child )
+			->await_agents()
+			->build_steps();
+
+		$this->assertSame( 'spawn_workflows', $steps[0]['type'] );
+		$this->assertSame( 'spawn_agents', $steps[0]['name'] );
+		$this->assertSame( 'agent_workflow_ids', $steps[0]['result_key'] );
+		$this->assertSame( 'agent_task', $steps[0]['payload_key'] );
+
+		$this->assertSame( 'workflow_wait', $steps[1]['type'] );
+		$this->assertSame( 'agent_workflow_ids', $steps[1]['workflow_id_key'] );
+		$this->assertSame( 'agent_results', $steps[1]['result_key'] );
 	}
 }

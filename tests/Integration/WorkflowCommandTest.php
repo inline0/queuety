@@ -236,6 +236,27 @@ class WorkflowCommandTest extends TestCase {
 		$this->assertTrue( true );
 	}
 
+	public function test_approve_reject_and_input_commands_store_signals(): void {
+		$this->skip_without_db();
+
+		$wf_id   = $this->create_test_workflow();
+		$sig_tbl = Queuety::connection()->table( Config::table_signals() );
+
+		$this->cmd->approve( array( $wf_id ), array( 'data' => '{"by":"editor"}' ) );
+		$this->cmd->reject( array( $wf_id ), array( 'data' => '{"reason":"bad"}' ) );
+		$this->cmd->input( array( $wf_id ), array( 'data' => '{"note":"revise"}' ) );
+
+		$stmt = Queuety::connection()->pdo()->prepare(
+			"SELECT signal_name FROM {$sig_tbl} WHERE workflow_id = :workflow_id ORDER BY id ASC"
+		);
+		$stmt->execute( array( 'workflow_id' => $wf_id ) );
+
+		$this->assertSame(
+			array( 'approval', 'rejected', 'input' ),
+			array_map( static fn( array $row ): string => $row['signal_name'], $stmt->fetchAll() )
+		);
+	}
+
 	// -- state_at() shows state snapshot -------------------------------------
 
 	public function test_state_at_shows_snapshot(): void {

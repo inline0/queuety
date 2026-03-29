@@ -275,14 +275,25 @@ class WorkflowBuilder {
 	 * @param string      $name       The signal name to wait for.
 	 * @param string|null $result_key Optional state key for the signal payload.
 	 * @param string|null $step_name  Optional step name.
+	 * @param array       $match_payload Optional exact payload subset that signals must contain.
+	 * @param string|null $correlation_key Optional state/payload key that must match for a signal to count.
 	 * @return self
 	 */
 	public function wait_for_signal(
 		string $name,
 		?string $result_key = null,
 		?string $step_name = null,
+		array $match_payload = array(),
+		?string $correlation_key = null,
 	): self {
-		return $this->wait_for_signals( array( $name ), WaitMode::All, $result_key, $step_name ?? 'wait_for_' . $name );
+		return $this->wait_for_signals(
+			array( $name ),
+			WaitMode::All,
+			$result_key,
+			$step_name ?? 'wait_for_' . $name,
+			$match_payload,
+			$correlation_key,
+		);
 	}
 
 	/**
@@ -292,6 +303,8 @@ class WorkflowBuilder {
 	 * @param WaitMode    $mode         Whether all signals or any signal should unblock the workflow.
 	 * @param string|null $result_key   Optional state key for the collected signal payloads.
 	 * @param string|null $name         Optional step name.
+	 * @param array       $match_payload Optional exact payload subset that signals must contain.
+	 * @param string|null $correlation_key Optional state/payload key that must match for a signal to count.
 	 * @return self
 	 * @throws \RuntimeException If no signal names are provided.
 	 */
@@ -300,6 +313,8 @@ class WorkflowBuilder {
 		WaitMode $mode = WaitMode::All,
 		?string $result_key = null,
 		?string $name = null,
+		array $match_payload = array(),
+		?string $correlation_key = null,
 	): self {
 		$normalized = array_values(
 			array_filter(
@@ -317,11 +332,13 @@ class WorkflowBuilder {
 
 		$index         = count( $this->steps );
 		$this->steps[] = array(
-			'type'         => 'signal',
-			'signal_names' => $normalized,
-			'wait_mode'    => $mode,
-			'result_key'   => $result_key,
-			'name'         => $name ?? ( 1 === count( $normalized ) ? 'wait_for_' . $normalized[0] : 'wait_for_signals_' . $index ),
+			'type'            => 'signal',
+			'signal_names'    => $normalized,
+			'wait_mode'       => $mode,
+			'result_key'      => $result_key,
+			'match_payload'   => $match_payload,
+			'correlation_key' => $correlation_key,
+			'name'            => $name ?? ( 1 === count( $normalized ) ? 'wait_for_' . $normalized[0] : 'wait_for_signals_' . $index ),
 		);
 		return $this;
 	}
@@ -332,19 +349,65 @@ class WorkflowBuilder {
 	 * @param string      $signal_name Approval signal name.
 	 * @param string|null $result_key  Optional state key for the approval payload.
 	 * @param string|null $name        Optional step name.
+	 * @param array       $match_payload Optional exact payload subset that signals must contain.
+	 * @param string|null $correlation_key Optional state/payload key that must match for a signal to count.
 	 * @return self
 	 */
 	public function await_approval(
 		string $signal_name = 'approval',
 		?string $result_key = 'approval',
 		?string $name = null,
+		array $match_payload = array(),
+		?string $correlation_key = null,
 	): self {
 		return $this->wait_for_signals(
 			array( $signal_name ),
 			WaitMode::All,
 			$result_key,
-			$name ?? 'await_approval'
+			$name ?? 'await_approval',
+			$match_payload,
+			$correlation_key,
 		);
+	}
+
+	/**
+	 * Add a signal wait step for an explicit approve/reject decision.
+	 *
+	 * The stored result contains `outcome`, `signal`, and `data` keys so later
+	 * steps can branch on the human decision without hand-parsing raw signals.
+	 *
+	 * @param string      $approve_signal  Approval signal name.
+	 * @param string      $reject_signal   Rejection signal name.
+	 * @param string|null $result_key      Optional state key for the decision payload.
+	 * @param string|null $name            Optional step name.
+	 * @param array       $match_payload   Optional exact payload subset that signals must contain.
+	 * @param string|null $correlation_key Optional state/payload key that must match for a signal to count.
+	 * @return self
+	 */
+	public function await_decision(
+		string $approve_signal = 'approved',
+		string $reject_signal = 'rejected',
+		?string $result_key = 'decision',
+		?string $name = null,
+		array $match_payload = array(),
+		?string $correlation_key = null,
+	): self {
+		$this->wait_for_signals(
+			array( $approve_signal, $reject_signal ),
+			WaitMode::Any,
+			$result_key,
+			$name ?? 'await_decision',
+			$match_payload,
+			$correlation_key,
+		);
+
+		$last_index = count( $this->steps ) - 1;
+		$this->steps[ $last_index ]['decision_map'] = array(
+			$approve_signal => 'approved',
+			$reject_signal  => 'rejected',
+		);
+
+		return $this;
 	}
 
 	/**
@@ -353,18 +416,24 @@ class WorkflowBuilder {
 	 * @param string      $signal_name Input signal name.
 	 * @param string|null $result_key  Optional state key for the input payload.
 	 * @param string|null $name        Optional step name.
+	 * @param array       $match_payload Optional exact payload subset that signals must contain.
+	 * @param string|null $correlation_key Optional state/payload key that must match for a signal to count.
 	 * @return self
 	 */
 	public function await_input(
 		string $signal_name = 'input',
 		?string $result_key = 'input',
 		?string $name = null,
+		array $match_payload = array(),
+		?string $correlation_key = null,
 	): self {
 		return $this->wait_for_signals(
 			array( $signal_name ),
 			WaitMode::All,
 			$result_key,
-			$name ?? 'await_input'
+			$name ?? 'await_input',
+			$match_payload,
+			$correlation_key,
 		);
 	}
 
@@ -485,6 +554,61 @@ class WorkflowBuilder {
 		);
 
 		return $this;
+	}
+
+	/**
+	 * Add an agent handoff step for runtime-discovered agent tasks.
+	 *
+	 * This is a semantic alias for spawn_workflows() with defaults geared toward
+	 * planner/executor flows.
+	 *
+	 * @param string          $items_key         Public state key containing agent task items.
+	 * @param WorkflowBuilder $workflow_builder  Workflow definition for each spawned agent run.
+	 * @param string          $result_key        Public state key to store spawned agent workflow IDs under.
+	 * @param string          $payload_key       Key used when scalar items are wrapped for the child workflow.
+	 * @param bool            $inherit_state     Whether the agent workflow inherits the parent public state.
+	 * @param string|null     $name              Optional step name.
+	 * @return self
+	 */
+	public function spawn_agents(
+		string $items_key,
+		WorkflowBuilder $workflow_builder,
+		string $result_key = 'agent_workflow_ids',
+		string $payload_key = 'agent_task',
+		bool $inherit_state = true,
+		?string $name = null,
+	): self {
+		return $this->spawn_workflows(
+			$items_key,
+			$workflow_builder,
+			$result_key,
+			$payload_key,
+			$inherit_state,
+			$name ?? 'spawn_agents',
+		);
+	}
+
+	/**
+	 * Wait for one or more spawned agent workflows.
+	 *
+	 * @param array|string $workflows  Agent workflow IDs or a public state key that resolves to IDs.
+	 * @param WaitMode     $mode       Whether all agent workflows or any agent workflow should unblock the step.
+	 * @param string|null  $result_key Optional state key for completed agent workflow state.
+	 * @param string|null  $name       Optional step name.
+	 * @return self
+	 */
+	public function await_agents(
+		array|string $workflows = 'agent_workflow_ids',
+		WaitMode $mode = WaitMode::All,
+		?string $result_key = 'agent_results',
+		?string $name = null,
+	): self {
+		return $this->await_workflows(
+			$workflows,
+			$mode,
+			$result_key,
+			$name ?? 'await_agents',
+		);
 	}
 
 	/**
@@ -775,13 +899,16 @@ class WorkflowBuilder {
 				);
 			} elseif ( 'signal' === $step['type'] ) {
 				$result[] = array(
-					'type'         => 'signal',
-					'name'         => $step['name'],
-					'signal_name'  => $step['signal_names'][0],
-					'signal_names' => $step['signal_names'],
-					'wait_mode'    => $step['wait_mode']->value,
-					'result_key'   => $step['result_key'],
-					'compensation' => $step['compensation'] ?? null,
+					'type'            => 'signal',
+					'name'            => $step['name'],
+					'signal_name'     => $step['signal_names'][0],
+					'signal_names'    => $step['signal_names'],
+					'wait_mode'       => $step['wait_mode']->value,
+					'result_key'      => $step['result_key'],
+					'match_payload'   => $step['match_payload'] ?? array(),
+					'correlation_key' => $step['correlation_key'] ?? null,
+					'decision_map'    => $step['decision_map'] ?? null,
+					'compensation'    => $step['compensation'] ?? null,
 				);
 			} elseif ( 'workflow_wait' === $step['type'] ) {
 				$result[] = array(

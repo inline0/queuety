@@ -249,6 +249,8 @@ wp queuety workflow status <id>
 |---|---|
 | `<id>` | Workflow ID (required) |
 
+`status` prints the current step, optional step name, version/hash metadata, wait mode, and a `WaitInfo` JSON blob when the workflow is currently blocked on signals or dependencies.
+
 ### `wp queuety workflow list`
 
 List workflows.
@@ -259,8 +261,10 @@ wp queuety workflow list [--status=<status>] [--format=<format>]
 
 | Option | Description |
 |---|---|
-| `--status=<status>` | Filter by status: `running`, `completed`, `failed`, `paused`, `cancelled` |
+| `--status=<status>` | Filter by status: `running`, `completed`, `failed`, `paused`, `waiting_signal`, `waiting_workflow`, `cancelled` |
 | `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml` |
+
+The default table includes `StepName` and `WaitMode` so blocked workflows are easier to scan.
 
 ### `wp queuety workflow retry`
 
@@ -273,6 +277,48 @@ wp queuety workflow retry <id>
 | Option | Description |
 |---|---|
 | `<id>` | Workflow ID (required) |
+
+### `wp queuety workflow approve`
+
+Send an approval signal to a workflow.
+
+```bash
+wp queuety workflow approve <id> [--data=<json>] [--signal=<name>]
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID (required) |
+| `--data=<json>` | Optional JSON object payload |
+| `--signal=<name>` | Override the approval signal name (default: `approval`) |
+
+### `wp queuety workflow reject`
+
+Send a rejection signal to a workflow.
+
+```bash
+wp queuety workflow reject <id> [--data=<json>] [--signal=<name>]
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID (required) |
+| `--data=<json>` | Optional JSON object payload |
+| `--signal=<name>` | Override the rejection signal name (default: `rejected`) |
+
+### `wp queuety workflow input`
+
+Send structured input to a workflow.
+
+```bash
+wp queuety workflow input <id> [--data=<json>] [--signal=<name>]
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID (required) |
+| `--data=<json>` | Optional JSON object payload |
+| `--signal=<name>` | Override the input signal name (default: `input`) |
 
 ### `wp queuety workflow pause`
 

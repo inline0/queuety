@@ -155,4 +155,38 @@ class WorkflowSpawnTest extends IntegrationTestCase {
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
 		$this->assertSame( 1, $status->state['counter'] );
 	}
+
+	public function test_agent_aliases_wrap_spawn_and_wait_primitives(): void {
+		$child = ( new WorkflowBuilder( 'agent_worker', $this->conn, $this->queue, $this->logger ) )
+			->then( AccumulatingStep::class );
+
+		$parent_id = ( new WorkflowBuilder( 'planner_aliases', $this->conn, $this->queue, $this->logger ) )
+			->spawn_agents( 'agent_tasks', $child )
+			->await_agents()
+			->dispatch(
+				array(
+					'campaign'    => 'summer',
+					'agent_tasks' => array(
+						array( 'topic' => 'landing-page' ),
+						array( 'topic' => 'pricing-copy' ),
+					),
+				)
+			);
+
+		$this->process_one();
+		$this->process_one();
+
+		$status = $this->workflow_mgr->status( $parent_id );
+		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
+		$this->assertSame( 'all', $status->wait_mode );
+		$this->assertSame( array(), $status->wait_details['matched'] );
+		$this->assertCount( 2, $status->wait_details['remaining'] );
+
+		$this->process_one();
+		$this->process_one();
+
+		$status = $this->workflow_mgr->status( $parent_id );
+		$this->assertSame( WorkflowStatus::Completed, $status->status );
+		$this->assertCount( 2, $status->state['agent_results'] );
+	}
 }

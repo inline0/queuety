@@ -103,6 +103,7 @@ class WorkflowEventLog {
 	 * @param array  $state_snapshot Public workflow state while waiting.
 	 * @param string $wait_type      Wait primitive type.
 	 * @param array  $waiting_for    Wait targets currently blocking the workflow.
+	 * @param array  $details        Additional wait metadata for inspection.
 	 */
 	public function record_workflow_waiting(
 		int $workflow_id,
@@ -111,6 +112,7 @@ class WorkflowEventLog {
 		array $state_snapshot,
 		string $wait_type,
 		array $waiting_for,
+		array $details = array(),
 	): void {
 		$this->record_event(
 			$workflow_id,
@@ -118,9 +120,12 @@ class WorkflowEventLog {
 			$handler,
 			'workflow_waiting',
 			$state_snapshot,
-			array(
-				'wait_type'   => $wait_type,
-				'waiting_for' => array_values( array_map( 'strval', $waiting_for ) ),
+			array_merge(
+				array(
+					'wait_type'   => $wait_type,
+					'waiting_for' => array_values( array_map( 'strval', $waiting_for ) ),
+				),
+				$details
 			),
 		);
 	}

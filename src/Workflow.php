@@ -354,6 +354,7 @@ class Workflow {
 	 * @param array       $waiting_for Wait targets.
 	 * @param WaitMode    $mode        Wait mode.
 	 * @param string|null $result_key  Optional result key.
+	 * @param array       $details     Additional persisted wait metadata.
 	 */
 	private function set_wait_context(
 		array &$state,
@@ -362,13 +363,20 @@ class Workflow {
 		array $waiting_for,
 		WaitMode $mode,
 		?string $result_key = null,
+		array $details = array(),
 	): void {
-		$state['_wait'] = array(
-			'type'        => $type,
-			'step_index'  => $step_index,
-			'wait_mode'   => $mode->value,
-			'result_key'  => $result_key,
-			'waiting_for' => array_values( $waiting_for ),
+		$state['_wait'] = array_merge(
+			array(
+				'type'        => $type,
+				'step_index'  => $step_index,
+				'wait_mode'   => $mode->value,
+				'result_key'  => $result_key,
+				'waiting_for' => array_values( $waiting_for ),
+			),
+			array_filter(
+				$details,
+				static fn( mixed $value ): bool => null !== $value
+			)
 		);
 
 		if ( 'signal' === $type && WaitMode::All === $mode && 1 === count( $waiting_for ) ) {
@@ -386,6 +394,24 @@ class Workflow {
 	 */
 	private function clear_wait_context( array &$state ): void {
 		unset( $state['_wait'], $state['_waiting_signal'] );
+	}
+
+	/**
+	 * Resolve the current step name from persisted workflow state.
+	 *
+	 * @param array $state        Workflow state.
+	 * @param int   $current_step Current step index.
+	 * @return string|null
+	 */
+	private function current_step_name_from_state( array $state, int $current_step ): ?string {
+		$steps    = $state['_steps'] ?? array();
+		$step_def = $steps[ $current_step ] ?? null;
+
+		if ( is_array( $step_def ) && isset( $step_def['name'] ) && is_string( $step_def['name'] ) ) {
+			return $step_def['name'];
+		}
+
+		return null;
 	}
 
 	/**
@@ -439,6 +465,121 @@ class Workflow {
 	}
 
 	/**
+	 * Resolve the configured match payload subset for a signal step.
+	 *
+	 * @param array $step_def Step definition.
+	 * @return array
+	 */
+	private function signal_match_payload_for_step( array $step_def ): array {
+		$match_payload = $step_def['match_payload'] ?? null;
+		return is_array( $match_payload ) ? $match_payload : array();
+	}
+
+	/**
+	 * Resolve the configured correlation key for a signal step.
+	 *
+	 * @param array $step_def Step definition.
+	 * @return string|null
+	 */
+	private function signal_correlation_key_for_step( array $step_def ): ?string {
+		$correlation_key = $step_def['correlation_key'] ?? null;
+		if ( ! is_string( $correlation_key ) ) {
+			return null;
+		}
+
+		$correlation_key = trim( $correlation_key );
+		return '' === $correlation_key ? null : $correlation_key;
+	}
+
+	/**
+	 * Canonicalize nested values for deterministic equality checks.
+	 *
+	 * @param mixed $value Value to normalize.
+	 * @return mixed
+	 */
+	private function canonicalize_comparable_value( mixed $value ): mixed {
+		if ( ! is_array( $value ) ) {
+			return $value;
+		}
+
+		if ( array_is_list( $value ) ) {
+			return array_map( fn( mixed $item ): mixed => $this->canonicalize_comparable_value( $item ), $value );
+		}
+
+		ksort( $value );
+		foreach ( $value as $key => $item ) {
+			$value[ $key ] = $this->canonicalize_comparable_value( $item );
+		}
+
+		return $value;
+	}
+
+	/**
+	 * Compare two values using a stable canonical representation.
+	 *
+	 * @param mixed $left  Left-hand value.
+	 * @param mixed $right Right-hand value.
+	 * @return bool
+	 */
+	private function values_equal( mixed $left, mixed $right ): bool {
+		return json_encode( $this->canonicalize_comparable_value( $left ), JSON_THROW_ON_ERROR )
+			=== json_encode( $this->canonicalize_comparable_value( $right ), JSON_THROW_ON_ERROR );
+	}
+
+	/**
+	 * Check whether a payload contains the configured nested match subset.
+	 *
+	 * @param array $payload Full payload.
+	 * @param array $subset  Required subset.
+	 * @return bool
+	 */
+	private function payload_contains_subset( array $payload, array $subset ): bool {
+		foreach ( $subset as $key => $expected ) {
+			if ( ! array_key_exists( $key, $payload ) ) {
+				return false;
+			}
+
+			$actual = $payload[ $key ];
+			if ( is_array( $expected ) ) {
+				if ( ! is_array( $actual ) || ! $this->payload_contains_subset( $actual, $expected ) ) {
+					return false;
+				}
+				continue;
+			}
+
+			if ( ! $this->values_equal( $actual, $expected ) ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * Decide whether a signal payload satisfies the step's matching rules.
+	 *
+	 * @param array $payload Signal payload.
+	 * @param array $state   Current workflow state.
+	 * @param array $step_def Signal step definition.
+	 * @return bool
+	 */
+	private function signal_payload_matches( array $payload, array $state, array $step_def ): bool {
+		$match_payload = $this->signal_match_payload_for_step( $step_def );
+		if ( ! empty( $match_payload ) && ! $this->payload_contains_subset( $payload, $match_payload ) ) {
+			return false;
+		}
+
+		$correlation_key = $this->signal_correlation_key_for_step( $step_def );
+		if ( null === $correlation_key ) {
+			return true;
+		}
+
+		return array_key_exists( $correlation_key, $payload )
+			&& array_key_exists( $correlation_key, $state )
+			&& $this->values_equal( $payload[ $correlation_key ], $state[ $correlation_key ] );
+	}
+
+	/**
 	 * Build the public step output for a signal wait that has been satisfied.
 	 *
 	 * @param array $step_def         Step definition.
@@ -446,10 +587,42 @@ class Workflow {
 	 * @return array
 	 */
 	private function signal_step_output( array $step_def, array $matched_payloads ): array {
-		$result_key   = $this->wait_result_key_for_step( $step_def );
-		$signal_names = $this->signal_names_for_step( $step_def );
+		$result_key    = $this->wait_result_key_for_step( $step_def );
+		$signal_names  = $this->signal_names_for_step( $step_def );
+		$decision_map  = is_array( $step_def['decision_map'] ?? null ) ? $step_def['decision_map'] : array();
 
 		$matched_payloads = array_intersect_key( $matched_payloads, array_flip( $signal_names ) );
+
+		if ( ! empty( $decision_map ) ) {
+			$selected_signal = array_key_first( $matched_payloads );
+			$selected_payload = null !== $selected_signal ? ( $matched_payloads[ $selected_signal ] ?? array() ) : array();
+			$outcome = null !== $selected_signal ? ( $decision_map[ $selected_signal ] ?? $selected_signal ) : null;
+
+			$decision = array(
+				'outcome' => $outcome,
+				'signal'  => $selected_signal,
+				'data'    => $selected_payload,
+			);
+
+			if ( null !== $result_key ) {
+				return array( $result_key => $decision );
+			}
+
+			return array_merge(
+				array_filter(
+					array(
+						'decision_outcome' => $outcome,
+						'decision_signal'  => $selected_signal,
+					),
+					static fn( mixed $value ): bool => null !== $value
+				),
+				array_filter(
+					$selected_payload,
+					static fn( string $key ): bool => ! str_starts_with( $key, '_' ),
+					ARRAY_FILTER_USE_KEY
+				)
+			);
+		}
 
 		if ( null !== $result_key ) {
 			if ( 1 === count( $signal_names ) ) {
@@ -478,16 +651,21 @@ class Workflow {
 	}
 
 	/**
-	 * Fetch stored signal payloads that satisfy a signal wait definition.
+	 * Collect the first matching payload for each configured signal name.
 	 *
 	 * @param int   $workflow_id Workflow ID.
 	 * @param array $step_def    Signal step definition.
-	 * @return array<string,array>|null
+	 * @param array $state       Current workflow state.
+	 * @return array{matched_payloads: array<string,array>, first_signal_name: ?string, first_signal_data: ?array}
 	 */
-	private function resolve_signal_wait_payloads( int $workflow_id, array $step_def ): ?array {
+	private function resolve_signal_wait_progress( int $workflow_id, array $step_def, array $state ): array {
 		$signal_names = $this->signal_names_for_step( $step_def );
 		if ( empty( $signal_names ) ) {
-			return null;
+			return array(
+				'matched_payloads' => array(),
+				'first_signal_name' => null,
+				'first_signal_data' => null,
+			);
 		}
 
 		$sig_tbl      = $this->conn->table( Config::table_signals() );
@@ -509,8 +687,7 @@ class Workflow {
 		);
 		$stmt->execute( $params );
 
-		$mode              = $this->wait_mode_for_step( $step_def );
-		$first_payloads    = array();
+		$matched_payloads = array();
 		$first_signal_name = null;
 		$first_signal_data = null;
 
@@ -518,22 +695,51 @@ class Workflow {
 			$signal_name = (string) $row['signal_name'];
 			$payload     = $row['payload'] ? ( json_decode( $row['payload'], true ) ?: array() ) : array();
 
+			if ( ! $this->signal_payload_matches( $payload, $state, $step_def ) ) {
+				continue;
+			}
+
 			if ( null === $first_signal_name ) {
 				$first_signal_name = $signal_name;
 				$first_signal_data = $payload;
 			}
 
-			if ( ! array_key_exists( $signal_name, $first_payloads ) ) {
-				$first_payloads[ $signal_name ] = $payload;
+			if ( ! array_key_exists( $signal_name, $matched_payloads ) ) {
+				$matched_payloads[ $signal_name ] = $payload;
 			}
 		}
 
+		return array(
+			'matched_payloads' => $matched_payloads,
+			'first_signal_name' => $first_signal_name,
+			'first_signal_data' => $first_signal_data,
+		);
+	}
+
+	/**
+	 * Fetch stored signal payloads that satisfy a signal wait definition.
+	 *
+	 * @param int   $workflow_id Workflow ID.
+	 * @param array $step_def    Signal step definition.
+	 * @param array $state       Current workflow state.
+	 * @return array<string,array>|null
+	 */
+	private function resolve_signal_wait_payloads( int $workflow_id, array $step_def, array $state ): ?array {
+		$signal_names = $this->signal_names_for_step( $step_def );
+		if ( empty( $signal_names ) ) {
+			return null;
+		}
+
+		$mode          = $this->wait_mode_for_step( $step_def );
+		$progress      = $this->resolve_signal_wait_progress( $workflow_id, $step_def, $state );
+		$first_payloads = $progress['matched_payloads'];
+
 		if ( WaitMode::Any === $mode ) {
-			if ( null === $first_signal_name ) {
+			if ( null === $progress['first_signal_name'] ) {
 				return null;
 			}
 
-			return array( $first_signal_name => $first_signal_data ?? array() );
+			return array( $progress['first_signal_name'] => $progress['first_signal_data'] ?? array() );
 		}
 
 		foreach ( $signal_names as $signal_name ) {
@@ -739,6 +945,121 @@ class Workflow {
 		}
 
 		return $output;
+	}
+
+	/**
+	 * Build inspectable wait details for a signal step.
+	 *
+	 * @param int   $workflow_id Workflow ID.
+	 * @param array $step_def    Signal step definition.
+	 * @param array $state       Workflow state.
+	 * @return array
+	 */
+	private function signal_wait_details( int $workflow_id, array $step_def, array $state ): array {
+		$progress          = $this->resolve_signal_wait_progress( $workflow_id, $step_def, $state );
+		$signal_names      = $this->signal_names_for_step( $step_def );
+		$matched_signals   = array_keys( $progress['matched_payloads'] );
+		$remaining_signals = array_values( array_diff( $signal_names, $matched_signals ) );
+		$details           = array(
+			'step_name'    => $step_def['name'] ?? null,
+			'result_key'   => $this->wait_result_key_for_step( $step_def ),
+			'match_payload' => $this->signal_match_payload_for_step( $step_def ),
+			'matched'      => $matched_signals,
+			'remaining'    => $remaining_signals,
+		);
+
+		$correlation_key = $this->signal_correlation_key_for_step( $step_def );
+		if ( null !== $correlation_key ) {
+			$details['correlation_key']   = $correlation_key;
+			$details['correlation_value'] = $state[ $correlation_key ] ?? null;
+		}
+
+		return array_filter(
+			$details,
+			static fn( mixed $value ): bool => null !== $value
+		);
+	}
+
+	/**
+	 * Build inspectable wait details for a workflow dependency step.
+	 *
+	 * @param array $step_def Workflow wait definition.
+	 * @param array $state    Workflow state.
+	 * @return array
+	 */
+	private function workflow_wait_details( array $step_def, array $state ): array {
+		$workflow_ids  = $this->resolve_workflow_wait_ids( $step_def, $state );
+		$workflow_rows = $this->fetch_workflow_rows_by_id( $workflow_ids );
+		$matched       = array();
+		$remaining     = array();
+		$failed        = array();
+
+		foreach ( $workflow_ids as $workflow_id ) {
+			$row = $workflow_rows[ $workflow_id ] ?? null;
+			if ( null === $row ) {
+				$remaining[] = (string) $workflow_id;
+				continue;
+			}
+
+			$status = WorkflowStatus::from( $row['status'] );
+			if ( WorkflowStatus::Completed === $status ) {
+				$matched[] = (string) $workflow_id;
+			} elseif ( in_array( $status, array( WorkflowStatus::Failed, WorkflowStatus::Cancelled ), true ) ) {
+				$failed[] = (string) $workflow_id;
+			} else {
+				$remaining[] = (string) $workflow_id;
+			}
+		}
+
+		return array_filter(
+			array(
+				'step_name'  => $step_def['name'] ?? null,
+				'result_key' => $this->wait_result_key_for_step( $step_def ),
+				'matched'    => $matched,
+				'remaining'  => $remaining,
+				'failed'     => $failed,
+			),
+			static fn( mixed $value ): bool => null !== $value
+		);
+	}
+
+	/**
+	 * Build the public wait-inspection payload for a workflow state.
+	 *
+	 * @param int                      $workflow_id  Workflow ID.
+	 * @param array                    $state        Workflow state.
+	 * @param int                      $current_step Current step index.
+	 * @param array<string,mixed>|null $wait Wait context.
+	 * @return array|null
+	 */
+	private function wait_details_from_state( int $workflow_id, array $state, int $current_step, ?array $wait ): ?array {
+		if ( null === $wait ) {
+			return null;
+		}
+
+		$step_def = $state['_steps'][ $current_step ] ?? null;
+		if ( ! is_array( $step_def ) ) {
+			return array_filter(
+				array(
+					'step_name'  => $wait['step_name'] ?? null,
+					'result_key' => $wait['result_key'] ?? null,
+				),
+				static fn( mixed $value ): bool => null !== $value
+			);
+		}
+
+		$details = match ( $wait['type'] ?? null ) {
+			'signal' => $this->signal_wait_details( $workflow_id, $step_def, $state ),
+			'workflow' => $this->workflow_wait_details( $step_def, $state ),
+			default => array(),
+		};
+
+		$details['wait_mode'] = $wait['wait_mode'] ?? null;
+
+		return array_filter(
+			$details,
+			static fn( mixed $value ): bool => null !== $value
+		);
 	}
 
 	/**
@@ -1505,10 +1826,9 @@ class Workflow {
 	 * @throws \Throwable If the database transaction fails.
 	 */
 	private function enqueue_signal_step( array $step_def, int $workflow_id, int $step_index ): void {
-		$pdo              = $this->conn->pdo();
-		$wf_tbl           = $this->conn->table( Config::table_workflows() );
-		$matched_payloads = $this->resolve_signal_wait_payloads( $workflow_id, $step_def );
-		$completed_ids    = array();
+		$pdo           = $this->conn->pdo();
+		$wf_tbl        = $this->conn->table( Config::table_workflows() );
+		$completed_ids = array();
 
 		$pdo->beginTransaction();
 		try {
@@ -1524,6 +1844,7 @@ class Workflow {
 			$state        = json_decode( $wf_row['state'], true ) ?: array();
 			$current_step = (int) $wf_row['current_step'];
 			$status       = WorkflowStatus::from( $wf_row['status'] );
+			$matched_payloads = $this->resolve_signal_wait_payloads( $workflow_id, $step_def, $state );
 
 			if (
 				$current_step !== $step_index
@@ -1550,6 +1871,11 @@ class Workflow {
 					$this->signal_names_for_step( $step_def ),
 					$this->wait_mode_for_step( $step_def ),
 					$this->wait_result_key_for_step( $step_def ),
+					array(
+						'step_name'       => $step_def['name'] ?? null,
+						'match_payload'   => $this->signal_match_payload_for_step( $step_def ),
+						'correlation_key' => $this->signal_correlation_key_for_step( $step_def ),
+					),
 				);
 
 				$upd = $pdo->prepare(
@@ -1574,6 +1900,13 @@ class Workflow {
 						state_snapshot: $this->public_state( $state ),
 						wait_type: 'signal',
 						waiting_for: $this->signal_names_for_step( $step_def ),
+						details: array(
+							'wait_mode'       => $this->wait_mode_for_step( $step_def )->value,
+							'step_name'       => $step_def['name'] ?? null,
+							'result_key'      => $this->wait_result_key_for_step( $step_def ),
+							'match_payload'   => $this->signal_match_payload_for_step( $step_def ),
+							'correlation_key' => $this->signal_correlation_key_for_step( $step_def ),
+						),
 					);
 				}
 			}
@@ -1981,6 +2314,9 @@ class Workflow {
 					array_map( 'strval', $workflow_ids ),
 					$this->wait_mode_for_step( $step_def ),
 					$this->wait_result_key_for_step( $step_def ),
+					array(
+						'step_name' => $step_def['name'] ?? null,
+					),
 				);
 
 				$upd = $pdo->prepare(
@@ -2005,6 +2341,11 @@ class Workflow {
 						state_snapshot: $this->public_state( $state ),
 						wait_type: 'workflow',
 						waiting_for: array_map( 'strval', $workflow_ids ),
+						details: array(
+							'wait_mode'  => $this->wait_mode_for_step( $step_def )->value,
+							'step_name'  => $step_def['name'] ?? null,
+							'result_key' => $this->wait_result_key_for_step( $step_def ),
+						),
 					);
 				}
 			} else {
@@ -2090,7 +2431,7 @@ class Workflow {
 				&& 'signal' === ( $step_def['type'] ?? '' )
 				&& in_array( $signal_name, $this->signal_names_for_step( $step_def ), true )
 			) {
-				$matched_payloads = $this->resolve_signal_wait_payloads( $workflow_id, $step_def );
+				$matched_payloads = $this->resolve_signal_wait_payloads( $workflow_id, $step_def, $state );
 				if ( null !== $matched_payloads ) {
 					$completed_ids = $this->settle_wait_step(
 						$pdo,
@@ -3231,6 +3572,42 @@ class Workflow {
 	/**
 	 * Get the current status of a workflow.
 	 *
+	 * @param array $row Workflow row.
+	 * @return WorkflowState
+	 */
+	private function build_workflow_state_from_row( array $row ): WorkflowState {
+		$state         = json_decode( $row['state'], true ) ?: array();
+		$current_step  = (int) $row['current_step'];
+		$wait          = $this->wait_context_from_state( $state );
+		$public_state  = $this->public_state( $state );
+		$waiting_for   = $wait['waiting_for'] ?? ( $wait['signal_names'] ?? null );
+		$wait_mode     = isset( $wait['wait_mode'] ) && is_string( $wait['wait_mode'] ) ? $wait['wait_mode'] : null;
+		$wait_details  = $this->wait_details_from_state( (int) $row['id'], $state, $current_step, $wait );
+
+		return new WorkflowState(
+			workflow_id: (int) $row['id'],
+			name: $row['name'],
+			status: WorkflowStatus::from( $row['status'] ),
+			current_step: $current_step,
+			total_steps: (int) $row['total_steps'],
+			state: $public_state,
+			parent_workflow_id: $row['parent_workflow_id'] ? (int) $row['parent_workflow_id'] : null,
+			parent_step_index: $row['parent_step_index'] !== null ? (int) $row['parent_step_index'] : null,
+			wait_type: $wait['type'] ?? null,
+			waiting_for: is_array( $waiting_for ) ? $waiting_for : null,
+			definition_version: $this->definition_version_from_state( $state ),
+			definition_hash: $this->definition_hash_from_state( $state ),
+			idempotency_key: $this->idempotency_key_from_state( $state ),
+			budget: $this->budget_summary_from_state( $state ),
+			current_step_name: $this->current_step_name_from_state( $state, $current_step ),
+			wait_mode: $wait_mode,
+			wait_details: $wait_details,
+		);
+	}
+
+	/**
+	 * Get the current status of a workflow.
+	 *
 	 * @param int $workflow_id The workflow ID.
 	 * @return WorkflowState|null
 	 */
@@ -3253,31 +3630,7 @@ class Workflow {
 			return null;
 		}
 
-		$state = json_decode( $row['state'], true ) ?: array();
-		$wait  = $this->wait_context_from_state( $state );
-
-		$public_state = array_filter(
-			$state,
-			fn( string $key ) => ! str_starts_with( $key, '_' ),
-			ARRAY_FILTER_USE_KEY
-		);
-
-		$result = new WorkflowState(
-			workflow_id: (int) $row['id'],
-			name: $row['name'],
-			status: WorkflowStatus::from( $row['status'] ),
-			current_step: (int) $row['current_step'],
-			total_steps: (int) $row['total_steps'],
-			state: $public_state,
-			parent_workflow_id: $row['parent_workflow_id'] ? (int) $row['parent_workflow_id'] : null,
-			parent_step_index: $row['parent_step_index'] !== null ? (int) $row['parent_step_index'] : null,
-			wait_type: $wait['type'] ?? null,
-			waiting_for: $wait['waiting_for'] ?? ( $wait['signal_names'] ?? null ),
-			definition_version: $this->definition_version_from_state( $state ),
-			definition_hash: $this->definition_hash_from_state( $state ),
-			idempotency_key: $this->idempotency_key_from_state( $state ),
-			budget: $this->budget_summary_from_state( $state ),
-		);
+		$result = $this->build_workflow_state_from_row( $row );
 
 		if ( null !== $this->cache ) {
 			$this->cache->set( "queuety:wf_status:{$workflow_id}", $result, self::STATE_CACHE_TTL );
@@ -3470,30 +3823,7 @@ class Workflow {
 
 		$results = array();
 		foreach ( $stmt->fetchAll() as $row ) {
-			$state        = json_decode( $row['state'], true ) ?: array();
-			$wait         = $this->wait_context_from_state( $state );
-			$public_state = array_filter(
-				$state,
-				fn( string $key ) => ! str_starts_with( $key, '_' ),
-				ARRAY_FILTER_USE_KEY
-			);
-
-			$results[] = new WorkflowState(
-				workflow_id: (int) $row['id'],
-				name: $row['name'],
-				status: WorkflowStatus::from( $row['status'] ),
-				current_step: (int) $row['current_step'],
-				total_steps: (int) $row['total_steps'],
-				state: $public_state,
-				parent_workflow_id: $row['parent_workflow_id'] ? (int) $row['parent_workflow_id'] : null,
-				parent_step_index: $row['parent_step_index'] !== null ? (int) $row['parent_step_index'] : null,
-				wait_type: $wait['type'] ?? null,
-				waiting_for: $wait['waiting_for'] ?? ( $wait['signal_names'] ?? null ),
-				definition_version: $this->definition_version_from_state( $state ),
-				definition_hash: $this->definition_hash_from_state( $state ),
-				idempotency_key: $this->idempotency_key_from_state( $state ),
-				budget: $this->budget_summary_from_state( $state ),
-			);
+			$results[] = $this->build_workflow_state_from_row( $row );
 		}
 
 		return $results;

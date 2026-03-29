@@ -31,6 +31,9 @@ readonly class WorkflowState {
 	 * @param string|null    $definition_hash    Deterministic hash of the workflow definition.
 	 * @param string|null    $idempotency_key    Durable dispatch key, if set.
 	 * @param array|null     $budget             Public budget summary for the run, if configured.
+	 * @param string|null    $current_step_name  Current step name, if available.
+	 * @param string|null    $wait_mode          Wait mode currently blocking the workflow, if any.
+	 * @param array|null     $wait_details       Additional wait details for inspection, if any.
 	 */
 	public function __construct(
 		public int $workflow_id,
@@ -47,5 +50,8 @@ readonly class WorkflowState {
 		public ?string $definition_hash = null,
 		public ?string $idempotency_key = null,
 		public ?array $budget = null,
+		public ?string $current_step_name = null,
+		public ?string $wait_mode = null,
+		public ?array $wait_details = null,
 	) {}
 }

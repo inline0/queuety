@@ -81,6 +81,10 @@ class WorkflowWaitTest extends IntegrationTestCase {
 		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
 		$this->assertSame( 'workflow', $status->wait_type );
 		$this->assertSame( array( (string) $dependency_id ), $status->waiting_for );
+		$this->assertSame( 'all', $status->wait_mode );
+		$this->assertSame( 'await_workflow', $status->current_step_name );
+		$this->assertSame( array(), $status->wait_details['matched'] );
+		$this->assertSame( array( (string) $dependency_id ), $status->wait_details['remaining'] );
 
 		$this->process_one();
 

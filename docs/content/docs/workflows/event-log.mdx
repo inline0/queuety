@@ -16,7 +16,7 @@ The worker automatically records these event types:
 | `step_started` | Before a step handler runs | Workflow ID, step index, handler class |
 | `step_completed` | After a step handler succeeds | Full state snapshot, step output, duration in milliseconds |
 | `step_failed` | When a step handler throws | Error message, duration in milliseconds |
-| `workflow_waiting` | When a signal or workflow wait parks the run | Full public state, wait type, wait targets |
+| `workflow_waiting` | When a signal or workflow wait parks the run | Full public state, wait type, wait targets, and wait metadata such as mode, result key, or correlation rules |
 | `workflow_resumed` | When a signal or workflow wait settles | Full public state after resuming, wait output |
 | `workflow_replayed` | When an export is recreated in a new environment | Full public state plus replay metadata |
 
@@ -50,6 +50,7 @@ foreach ( $events as $event ) {
     if ( 'workflow_waiting' === $event['event'] ) {
         // $event['step_output']['wait_type'] is 'signal' or 'workflow'
         // $event['step_output']['waiting_for'] contains the current blockers
+        // $event['step_output']['wait_mode'] is 'all' or 'any'
     }
 }
 ```

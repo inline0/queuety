@@ -87,6 +87,7 @@ echo $state->status->value;   // 'running'
 echo $state->current_step;    // 1
 echo $state->total_steps;     // 3
 print_r( $state->waiting_for ); // ['42'] while waiting on another workflow
+print_r( $state->wait_details ); // matched/remaining blockers, result key, correlation info
 ```
 
 Pause and resume:
@@ -143,10 +144,10 @@ Queuety supports ten types of steps within a workflow:
 - [Sequential chains](/docs/workflows/chains) using `->then()` for one-at-a-time execution
 - [Parallel groups](/docs/workflows/parallel) using `->parallel()` for concurrent execution
 - [Dynamic fan-out](/docs/workflows/fan-out) using `->fan_out()` for runtime-discovered branch work and explicit join semantics
-- [Async handoffs](/docs/workflows/async-handoffs) using `->spawn_workflows()` to dispatch independent child workflows from runtime-discovered items
+- [Async handoffs](/docs/workflows/async-handoffs) using `->spawn_workflows()` or `->spawn_agents()` to dispatch independent child workflows from runtime-discovered items
 - [Conditional branching](/docs/workflows/conditional) using named steps and `_goto`
 - [Sub-workflows](/docs/workflows/sub-workflows) using `->sub_workflow()` for nested composition
 - [Durable timers](/docs/workflows/timers) using `->sleep()` for time-based delays
-- [Signals](/docs/workflows/signals) using `->wait_for_signal()`, `->wait_for_signals()`, `->await_approval()`, and `->await_input()` for external event triggers
-- [Workflow dependencies](/docs/workflows/dependencies) using `->await_workflow()` and `->await_workflows()` for cross-workflow coordination
+- [Signals](/docs/workflows/signals) using `->wait_for_signal()`, `->wait_for_signals()`, `->await_approval()`, `->await_input()`, and `->await_decision()` for external event triggers
+- [Workflow dependencies](/docs/workflows/dependencies) using `->await_workflow()`, `->await_workflows()`, and `->await_agents()` for cross-workflow coordination
 - [Streaming steps](/docs/workflows/streaming) using the `StreamingStep` interface for durable chunk-based output

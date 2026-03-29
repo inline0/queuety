@@ -256,13 +256,16 @@ $workflow_id = Queuety::workflow( 'generate_report' )
 | `fan_out( string $items_key, string $handler_class, ?string $result_key = null, JoinMode $join_mode = JoinMode::All, ?int $quorum = null, ?string $reducer_class = null, ?string $name = null )` | Add a dynamic fan-out step that expands one branch job per item in workflow state. |
 | `sub_workflow( string $name, WorkflowBuilder $builder )` | Add a sub-workflow step. |
 | `sleep( int $seconds, int $minutes, int $hours, int $days )` | Add a durable timer step. All durations are summed. |
-| `wait_for_signal( string $name, ?string $result_key = null, ?string $step_name = null )` | Add a signal wait step. If `result_key` is set, the payload is stored under that key instead of merging into top-level state. |
-| `wait_for_signals( array $signal_names, WaitMode $mode = WaitMode::All, ?string $result_key = null, ?string $name = null )` | Wait for all or any of several signals. |
-| `await_approval( string $signal_name = 'approval', ?string $result_key = 'approval', ?string $name = null )` | Wait for a human approval signal. |
-| `await_input( string $signal_name = 'input', ?string $result_key = 'input', ?string $name = null )` | Wait for a human input signal. |
+| `wait_for_signal( string $name, ?string $result_key = null, ?string $step_name = null, array $match_payload = [], ?string $correlation_key = null )` | Add a signal wait step. Optional `match_payload` and `correlation_key` let you ignore unrelated events. |
+| `wait_for_signals( array $signal_names, WaitMode $mode = WaitMode::All, ?string $result_key = null, ?string $name = null, array $match_payload = [], ?string $correlation_key = null )` | Wait for all or any of several signals, with optional payload matching and correlation. |
+| `await_approval( string $signal_name = 'approval', ?string $result_key = 'approval', ?string $name = null, array $match_payload = [], ?string $correlation_key = null )` | Wait for a human approval signal. |
+| `await_decision( string $approve_signal = 'approved', string $reject_signal = 'rejected', ?string $result_key = 'decision', ?string $name = null, array $match_payload = [], ?string $correlation_key = null )` | Wait for either approval or rejection and store a structured decision payload. |
+| `await_input( string $signal_name = 'input', ?string $result_key = 'input', ?string $name = null, array $match_payload = [], ?string $correlation_key = null )` | Wait for a human input signal. |
 | `await_workflow( int|string $workflow, ?string $result_key = null, ?string $name = null )` | Wait for one workflow ID, or a workflow ID stored in public state, to complete. |
 | `await_workflows( array|string $workflows, WaitMode $mode = WaitMode::All, ?string $result_key = null, ?string $name = null )` | Wait for all or any of several workflows to complete. |
 | `spawn_workflows( string $items_key, WorkflowBuilder $workflow_builder, string $result_key = 'spawned_workflow_ids', string $payload_key = 'item', bool $inherit_state = true, ?string $name = null )` | Dispatch one top-level workflow per runtime item and store the spawned workflow IDs in state. |
+| `spawn_agents( string $items_key, WorkflowBuilder $workflow_builder, string $result_key = 'agent_workflow_ids', string $payload_key = 'agent_task', bool $inherit_state = true, ?string $name = null )` | Agent-oriented alias for `spawn_workflows()`. |
+| `await_agents( array|string $workflows = 'agent_workflow_ids', WaitMode $mode = WaitMode::All, ?string $result_key = 'agent_results', ?string $name = null )` | Agent-oriented alias for `await_workflows()`. |
 | `version( string $version )` | Tag the workflow definition with an application-level version for inspection and exports. |
 | `idempotency_key( string $key )` | Make workflow dispatch durable for a caller-supplied key. Dispatching again with the same key returns the original workflow ID. |
 | `max_transitions( int $max )` | Fail the workflow if more than `$max` step transitions complete. |
@@ -291,15 +294,20 @@ echo $state->current_step;  // 1
 echo $state->total_steps;   // 3
 echo $state->state;         // accumulated state array
 echo $state->wait_type;     // 'signal' or 'workflow' while blocked
+echo $state->wait_mode;     // 'all' or 'any'
 echo $state->definition_version; // 'research.v2'
 echo $state->definition_hash;    // '4c7a...'
 echo $state->idempotency_key;    // 'brief:42:research'
 print_r( $state->budget );       // configured workflow budget + current usage
+print_r( $state->wait_details ); // matched/remaining blockers, result key, correlation info
 ```
 
 `WorkflowState` also exposes:
 
 - `waiting_for`: the signal names or workflow IDs currently blocking the run
+- `current_step_name`: the current step's configured name, if any
+- `wait_mode`: the current wait mode (`all` or `any`) while blocked
+- `wait_details`: extra inspection data such as matched vs remaining blockers
 - `definition_version`: the value set by `version()`, if any
 - `definition_hash`: a deterministic hash of the workflow definition
 - `idempotency_key`: the durable dispatch key, if any
@@ -415,6 +423,36 @@ Queuety::signal( $workflow_id, 'approved', [
 ```
 
 See [Workflow Signals](/docs/workflows/signals) for details.
+
+### `Queuety::approve_workflow( $workflow_id, $data = [], $signal_name = 'approval' )`
+
+Semantic wrapper around `signal()` for approval flows.
+
+```php
+Queuety::approve_workflow( $workflow_id, [
+    'reviewer' => 'editor@example.com',
+] );
+```
+
+### `Queuety::reject_workflow( $workflow_id, $data = [], $signal_name = 'rejected' )`
+
+Semantic wrapper around `signal()` for rejection flows.
+
+```php
+Queuety::reject_workflow( $workflow_id, [
+    'reason' => 'needs citations',
+] );
+```
+
+### `Queuety::submit_workflow_input( $workflow_id, $data = [], $signal_name = 'input' )`
+
+Semantic wrapper around `signal()` for structured human input.
+
+```php
+Queuety::submit_workflow_input( $workflow_id, [
+    'notes' => 'Ship after legal review',
+] );
+```
 
 ## Workflow templates
 

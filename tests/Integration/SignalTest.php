@@ -396,10 +396,15 @@ class SignalTest extends IntegrationTestCase {
 		$status = $this->workflow_mgr->status( $wf_id );
 		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
 		$this->assertSame( array( 'approved', 'reviewed' ), $status->waiting_for );
+		$this->assertSame( 'all', $status->wait_mode );
+		$this->assertSame( array(), $status->wait_details['matched'] );
+		$this->assertSame( array( 'approved', 'reviewed' ), $status->wait_details['remaining'] );
 
 		Queuety::signal( $wf_id, 'approved', array( 'decision' => 'approved' ) );
 		$status = $this->workflow_mgr->status( $wf_id );
 		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( array( 'approved' ), $status->wait_details['matched'] );
+		$this->assertSame( array( 'reviewed' ), $status->wait_details['remaining'] );
 
 		Queuety::signal( $wf_id, 'reviewed', array( 'reviewer' => 'ops' ) );
 		$status = $this->workflow_mgr->status( $wf_id );
@@ -462,5 +467,71 @@ class SignalTest extends IntegrationTestCase {
 		$status = $this->workflow_mgr->status( $wf_id );
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
 		$this->assertSame( array( 'text' => 'ship it' ), $status->state['input'] );
+	}
+
+	public function test_wait_for_signal_with_correlation_key_ignores_unmatched_payloads(): void {
+		$wf_id = Queuety::workflow( 'signal_correlation' )
+			->wait_for_signal(
+				name: 'review_ready',
+				result_key: 'review',
+				step_name: 'await_review',
+				correlation_key: 'task_id',
+			)
+			->dispatch( array( 'task_id' => 'task-42' ) );
+
+		$this->process_one();
+
+		$status = $this->workflow_mgr->status( $wf_id );
+		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( 'await_review', $status->current_step_name );
+		$this->assertSame( 'all', $status->wait_mode );
+		$this->assertSame( 'task_id', $status->wait_details['correlation_key'] );
+		$this->assertSame( 'task-42', $status->wait_details['correlation_value'] );
+		$this->assertSame( array(), $status->wait_details['matched'] );
+		$this->assertSame( array( 'review_ready' ), $status->wait_details['remaining'] );
+
+		Queuety::signal( $wf_id, 'review_ready', array( 'task_id' => 'task-99', 'result' => 'ignore' ) );
+
+		$status = $this->workflow_mgr->status( $wf_id );
+		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( array(), $status->wait_details['matched'] );
+
+		Queuety::signal( $wf_id, 'review_ready', array( 'task_id' => 'task-42', 'result' => 'ship' ) );
+
+		$status = $this->workflow_mgr->status( $wf_id );
+		$this->assertSame( WorkflowStatus::Completed, $status->status );
+		$this->assertSame(
+			array(
+				'task_id' => 'task-42',
+				'result'  => 'ship',
+			),
+			$status->state['review']
+		);
+	}
+
+	public function test_await_decision_and_helpers_capture_outcome(): void {
+		$wf_id = Queuety::workflow( 'decision_gate' )
+			->await_decision( result_key: 'review' )
+			->dispatch();
+
+		$this->process_one();
+
+		$status = $this->workflow_mgr->status( $wf_id );
+		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( 'any', $status->wait_mode );
+		$this->assertSame( array( 'approved', 'rejected' ), $status->waiting_for );
+
+		Queuety::reject_workflow( $wf_id, array( 'reason' => 'missing citations' ) );
+
+		$status = $this->workflow_mgr->status( $wf_id );
+		$this->assertSame( WorkflowStatus::Completed, $status->status );
+		$this->assertSame(
+			array(
+				'outcome' => 'rejected',
+				'signal'  => 'rejected',
+				'data'    => array( 'reason' => 'missing citations' ),
+			),
+			$status->state['review']
+		);
 	}
 }

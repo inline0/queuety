@@ -15,6 +15,27 @@ use Queuety\Queuety;
 class WorkflowCommand extends \WP_CLI_Command {
 
 	/**
+	 * Decode a JSON assoc arg into an array payload.
+	 *
+	 * @param array  $assoc_args Associative command arguments.
+	 * @param string $key        Argument key.
+	 * @return array
+	 */
+	private function decode_json_assoc_arg( array $assoc_args, string $key ): array {
+		$value = $assoc_args[ $key ] ?? null;
+		if ( null === $value ) {
+			return array();
+		}
+
+		$decoded = json_decode( (string) $value, true );
+		if ( ! is_array( $decoded ) ) {
+			\WP_CLI::error( "--{$key} must be a JSON object." );
+		}
+
+		return $decoded;
+	}
+
+	/**
 	 * Show workflow status and progress.
 	 *
 	 * <id>
@@ -35,6 +56,10 @@ class WorkflowCommand extends \WP_CLI_Command {
 		\WP_CLI::log( "Status:   {$state->status->value}" );
 		\WP_CLI::log( "Step:     {$state->current_step}/{$state->total_steps}" );
 
+		if ( null !== $state->current_step_name ) {
+			\WP_CLI::log( "StepName: {$state->current_step_name}" );
+		}
+
 		if ( null !== $state->definition_version ) {
 			\WP_CLI::log( "Version:  {$state->definition_version}" );
 		}
@@ -49,6 +74,14 @@ class WorkflowCommand extends \WP_CLI_Command {
 
 		if ( null !== $state->wait_type && ! empty( $state->waiting_for ) ) {
 			\WP_CLI::log( 'Waiting:  ' . $state->wait_type . ' => ' . implode( ', ', array_map( 'strval', $state->waiting_for ) ) );
+		}
+
+		if ( null !== $state->wait_mode ) {
+			\WP_CLI::log( "WaitMode: {$state->wait_mode}" );
+		}
+
+		if ( null !== $state->wait_details ) {
+			\WP_CLI::log( 'WaitInfo: ' . json_encode( $state->wait_details, JSON_UNESCAPED_SLASHES ) );
 		}
 
 		if ( null !== $state->budget ) {
@@ -73,6 +106,81 @@ class WorkflowCommand extends \WP_CLI_Command {
 	public function retry( $args, $assoc_args ) {
 		Queuety::retry_workflow( (int) $args[0] );
 		\WP_CLI::success( "Workflow #{$args[0]} scheduled for retry." );
+	}
+
+	/**
+	 * Send an approval signal to a workflow.
+	 *
+	 * <id>
+	 * : Workflow ID.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [--data=<json>]
+	 * : Optional JSON object payload.
+	 *
+	 * [--signal=<name>]
+	 * : Override the approval signal name. Default: approval
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function approve( $args, $assoc_args ) {
+		$data   = $this->decode_json_assoc_arg( $assoc_args, 'data' );
+		$signal = $assoc_args['signal'] ?? 'approval';
+
+		Queuety::approve_workflow( (int) $args[0], $data, (string) $signal );
+		\WP_CLI::success( "Approval sent to workflow #{$args[0]}." );
+	}
+
+	/**
+	 * Send a rejection signal to a workflow.
+	 *
+	 * <id>
+	 * : Workflow ID.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [--data=<json>]
+	 * : Optional JSON object payload.
+	 *
+	 * [--signal=<name>]
+	 * : Override the rejection signal name. Default: rejected
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function reject( $args, $assoc_args ) {
+		$data   = $this->decode_json_assoc_arg( $assoc_args, 'data' );
+		$signal = $assoc_args['signal'] ?? 'rejected';
+
+		Queuety::reject_workflow( (int) $args[0], $data, (string) $signal );
+		\WP_CLI::success( "Rejection sent to workflow #{$args[0]}." );
+	}
+
+	/**
+	 * Send structured input to a workflow.
+	 *
+	 * <id>
+	 * : Workflow ID.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [--data=<json>]
+	 * : JSON object payload. Default: {}
+	 *
+	 * [--signal=<name>]
+	 * : Override the input signal name. Default: input
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function input( $args, $assoc_args ) {
+		$data   = $this->decode_json_assoc_arg( $assoc_args, 'data' );
+		$signal = $assoc_args['signal'] ?? 'input';
+
+		Queuety::submit_workflow_input( (int) $args[0], $data, (string) $signal );
+		\WP_CLI::success( "Input sent to workflow #{$args[0]}." );
 	}
 
 	/**
@@ -149,20 +257,22 @@ class WorkflowCommand extends \WP_CLI_Command {
 
 		$items = array_map(
 			fn( $wf ) => array(
-				'ID'      => $wf->workflow_id,
-				'Name'    => $wf->name,
-				'Version' => $wf->definition_version ?? '-',
-				'Hash'    => null !== $wf->definition_hash ? substr( $wf->definition_hash, 0, 12 ) : '-',
-				'Status'  => $wf->status->value,
-				'Step'    => "{$wf->current_step}/{$wf->total_steps}",
-				'Waiting' => null !== $wf->wait_type && ! empty( $wf->waiting_for )
+				'ID'       => $wf->workflow_id,
+				'Name'     => $wf->name,
+				'Version'  => $wf->definition_version ?? '-',
+				'Hash'     => null !== $wf->definition_hash ? substr( $wf->definition_hash, 0, 12 ) : '-',
+				'Status'   => $wf->status->value,
+				'Step'     => "{$wf->current_step}/{$wf->total_steps}",
+				'StepName' => $wf->current_step_name ?? '-',
+				'WaitMode' => $wf->wait_mode ?? '-',
+				'Waiting'  => null !== $wf->wait_type && ! empty( $wf->waiting_for )
 					? $wf->wait_type . ':' . implode( ',', array_map( 'strval', $wf->waiting_for ) )
 					: '-',
 			),
 			$workflows
 		);
 
-		\WP_CLI\Utils\format_items( $format, $items, array( 'ID', 'Name', 'Version', 'Hash', 'Status', 'Step', 'Waiting' ) );
+		\WP_CLI\Utils\format_items( $format, $items, array( 'ID', 'Name', 'Version', 'Hash', 'Status', 'Step', 'StepName', 'WaitMode', 'Waiting' ) );
 	}
 
 	/**

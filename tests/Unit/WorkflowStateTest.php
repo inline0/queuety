@@ -50,10 +50,19 @@ class WorkflowStateTest extends TestCase {
 			state: array(),
 			wait_type: 'workflow',
 			waiting_for: array( '12', '18' ),
+			current_step_name: 'await_review',
+			wait_mode: 'all',
+			wait_details: array(
+				'matched' => array(),
+				'remaining' => array( '12', '18' ),
+			),
 		);
 
 		$this->assertSame( 'workflow', $state->wait_type );
 		$this->assertSame( array( '12', '18' ), $state->waiting_for );
+		$this->assertSame( 'await_review', $state->current_step_name );
+		$this->assertSame( 'all', $state->wait_mode );
+		$this->assertSame( array( '12', '18' ), $state->wait_details['remaining'] );
 	}
 
 	public function test_exposes_definition_and_budget_metadata_when_present(): void {

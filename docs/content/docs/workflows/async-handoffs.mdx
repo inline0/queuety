@@ -7,6 +7,8 @@ description: Spawn independent workflows from runtime items and join them later.
 
 Use `spawn_workflows()` when a workflow needs to hand discovered work off to independent top-level workflows instead of keeping everything inside one run.
 
+If you are explicitly modelling agent runs, `spawn_agents()` and `await_agents()` are semantic aliases with agent-oriented defaults.
+
 This is useful for agent-style orchestration:
 
 - a planner workflow discovers tasks at runtime
@@ -107,3 +109,32 @@ Queuety::workflow( 'review_board' )
 - `WaitMode::Any` resumes on the first successful child workflow
 
 This gives you planner/executor orchestration without needing a full runtime-editable DAG engine.
+
+## Agent-friendly aliases
+
+`spawn_agents()` is an alias for `spawn_workflows()` with defaults tuned for planner/executor flows:
+
+- `result_key` defaults to `agent_workflow_ids`
+- `payload_key` defaults to `agent_task`
+- `name` defaults to `spawn_agents`
+
+`await_agents()` is an alias for `await_workflows()` with defaults tuned for collecting agent results:
+
+- `workflows` defaults to `agent_workflow_ids`
+- `result_key` defaults to `agent_results`
+- `name` defaults to `await_agents`
+
+```php
+use Queuety\Enums\WaitMode;
+
+$agent_run = Queuety::workflow( 'agent_run' )
+    ->then( ResearchTopicStep::class )
+    ->then( SummarizeTopicStep::class );
+
+Queuety::workflow( 'brief_research' )
+    ->then( PlanTopicsStep::class )
+    ->spawn_agents( 'agent_tasks', $agent_run )
+    ->await_agents( mode: WaitMode::All )
+    ->then( SynthesizeBriefStep::class )
+    ->dispatch( [ 'brief_id' => 42 ] );
+```
