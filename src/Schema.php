@@ -557,9 +557,21 @@ class Schema {
 	 * @return bool
 	 */
 	public static function column_exists( Connection $conn, string $table, string $column ): bool {
-		$stmt = $conn->pdo()->prepare( "SHOW COLUMNS FROM {$table} LIKE :column" );
-		$stmt->execute( array( 'column' => $column ) );
-		return (bool) $stmt->fetch();
+		$stmt = $conn->pdo()->prepare(
+			'SELECT 1
+			FROM INFORMATION_SCHEMA.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE()
+				AND TABLE_NAME = :table_name
+				AND COLUMN_NAME = :column_name
+			LIMIT 1'
+		);
+		$stmt->execute(
+			array(
+				'table_name'  => $table,
+				'column_name' => $column,
+			)
+		);
+		return (bool) $stmt->fetchColumn();
 	}
 
 	/**
@@ -571,9 +583,21 @@ class Schema {
 	 * @return bool
 	 */
 	public static function index_exists( Connection $conn, string $table, string $index ): bool {
-		$stmt = $conn->pdo()->prepare( "SHOW INDEX FROM {$table} WHERE Key_name = :index_name" );
-		$stmt->execute( array( 'index_name' => $index ) );
-		return (bool) $stmt->fetch();
+		$stmt = $conn->pdo()->prepare(
+			'SELECT 1
+			FROM INFORMATION_SCHEMA.STATISTICS
+			WHERE TABLE_SCHEMA = DATABASE()
+				AND TABLE_NAME = :table_name
+				AND INDEX_NAME = :index_name
+			LIMIT 1'
+		);
+		$stmt->execute(
+			array(
+				'table_name' => $table,
+				'index_name' => $index,
+			)
+		);
+		return (bool) $stmt->fetchColumn();
 	}
 
 	/**
@@ -644,15 +668,27 @@ class Schema {
 	 * @return bool
 	 */
 	private static function enum_contains( Connection $conn, string $table, string $column, string $value ): bool {
-		$stmt = $conn->pdo()->prepare( "SHOW COLUMNS FROM {$table} LIKE :column" );
-		$stmt->execute( array( 'column' => $column ) );
-		$row = $stmt->fetch();
+		$stmt = $conn->pdo()->prepare(
+			'SELECT COLUMN_TYPE
+			FROM INFORMATION_SCHEMA.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE()
+				AND TABLE_NAME = :table_name
+				AND COLUMN_NAME = :column_name
+			LIMIT 1'
+		);
+		$stmt->execute(
+			array(
+				'table_name'  => $table,
+				'column_name' => $column,
+			)
+		);
+		$column_type = $stmt->fetchColumn();
 
-		if ( ! is_array( $row ) || ! isset( $row['Type'] ) ) {
+		if ( ! is_string( $column_type ) ) {
 			return false;
 		}
 
-		return str_contains( strtolower( (string) $row['Type'] ), "'" . strtolower( $value ) . "'" );
+		return str_contains( strtolower( $column_type ), "'" . strtolower( $value ) . "'" );
 	}
 
 	/**
