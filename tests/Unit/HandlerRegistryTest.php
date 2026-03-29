@@ -3,6 +3,7 @@
 namespace Queuety\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
+use Queuety\Contracts\FanOutHandler;
 use Queuety\Handler;
 use Queuety\HandlerRegistry;
 use Queuety\Step;
@@ -23,6 +24,19 @@ class TestStep implements Step {
 	}
 }
 
+class TestFanOutStep implements FanOutHandler {
+	public function handle_item( array $state, mixed $item, int $index ): array {
+		return array(
+			'index' => $index,
+			'item'  => $item,
+		);
+	}
+
+	public function config(): array {
+		return array();
+	}
+}
+
 class HandlerRegistryTest extends TestCase {
 
 	public function test_register_and_resolve(): void {
@@ -37,6 +51,12 @@ class HandlerRegistryTest extends TestCase {
 		$registry = new HandlerRegistry();
 		$instance = $registry->resolve( TestStep::class );
 		$this->assertInstanceOf( Step::class, $instance );
+	}
+
+	public function test_resolve_fan_out_handler_by_class_name(): void {
+		$registry = new HandlerRegistry();
+		$instance = $registry->resolve( TestFanOutStep::class );
+		$this->assertInstanceOf( FanOutHandler::class, $instance );
 	}
 
 	public function test_has(): void {
