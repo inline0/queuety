@@ -34,6 +34,7 @@ Queuety is a WordPress plugin that provides a fast job queue and durable workflo
 - PHP 8.2+
 - WordPress 6.4+
 - MySQL 5.7+ or MariaDB 10.3+
+- `pdo_mysql` enabled for the PHP runtime that loads WordPress and WP-CLI
 
 For Composer-managed WordPress installs (for example Bedrock):
 
@@ -54,6 +55,8 @@ For local development from this repository:
 composer install
 wp plugin activate queuety
 ```
+
+If `pdo_mysql` is missing, the plugin now stays loaded but inert and shows an admin notice instead of fataling during activation or bootstrap.
 
 Dispatch a job using the modern dispatch API:
 

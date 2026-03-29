@@ -5,7 +5,7 @@ description: Worker lifecycle, concurrency, and production deployment.
 
 # Workers
 
-Workers are long-running processes that poll the database for pending jobs, execute them, and advance workflows. The `wp queuety work` command runs inside WP-CLI while the queue itself is claimed directly from MySQL via PDO.
+Workers are long-running processes that poll the database for pending jobs, execute them, and advance workflows. The `wp queuety work` command runs inside WP-CLI while the queue itself is claimed directly from MySQL via PDO, so the PHP runtime that loads WP-CLI must have `pdo_mysql` enabled.
 
 ## Starting a worker
 

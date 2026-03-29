@@ -31,6 +31,30 @@ if ( file_exists( $queuety_autoloader ) ) {
 	require_once $queuety_autoloader;
 }
 
+$queuety_runtime_error = null;
+
+if ( ! extension_loaded( 'pdo_mysql' ) ) {
+	$queuety_runtime_error = 'Queuety requires the pdo_mysql PHP extension on the PHP runtime that loads WordPress and WP-CLI.';
+}
+
+if ( null !== $queuety_runtime_error ) {
+	$queuety_render_notice = static function () use ( $queuety_runtime_error ) {
+		if ( ! current_user_can( 'activate_plugins' ) ) {
+			return;
+		}
+
+		printf(
+			'<div class="notice notice-error"><p>%s</p></div>',
+			esc_html( $queuety_runtime_error )
+		);
+	};
+
+	add_action( 'admin_notices', $queuety_render_notice );
+	add_action( 'network_admin_notices', $queuety_render_notice );
+
+	return;
+}
+
 /**
  * Build a Queuety connection from the current WordPress database credentials.
  *
