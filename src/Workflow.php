@@ -1559,6 +1559,15 @@ class Workflow {
 				)
 			);
 
+			// Bury any pending/processing jobs for this workflow that are past the rewind point.
+			$jb_tbl  = $this->conn->table( Config::table_jobs() );
+			$cleanup = $pdo->prepare(
+				"UPDATE {$jb_tbl}
+				SET status = 'buried', error_message = 'Superseded by workflow rewind'
+				WHERE workflow_id = :wf_id AND status IN ('pending', 'processing')"
+			);
+			$cleanup->execute( array( 'wf_id' => $workflow_id ) );
+
 			// Enqueue the next step.
 			if ( isset( $steps[ $next_step ] ) ) {
 				$priority = Priority::tryFrom( $priority_val ) ?? Priority::Low;
