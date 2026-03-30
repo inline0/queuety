@@ -58,7 +58,7 @@ wp plugin activate queuety
 
 If `pdo_mysql` is missing, the plugin now stays loaded but inert and shows an admin notice instead of fataling during activation or bootstrap.
 
-Out of the box, the plugin also schedules a one-shot worker through WordPress cron every minute, so basic queue processing works without shell access. Dedicated `wp queuety work` processes are still the recommended higher-throughput production mode.
+Out of the box, the plugin schedules a one-shot worker through WordPress cron every minute for the `default` queue. That gives you a basic no-shell fallback for jobs and workflows that stay on `default`, as long as WordPress cron is firing. For custom queues, lower latency, or production reliability, run dedicated `wp queuety work` processes.
 
 Dispatch a job using the modern dispatch API:
 
