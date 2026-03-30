@@ -91,6 +91,15 @@ wp_process_one() {
     "
 }
 
+reset_queuety_runtime() {
+    wp_cli db query "DELETE FROM wp_queuety_signals;" > /dev/null 2>&1 || true
+    wp_cli db query "DELETE FROM wp_queuety_artifacts;" > /dev/null 2>&1 || true
+    wp_cli db query "DELETE FROM wp_queuety_workflow_events;" > /dev/null 2>&1 || true
+    wp_cli db query "DELETE FROM wp_queuety_jobs;" > /dev/null 2>&1 || true
+    wp_cli db query "DELETE FROM wp_queuety_workflows;" > /dev/null 2>&1 || true
+    wp_cli db query "DELETE FROM wp_queuety_logs;" > /dev/null 2>&1 || true
+}
+
 wait_for_wordpress() {
     local port="$1"
     local tries="${2:-30}"
@@ -327,6 +336,8 @@ fi
 echo ""
 echo "--- WP-CLI: Review Workflow ---"
 
+reset_queuety_runtime
+
 REVIEW_WF_ID=$(wp_eval "
     \$wf_id = Queuety\Queuety::workflow('review_gate')
         ->await_approval(result_key: 'approval')
@@ -369,6 +380,8 @@ fi
 
 echo ""
 echo "--- WP-CLI: Agent Workflow Group ---"
+
+reset_queuety_runtime
 
 AGENT_WF_ID=$(wp_eval "
     \$child = Queuety\Queuety::workflow('wp_env_agent')
@@ -421,10 +434,7 @@ fi
 echo ""
 echo "--- WP-CLI: Worker ---"
 
-# Clear all existing jobs for a clean test.
-wp_cli db query "DELETE FROM wp_queuety_jobs;" > /dev/null 2>&1 || true
-wp_cli db query "DELETE FROM wp_queuety_workflows;" > /dev/null 2>&1 || true
-wp_cli db query "DELETE FROM wp_queuety_logs;" > /dev/null 2>&1 || true
+reset_queuety_runtime
 
 # Register a test handler and dispatch a job.
 WORK_RESULT=$(wp_eval "
