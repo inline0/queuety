@@ -65,6 +65,8 @@ Start a worker:
 wp queuety work
 ```
 
+If you are building an agent-style system, start with [Agent Orchestration](/docs/workflows/agent-orchestration). It shows how planner/executor flows, human review gates, and cross-workflow waits fit together.
+
 ## Key differentiators
 
 - **Fast execution.** Workers use direct MySQL queue access and avoid the per-request cron pattern that slows down background work in WordPress.

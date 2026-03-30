@@ -151,3 +151,7 @@ Queuety supports ten types of steps within a workflow:
 - [Signals](/docs/workflows/signals) using `->wait_for_signal()`, `->wait_for_signals()`, `->await_approval()`, `->await_input()`, and `->await_decision()` for external event triggers
 - [Workflow dependencies](/docs/workflows/dependencies) using `->await_workflow()`, `->await_workflows()`, and `->await_agents()` for cross-workflow coordination
 - [Streaming steps](/docs/workflows/streaming) using the `StreamingStep` interface for durable chunk-based output
+
+## Common patterns
+
+If you are building autonomous or semi-autonomous systems, start with [Agent Orchestration](/docs/workflows/agent-orchestration). It shows how `fan_out()`, `spawn_agents()`, `await_agents()`, `await_workflow()`, and `await_decision()` fit together in real planner/executor and human-review flows.

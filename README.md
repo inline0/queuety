@@ -160,6 +160,8 @@ Queuety::workflow( 'brief_research' )
     ->dispatch( [ 'brief_id' => 42 ] );
 ```
 
+For a fuller planner/executor walkthrough with human review and cross-workflow waits, see the `Agent Orchestration` docs page.
+
 Add workflow guardrails for agent runs:
 
 ```php
