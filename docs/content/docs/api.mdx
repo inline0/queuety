@@ -11,6 +11,44 @@ Everything in Queuety is accessible through the `Queuety\Queuety` static class. 
 use Queuety\Queuety;
 ```
 
+## CLI bridge
+
+### `Queuety::cli_command()`
+
+Returns the published WP-CLI root command name.
+
+### `Queuety::cli_command_map()`
+
+Returns the serializable Queuety CLI catalog for harnesses that need to understand the shipped command surface without scraping WP-CLI classes.
+
+Each entry includes:
+- a stable operation ID
+- the relative CLI path
+- the WP-CLI handler class and method
+- the possible execution targets
+- the adapter that normalizes raw CLI args into an execution plan
+
+### `Queuety::resolve_cli_command( $path, $args, $assoc_args )`
+
+Turns a parsed CLI invocation into the execution plan the harness should run.
+
+```php
+$plan = Queuety::resolve_cli_command(
+    [ 'workflow', 'export' ],
+    [ '42' ],
+    [ 'output' => '/tmp/workflow.json' ]
+);
+
+echo $plan['callable']; // Queuety\Queuety::export_workflow_to_file
+print_r( $plan['arguments'] );
+```
+
+Execution plans are intentionally transport-aware:
+- commands resolve to public PHP callables with normalized arguments
+- the catalog lists every possible execution target up front, while `callable` and `transport` identify the branch chosen for the parsed input
+
+This is the standard Queuety uses for agent harnesses: stable operation ID, public API target, and adapter-owned normalization for CLI-only concerns like queue defaults, JSON payload decoding, worker-pool branching, and workflow export file handling.
+
 ## Jobs
 
 ### `Queuety::dispatch( $handler, $payload )`

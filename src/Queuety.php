@@ -11,6 +11,7 @@ use Queuety\Cache\CacheFactory;
 use Queuety\Contracts\Cache;
 use Queuety\Contracts\Job as JobContract;
 use Queuety\Enums\ExpressionType;
+use Queuety\Enums\LogEvent;
 use Queuety\Enums\Priority;
 use Queuety\Enums\WorkflowStatus;
 use Queuety\Testing\FakeBatchManager;
@@ -207,6 +208,36 @@ class Queuety {
 	}
 
 	/**
+	 * Return the root WP-CLI command namespace.
+	 *
+	 * @return string
+	 */
+	public static function cli_command(): string {
+		return 'queuety';
+	}
+
+	/**
+	 * Expose the serializable CLI command catalog for agent harnesses.
+	 *
+	 * @return array<int, array<string, mixed>>
+	 */
+	public static function cli_command_map(): array {
+		return CliCommandMap::definitions();
+	}
+
+	/**
+	 * Resolve one parsed CLI command into the PHP plan the harness should execute.
+	 *
+	 * @param string|array<int, string> $path Command path with or without "wp" and the root command.
+	 * @param array<int, string>        $args Positional arguments.
+	 * @param array<string, mixed>      $assoc_args Associative arguments.
+	 * @return array<string, mixed>
+	 */
+	public static function resolve_cli_command( $path, array $args = array(), array $assoc_args = array() ): array {
+		return CliCommandMap::resolve( $path, $args, $assoc_args );
+	}
+
+	/**
 	 * Dispatch a simple job or a dispatchable Job instance.
 	 *
 	 * When $handler is a Contracts\Job instance, the serializer extracts the
@@ -268,6 +299,213 @@ class Queuety {
 		} elseif ( $resolved instanceof Handler ) {
 			$resolved->handle( $payload );
 		}
+	}
+
+	/**
+	 * Run one worker loop directly.
+	 *
+	 * @param string|array<int, string> $queue Queue name or ordered queue list.
+	 * @param bool                      $once  Whether to process a single batch and exit.
+	 * @return void
+	 */
+	public static function run_worker( string|array $queue = 'default', bool $once = false ): void {
+		self::ensure_initialized();
+		self::$worker->run( $queue, $once );
+	}
+
+	/**
+	 * Run a forked worker pool directly.
+	 *
+	 * @param int    $workers Number of worker processes.
+	 * @param string $queue   Queue name(s) in priority order.
+	 * @return void
+	 */
+	public static function run_worker_pool( int $workers, string $queue = 'default' ): void {
+		self::ensure_initialized();
+
+		$pool = new WorkerPool(
+			$workers,
+			DB_HOST,
+			DB_NAME,
+			DB_USER,
+			DB_PASSWORD,
+			self::$conn->prefix(),
+		);
+		$pool->run( $queue );
+	}
+
+	/**
+	 * Flush pending jobs for one queue or ordered queue list.
+	 *
+	 * @param string|array<int, string> $queue Queue name or ordered queue list.
+	 * @return int Number of jobs processed.
+	 */
+	public static function flush_queue( string|array $queue = 'default' ): int {
+		self::ensure_initialized();
+		return self::$worker->flush( $queue );
+	}
+
+	/**
+	 * Dispatch one job and return its ID.
+	 *
+	 * @param string $handler  Handler name or class.
+	 * @param array  $payload  Job payload.
+	 * @param string $queue    Queue name.
+	 * @param int    $priority Priority value.
+	 * @param int    $delay    Delay in seconds.
+	 * @return int
+	 */
+	public static function dispatch_job( string $handler, array $payload = array(), string $queue = 'default', int $priority = 0, int $delay = 0 ): int {
+		return self::dispatch( $handler, $payload )
+			->on_queue( $queue )
+			->with_priority( Priority::tryFrom( $priority ) ?? Priority::Low )
+			->delay( $delay )
+			->id();
+	}
+
+	/**
+	 * List recent jobs with optional queue and status filters.
+	 *
+	 * @param string|null $queue  Optional queue filter.
+	 * @param string|null $status Optional status filter.
+	 * @param int         $limit  Maximum rows to return.
+	 * @return array<int, array<string, mixed>>
+	 */
+	public static function list_jobs( ?string $queue = null, ?string $status = null, int $limit = 50 ): array {
+		self::ensure_initialized();
+
+		$table  = self::$conn->table( Config::table_jobs() );
+		$sql    = "SELECT id, queue, handler, status, attempts, priority, created_at FROM {$table} WHERE 1=1";
+		$params = array();
+
+		if ( null !== $queue ) {
+			$sql            .= ' AND queue = :queue';
+			$params['queue'] = $queue;
+		}
+
+		if ( null !== $status ) {
+			$sql             .= ' AND status = :status';
+			$params['status'] = $status;
+		}
+
+		$limit = max( 1, $limit );
+		$sql  .= " ORDER BY id DESC LIMIT {$limit}";
+		$stmt  = self::$conn->pdo()->prepare( $sql );
+		$stmt->execute( $params );
+
+		return $stmt->fetchAll();
+	}
+
+	/**
+	 * Inspect one job together with its log history.
+	 *
+	 * @param int $job_id Job ID.
+	 * @return array<string, mixed>|null
+	 */
+	public static function inspect_job( int $job_id ): ?array {
+		self::ensure_initialized();
+
+		$job = self::$queue->find( $job_id );
+		if ( null === $job ) {
+			return null;
+		}
+
+		return array(
+			'job'  => array(
+				'id'            => $job->id,
+				'handler'       => $job->handler,
+				'queue'         => $job->queue,
+				'status'        => $job->status->value,
+				'priority'      => $job->priority->value,
+				'attempts'      => $job->attempts,
+				'max_attempts'  => $job->max_attempts,
+				'payload'       => $job->payload,
+				'created_at'    => $job->created_at->format( 'Y-m-d H:i:s' ),
+				'available_at'  => $job->available_at->format( 'Y-m-d H:i:s' ),
+				'reserved_at'   => $job->reserved_at?->format( 'Y-m-d H:i:s' ),
+				'completed_at'  => $job->completed_at?->format( 'Y-m-d H:i:s' ),
+				'failed_at'     => $job->failed_at?->format( 'Y-m-d H:i:s' ),
+				'error_message' => $job->error_message,
+				'workflow_id'   => $job->workflow_id,
+				'step_index'    => $job->step_index,
+				'depends_on'    => $job->depends_on,
+			),
+			'logs' => self::$logger->for_job( $job_id ),
+		);
+	}
+
+	/**
+	 * Bury one job manually.
+	 *
+	 * @param int    $job_id        Job ID.
+	 * @param string $error_message Error message to record.
+	 * @return void
+	 */
+	public static function bury_job( int $job_id, string $error_message = 'Manually buried via CLI.' ): void {
+		self::ensure_initialized();
+		self::$queue->bury( $job_id, $error_message );
+	}
+
+	/**
+	 * Delete one job row.
+	 *
+	 * @param int $job_id Job ID.
+	 * @return bool
+	 */
+	public static function delete_job( int $job_id ): bool {
+		self::ensure_initialized();
+
+		$table = self::$conn->table( Config::table_jobs() );
+		$stmt  = self::$conn->pdo()->prepare( "DELETE FROM {$table} WHERE id = :id" );
+		$stmt->execute( array( 'id' => $job_id ) );
+
+		return $stmt->rowCount() > 0;
+	}
+
+	/**
+	 * Recover stale processing jobs.
+	 *
+	 * @return int
+	 */
+	public static function recover_stale_jobs(): int {
+		self::ensure_initialized();
+		return self::$worker->recover_stale();
+	}
+
+	/**
+	 * Read per-handler metrics.
+	 *
+	 * @param int $minutes Time window in minutes.
+	 * @return array<int, array<string, mixed>>
+	 */
+	public static function handler_metrics( int $minutes = 60 ): array {
+		self::ensure_initialized();
+		return self::$metrics->handler_stats( $minutes );
+	}
+
+	/**
+	 * Discover handlers and optionally register them.
+	 *
+	 * @param string $directory Directory to scan.
+	 * @param string $namespace Namespace prefix.
+	 * @param bool   $register  Whether to register discovered handlers.
+	 * @return array{discovered: array<int, array<string, mixed>>, registered: int}
+	 */
+	public static function discover_handlers_cli( string $directory, string $namespace, bool $register = false ): array {
+		self::ensure_initialized();
+
+		$discovery  = new HandlerDiscovery();
+		$discovered = $discovery->discover( $directory, $namespace );
+		$registered = 0;
+
+		if ( $register ) {
+			$registered = $discovery->register_all( $directory, $namespace, self::$registry );
+		}
+
+		return array(
+			'discovered' => $discovered,
+			'registered' => $registered,
+		);
 	}
 
 	/**
@@ -455,6 +693,23 @@ class Queuety {
 	public static function workflow_status( int $workflow_id ): ?WorkflowState {
 		self::ensure_initialized();
 		return self::$workflow->status( $workflow_id );
+	}
+
+	/**
+	 * List workflows with an optional status filter.
+	 *
+	 * @param string|null $status Workflow status filter.
+	 * @return WorkflowState[]
+	 */
+	public static function list_workflows( ?string $status = null ): array {
+		self::ensure_initialized();
+
+		$status_filter = null;
+		if ( null !== $status ) {
+			$status_filter = WorkflowStatus::tryFrom( $status );
+		}
+
+		return self::$workflow->list( $status_filter );
 	}
 
 	/**
@@ -899,6 +1154,54 @@ class Queuety {
 	}
 
 	/**
+	 * Query log entries using the same precedence as the CLI surface.
+	 *
+	 * Supported keys: job_id, workflow_id, handler, event, since, limit.
+	 *
+	 * @param array<string, mixed> $filters Normalized query filters.
+	 * @return array<int, array<string, mixed>>
+	 */
+	public static function query_logs( array $filters = array() ): array {
+		self::ensure_initialized();
+
+		if ( array_key_exists( 'job_id', $filters ) && null !== $filters['job_id'] ) {
+			return self::$logger->for_job( (int) $filters['job_id'] );
+		}
+
+		if ( array_key_exists( 'workflow_id', $filters ) && null !== $filters['workflow_id'] ) {
+			return self::$logger->for_workflow( (int) $filters['workflow_id'] );
+		}
+
+		$limit = isset( $filters['limit'] ) ? (int) $filters['limit'] : 50;
+
+		if ( array_key_exists( 'handler', $filters ) && null !== $filters['handler'] ) {
+			return self::$logger->for_handler( (string) $filters['handler'], $limit );
+		}
+
+		if ( array_key_exists( 'event', $filters ) && null !== $filters['event'] ) {
+			$event = LogEvent::tryFrom( (string) $filters['event'] );
+			return null !== $event ? self::$logger->for_event( $event, $limit ) : array();
+		}
+
+		if ( array_key_exists( 'since', $filters ) && null !== $filters['since'] ) {
+			return self::$logger->since( new \DateTimeImmutable( (string) $filters['since'] ), $limit );
+		}
+
+		return self::$logger->since( new \DateTimeImmutable( '-24 hours' ), $limit );
+	}
+
+	/**
+	 * Purge old log entries.
+	 *
+	 * @param int $older_than_days Age threshold in days.
+	 * @return int
+	 */
+	public static function purge_logs( int $older_than_days ): int {
+		self::ensure_initialized();
+		return self::$logger->purge( $older_than_days );
+	}
+
+	/**
 	 * Get the WebhookNotifier instance.
 	 *
 	 * @return WebhookNotifier
@@ -906,6 +1209,39 @@ class Queuety {
 	public static function webhook_notifier(): WebhookNotifier {
 		self::ensure_initialized();
 		return self::$webhook_notifier;
+	}
+
+	/**
+	 * Register a webhook.
+	 *
+	 * @param string $event Event name.
+	 * @param string $url   Target URL.
+	 * @return int
+	 */
+	public static function register_webhook( string $event, string $url ): int {
+		self::ensure_initialized();
+		return self::$webhook_notifier->register( $event, $url );
+	}
+
+	/**
+	 * List registered webhooks.
+	 *
+	 * @return array<int, array<string, mixed>>
+	 */
+	public static function list_webhooks(): array {
+		self::ensure_initialized();
+		return self::$webhook_notifier->list();
+	}
+
+	/**
+	 * Remove one webhook by ID.
+	 *
+	 * @param int $id Webhook ID.
+	 * @return void
+	 */
+	public static function remove_webhook( int $id ): void {
+		self::ensure_initialized();
+		self::$webhook_notifier->remove( $id );
 	}
 
 	/**
@@ -920,6 +1256,59 @@ class Queuety {
 		self::ensure_initialized();
 		$discovery = new HandlerDiscovery();
 		return $discovery->register_all( $directory, $namespace, self::$registry );
+	}
+
+	/**
+	 * List recurring schedules.
+	 *
+	 * @return Schedule[]
+	 */
+	public static function list_schedules(): array {
+		self::ensure_initialized();
+		return self::$scheduler->list();
+	}
+
+	/**
+	 * Add a recurring schedule.
+	 *
+	 * @param string $handler    Handler name or class.
+	 * @param array  $payload    Job payload.
+	 * @param string $queue      Queue name.
+	 * @param string $expression Cron or interval expression.
+	 * @param string $type       Expression type value.
+	 * @return int
+	 * @throws \InvalidArgumentException If the expression type is invalid.
+	 */
+	public static function add_schedule( string $handler, array $payload, string $queue, string $expression, string $type ): int {
+		self::ensure_initialized();
+
+		$expression_type = ExpressionType::tryFrom( $type );
+		if ( null === $expression_type ) {
+			throw new \InvalidArgumentException( sprintf( 'Invalid expression type: %s', $type ) );
+		}
+
+		return self::$scheduler->add( $handler, $payload, $queue, $expression, $expression_type );
+	}
+
+	/**
+	 * Remove a recurring schedule by handler.
+	 *
+	 * @param string $handler Handler name or class.
+	 * @return bool
+	 */
+	public static function remove_schedule( string $handler ): bool {
+		self::ensure_initialized();
+		return self::$scheduler->remove( $handler );
+	}
+
+	/**
+	 * Run one scheduler tick.
+	 *
+	 * @return int
+	 */
+	public static function run_scheduler(): int {
+		self::ensure_initialized();
+		return self::$scheduler->tick();
 	}
 
 	/**
@@ -982,6 +1371,30 @@ class Queuety {
 	}
 
 	/**
+	 * Export a workflow to a JSON file.
+	 *
+	 * @param int    $workflow_id Workflow ID.
+	 * @param string $output      Output file path.
+	 * @return string
+	 * @throws \JsonException|\RuntimeException If the workflow export cannot be encoded or written.
+	 */
+	public static function export_workflow_to_file( int $workflow_id, string $output ): string {
+		self::ensure_initialized();
+
+		$json = json_encode(
+			self::export_workflow( $workflow_id ),
+			JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
+		);
+
+		$written = file_put_contents( $output, $json ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Exporting to an explicit local file path is part of the public API contract.
+		if ( false === $written ) {
+			throw new \RuntimeException( "Unable to write workflow export to {$output}." );
+		}
+
+		return $output;
+	}
+
+	/**
 	 * Replay an exported workflow in the current environment.
 	 *
 	 * @param array $data Export data from export_workflow().
@@ -990,6 +1403,33 @@ class Queuety {
 	public static function replay_workflow( array $data ): int {
 		self::ensure_initialized();
 		return WorkflowReplayer::replay( $data, self::$conn );
+	}
+
+	/**
+	 * Replay a workflow export from disk.
+	 *
+	 * @param string $file_path Path to the JSON export file.
+	 * @return int
+	 * @throws \JsonException|\RuntimeException If the export file cannot be read or decoded into a replayable array payload.
+	 */
+	public static function replay_workflow_file( string $file_path ): int {
+		self::ensure_initialized();
+
+		if ( ! file_exists( $file_path ) ) {
+			throw new \RuntimeException( "File not found: {$file_path}" );
+		}
+
+		$json = file_get_contents( $file_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Replaying workflows is intentionally limited to explicit local export files.
+		if ( false === $json ) {
+			throw new \RuntimeException( "Unable to read workflow export: {$file_path}" );
+		}
+
+		$data = json_decode( $json, true, 512, JSON_THROW_ON_ERROR );
+		if ( ! is_array( $data ) ) {
+			throw new \RuntimeException( "Workflow export did not decode to an array: {$file_path}" );
+		}
+
+		return self::replay_workflow( $data );
 	}
 
 	/**

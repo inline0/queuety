@@ -7,7 +7,6 @@
 
 namespace Queuety\CLI;
 
-use Queuety\Enums\ExpressionType;
 use Queuety\Queuety;
 
 /**
@@ -30,7 +29,7 @@ class ScheduleCommand extends \WP_CLI_Command {
 	 */
 	public function list_( $args, $assoc_args ) {
 		$format    = $assoc_args['format'] ?? 'table';
-		$schedules = Queuety::scheduler()->list();
+		$schedules = Queuety::list_schedules();
 
 		$items = array_map(
 			fn( $s ) => array(
@@ -83,16 +82,16 @@ class ScheduleCommand extends \WP_CLI_Command {
 
 		if ( isset( $assoc_args['every'] ) ) {
 			$expression = $assoc_args['every'];
-			$type       = ExpressionType::Interval;
+			$type       = 'interval';
 		} elseif ( isset( $assoc_args['cron'] ) ) {
 			$expression = $assoc_args['cron'];
-			$type       = ExpressionType::Cron;
+			$type       = 'cron';
 		} else {
 			\WP_CLI::error( 'You must specify either --every or --cron.' );
 			return;
 		}
 
-		$id = Queuety::scheduler()->add( $handler, $payload, $queue, $expression, $type );
+		$id = Queuety::add_schedule( $handler, $payload, $queue, $expression, $type );
 		\WP_CLI::success( "Schedule #{$id} added for handler '{$handler}'." );
 	}
 
@@ -107,7 +106,7 @@ class ScheduleCommand extends \WP_CLI_Command {
 	 */
 	public function remove( $args, $assoc_args ) {
 		$handler = $args[0];
-		$removed = Queuety::scheduler()->remove( $handler );
+		$removed = Queuety::remove_schedule( $handler );
 
 		if ( $removed ) {
 			\WP_CLI::success( "Schedule for handler '{$handler}' removed." );
@@ -123,7 +122,7 @@ class ScheduleCommand extends \WP_CLI_Command {
 	 * @param array $assoc_args Associative arguments.
 	 */
 	public function run( $args, $assoc_args ) {
-		$count = Queuety::scheduler()->tick();
+		$count = Queuety::run_scheduler();
 		\WP_CLI::success( "Scheduler tick complete. Enqueued {$count} jobs." );
 	}
 }

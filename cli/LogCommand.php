@@ -7,7 +7,6 @@
 
 namespace Queuety\CLI;
 
-use Queuety\Enums\LogEvent;
 use Queuety\Queuety;
 
 /**
@@ -46,30 +45,16 @@ class LogCommand extends \WP_CLI_Command {
 	 */
 	public function __invoke( $args, $assoc_args ) {
 		$format = $assoc_args['format'] ?? 'table';
-		$logger = Queuety::logger();
-		$rows   = array();
-
-		if ( isset( $assoc_args['job'] ) ) {
-			$rows = $logger->for_job( (int) $assoc_args['job'] );
-		} elseif ( isset( $assoc_args['workflow'] ) ) {
-			$rows = $logger->for_workflow( (int) $assoc_args['workflow'] );
-		} elseif ( isset( $assoc_args['handler'] ) ) {
-			$limit = (int) ( $assoc_args['limit'] ?? 50 );
-			$rows  = $logger->for_handler( $assoc_args['handler'], $limit );
-		} elseif ( isset( $assoc_args['event'] ) ) {
-			$event = LogEvent::tryFrom( $assoc_args['event'] );
-			$limit = (int) ( $assoc_args['limit'] ?? 50 );
-			if ( $event ) {
-				$rows = $logger->for_event( $event, $limit );
-			}
-		} elseif ( isset( $assoc_args['since'] ) ) {
-			$since = new \DateTimeImmutable( $assoc_args['since'] );
-			$limit = (int) ( $assoc_args['limit'] ?? 50 );
-			$rows  = $logger->since( $since, $limit );
-		} else {
-			$limit = (int) ( $assoc_args['limit'] ?? 50 );
-			$rows  = $logger->since( new \DateTimeImmutable( '-24 hours' ), $limit );
-		}
+		$rows   = Queuety::query_logs(
+			array(
+				'job_id'      => isset( $assoc_args['job'] ) ? (int) $assoc_args['job'] : null,
+				'workflow_id' => isset( $assoc_args['workflow'] ) ? (int) $assoc_args['workflow'] : null,
+				'handler'     => $assoc_args['handler'] ?? null,
+				'event'       => $assoc_args['event'] ?? null,
+				'since'       => $assoc_args['since'] ?? null,
+				'limit'       => (int) ( $assoc_args['limit'] ?? 50 ),
+			)
+		);
 
 		$fields = array( 'id', 'event', 'handler', 'job_id', 'workflow_id', 'step_index', 'attempt', 'duration_ms', 'created_at' );
 
@@ -94,7 +79,7 @@ class LogCommand extends \WP_CLI_Command {
 		}
 
 		$days  = (int) $assoc_args['older-than'];
-		$count = Queuety::logger()->purge( $days );
+		$count = Queuety::purge_logs( $days );
 
 		\WP_CLI::success( "Purged {$count} log entries older than {$days} days." );
 	}

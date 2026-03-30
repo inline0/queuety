@@ -7,8 +7,6 @@
 
 namespace Queuety\CLI;
 
-use Queuety\Enums\JobStatus;
-use Queuety\Enums\Priority;
 use Queuety\Queuety;
 
 /**
@@ -50,30 +48,20 @@ class QueuetyCommand extends \WP_CLI_Command {
 		$workers = isset( $assoc_args['workers'] ) ? (int) $assoc_args['workers'] : 0;
 
 		if ( $workers > 1 ) {
-			if ( ! function_exists( 'pcntl_fork' ) ) {
-				\WP_CLI::error( 'The pcntl extension is required for --workers=N.' );
-				return;
-			}
-
 			\WP_CLI::log( "Starting {$workers} workers on queue: {$queue}" );
 
-			$pool = new \Queuety\WorkerPool(
-				$workers,
-				DB_HOST,
-				DB_NAME,
-				DB_USER,
-				DB_PASSWORD,
-				$GLOBALS['wpdb']->prefix,
-			);
-			$pool->run( $queue );
-
-			\WP_CLI::success( 'Worker pool stopped.' );
+			try {
+				Queuety::run_worker_pool( $workers, $queue );
+				\WP_CLI::success( 'Worker pool stopped.' );
+			} catch ( \RuntimeException $e ) {
+				\WP_CLI::error( $e->getMessage() );
+			}
 			return;
 		}
 
 		\WP_CLI::log( "Starting worker on queue: {$queue}" . ( $once ? ' (once)' : '' ) );
 
-		Queuety::worker()->run( $queue, $once );
+		Queuety::run_worker( $queue, $once );
 
 		\WP_CLI::success( 'Worker stopped.' );
 	}
@@ -92,7 +80,7 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 */
 	public function flush( $args, $assoc_args ) {
 		$queue = $assoc_args['queue'] ?? 'default';
-		$count = Queuety::worker()->flush( $queue );
+		$count = Queuety::flush_queue( $queue );
 
 		\WP_CLI::success( "Flushed {$count} jobs." );
 	}
@@ -126,13 +114,7 @@ class QueuetyCommand extends \WP_CLI_Command {
 		$queue    = $assoc_args['queue'] ?? 'default';
 		$priority = (int) ( $assoc_args['priority'] ?? 0 );
 		$delay    = (int) ( $assoc_args['delay'] ?? 0 );
-
-		$pending = Queuety::dispatch( $handler, $payload )
-			->on_queue( $queue )
-			->with_priority( Priority::tryFrom( $priority ) ?? Priority::Low )
-			->delay( $delay );
-
-		$job_id = $pending->id();
+		$job_id   = Queuety::dispatch_job( $handler, $payload, $queue, $priority, $delay );
 		\WP_CLI::success( "Dispatched job #{$job_id}" );
 	}
 
@@ -186,26 +168,11 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 */
 	public function list_( $args, $assoc_args ) {
 		$format = $assoc_args['format'] ?? 'table';
-		$table  = Queuety::queue();
-
-		$conn   = $this->get_connection();
-		$tbl    = $conn->table( \Queuety\Config::table_jobs() );
-		$sql    = "SELECT id, queue, handler, status, attempts, priority, created_at FROM {$tbl} WHERE 1=1";
-		$params = array();
-
-		if ( isset( $assoc_args['queue'] ) ) {
-			$sql            .= ' AND queue = :queue';
-			$params['queue'] = $assoc_args['queue'];
-		}
-		if ( isset( $assoc_args['status'] ) ) {
-			$sql             .= ' AND status = :status';
-			$params['status'] = $assoc_args['status'];
-		}
-
-		$sql .= ' ORDER BY id DESC LIMIT 50';
-		$stmt = $conn->pdo()->prepare( $sql );
-		$stmt->execute( $params );
-		$rows = $stmt->fetchAll();
+		$rows   = Queuety::list_jobs(
+			$assoc_args['queue'] ?? null,
+			$assoc_args['status'] ?? null,
+			50
+		);
 
 		\WP_CLI\Utils\format_items( $format, $rows, array( 'id', 'queue', 'handler', 'status', 'attempts', 'priority', 'created_at' ) );
 	}
@@ -247,7 +214,7 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * @param array $assoc_args Associative arguments.
 	 */
 	public function bury( $args, $assoc_args ) {
-		Queuety::queue()->bury( (int) $args[0], 'Manually buried via CLI.' );
+		Queuety::bury_job( (int) $args[0], 'Manually buried via CLI.' );
 		\WP_CLI::success( "Job #{$args[0]} buried." );
 	}
 
@@ -261,11 +228,7 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * @param array $assoc_args Associative arguments.
 	 */
 	public function delete( $args, $assoc_args ) {
-		$conn  = $this->get_connection();
-		$table = $conn->table( \Queuety\Config::table_jobs() );
-		$stmt  = $conn->pdo()->prepare( "DELETE FROM {$table} WHERE id = :id" );
-		$stmt->execute( array( 'id' => (int) $args[0] ) );
-
+		Queuety::delete_job( (int) $args[0] );
 		\WP_CLI::success( "Job #{$args[0]} deleted." );
 	}
 
@@ -276,7 +239,7 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * @param array $assoc_args Associative arguments.
 	 */
 	public function recover( $args, $assoc_args ) {
-		$count = Queuety::worker()->recover_stale();
+		$count = Queuety::recover_stale_jobs();
 		\WP_CLI::success( "Recovered {$count} stale jobs." );
 	}
 
@@ -344,47 +307,49 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 */
 	public function inspect( $args, $assoc_args ) {
 		$job_id = (int) $args[0];
-		$job    = Queuety::queue()->find( $job_id );
+		$data   = Queuety::inspect_job( $job_id );
 
-		if ( null === $job ) {
+		if ( null === $data ) {
 			\WP_CLI::error( "Job #{$job_id} not found." );
 			return;
 		}
 
-		\WP_CLI::line( "Job #{$job->id}" );
-		\WP_CLI::line( "Handler:      {$job->handler}" );
-		\WP_CLI::line( "Queue:        {$job->queue}" );
-		\WP_CLI::line( "Status:       {$job->status->value}" );
-		\WP_CLI::line( "Priority:     {$job->priority->value}" );
-		\WP_CLI::line( "Attempts:     {$job->attempts}/{$job->max_attempts}" );
-		\WP_CLI::line( "Created:      {$job->created_at->format( 'Y-m-d H:i:s' )}" );
-		\WP_CLI::line( "Available at: {$job->available_at->format( 'Y-m-d H:i:s' )}" );
+		$job = $data['job'];
 
-		if ( null !== $job->reserved_at ) {
-			\WP_CLI::line( "Reserved at:  {$job->reserved_at->format( 'Y-m-d H:i:s' )}" );
+		\WP_CLI::line( "Job #{$job['id']}" );
+		\WP_CLI::line( "Handler:      {$job['handler']}" );
+		\WP_CLI::line( "Queue:        {$job['queue']}" );
+		\WP_CLI::line( "Status:       {$job['status']}" );
+		\WP_CLI::line( "Priority:     {$job['priority']}" );
+		\WP_CLI::line( "Attempts:     {$job['attempts']}/{$job['max_attempts']}" );
+		\WP_CLI::line( "Created:      {$job['created_at']}" );
+		\WP_CLI::line( "Available at: {$job['available_at']}" );
+
+		if ( null !== $job['reserved_at'] ) {
+			\WP_CLI::line( "Reserved at:  {$job['reserved_at']}" );
 		}
-		if ( null !== $job->completed_at ) {
-			\WP_CLI::line( "Completed at: {$job->completed_at->format( 'Y-m-d H:i:s' )}" );
+		if ( null !== $job['completed_at'] ) {
+			\WP_CLI::line( "Completed at: {$job['completed_at']}" );
 		}
-		if ( null !== $job->failed_at ) {
-			\WP_CLI::line( "Failed at:    {$job->failed_at->format( 'Y-m-d H:i:s' )}" );
+		if ( null !== $job['failed_at'] ) {
+			\WP_CLI::line( "Failed at:    {$job['failed_at']}" );
 		}
-		if ( null !== $job->error_message ) {
-			\WP_CLI::line( "Error:        {$job->error_message}" );
+		if ( null !== $job['error_message'] ) {
+			\WP_CLI::line( "Error:        {$job['error_message']}" );
 		}
-		if ( null !== $job->workflow_id ) {
-			\WP_CLI::line( "Workflow ID:  {$job->workflow_id}" );
-			\WP_CLI::line( "Step index:   {$job->step_index}" );
+		if ( null !== $job['workflow_id'] ) {
+			\WP_CLI::line( "Workflow ID:  {$job['workflow_id']}" );
+			\WP_CLI::line( "Step index:   {$job['step_index']}" );
 		}
-		if ( null !== $job->depends_on ) {
-			\WP_CLI::line( "Depends on:   {$job->depends_on}" );
+		if ( null !== $job['depends_on'] ) {
+			\WP_CLI::line( "Depends on:   {$job['depends_on']}" );
 		}
 
 		\WP_CLI::line( '' );
 		\WP_CLI::line( 'Payload:' );
-		\WP_CLI::line( json_encode( $job->payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
+		\WP_CLI::line( json_encode( $job['payload'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
 
-		$logs = Queuety::logger()->for_job( $job_id );
+		$logs = $data['logs'];
 		if ( ! empty( $logs ) ) {
 			\WP_CLI::line( '' );
 			\WP_CLI::line( 'Log history:' );
@@ -410,7 +375,7 @@ class QueuetyCommand extends \WP_CLI_Command {
 	public function metrics( $args, $assoc_args ) {
 		$minutes = (int) ( $assoc_args['minutes'] ?? 60 );
 		$format  = $assoc_args['format'] ?? 'table';
-		$stats   = Queuety::metrics()->handler_stats( $minutes );
+		$stats   = Queuety::handler_metrics( $minutes );
 
 		if ( empty( $stats ) ) {
 			\WP_CLI::log( "No metrics data found for the last {$minutes} minutes." );
@@ -439,12 +404,11 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * @param array $assoc_args Associative arguments.
 	 */
 	public function discover( $args, $assoc_args ) {
-		$directory = $args[0];
-		$namespace = $args[1];
-		$register  = isset( $assoc_args['register'] );
-
-		$discovery  = new \Queuety\HandlerDiscovery();
-		$discovered = $discovery->discover( $directory, $namespace );
+		$directory  = $args[0];
+		$namespace  = $args[1];
+		$register   = isset( $assoc_args['register'] );
+		$result     = Queuety::discover_handlers_cli( $directory, $namespace, $register );
+		$discovered = $result['discovered'];
 
 		if ( empty( $discovered ) ) {
 			\WP_CLI::log( 'No handlers found.' );
@@ -463,20 +427,9 @@ class QueuetyCommand extends \WP_CLI_Command {
 		\WP_CLI\Utils\format_items( 'table', $items, array( 'class', 'type', 'name' ) );
 
 		if ( $register ) {
-			$count = $discovery->register_all( $directory, $namespace, Queuety::registry() );
-			\WP_CLI::success( "Registered {$count} handlers." );
+			\WP_CLI::success( "Registered {$result['registered']} handlers." );
 		} else {
 			\WP_CLI::log( 'Use --register to register discovered handlers.' );
 		}
-	}
-
-	/**
-	 * Get the database connection via reflection.
-	 *
-	 * @return \Queuety\Connection
-	 */
-	private function get_connection(): \Queuety\Connection {
-		$reflection = new \ReflectionProperty( \Queuety\Queue::class, 'conn' );
-		return $reflection->getValue( Queuety::queue() );
 	}
 }

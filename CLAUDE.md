@@ -59,6 +59,8 @@ queuety/
 │   ├── Connection.php     # Direct PDO database connection
 │   ├── ConfigParser.php   # wp-config.php credential parser
 │   ├── Config.php         # Configuration reader
+│   ├── CliCommandMap.php  # Serializable CLI-to-PHP command catalog for harnesses
+│   ├── CliCommandAdapters.php # CLI argument normalization into execution plans
 │   ├── Dispatchable.php   # Trait for self-dispatching job classes
 │   ├── JobSerializer.php  # Serializes Contracts\Job instances to handler/payload
 │   ├── Batch.php          # Batch value object
@@ -171,6 +173,14 @@ All constants are optional. Define them in `wp-config.php` or `queuety-config.ph
 11. **Streaming steps yield chunks**: each yielded value is persisted to the `queuety_chunks` table immediately. On retry, `$existing_chunks` provides previously saved data so the stream can resume.
 12. **Middleware wraps job execution**: middleware classes implement `Contracts\Middleware` and are declared in a `middleware()` method on the job class. The pipeline is onion-style (outer to inner).
 13. **Workflow event log records step transitions**: every step start, completion, and failure is recorded with state snapshots for time-travel debugging.
+14. **Keep `CliCommandMap` and `CliCommandAdapters` aligned with the real CLI surface**: new or changed commands need a stable operation ID, a public API target, and resolver coverage.
+
+## Harness Contract
+
+- `Queuety::cli_command_map()` exposes the serializable command catalog another harness can inspect.
+- `Queuety::resolve_cli_command( $path, $args, $assoc_args )` turns parsed CLI input into one execution plan.
+- Execution plans must prefer public PHP callables. Do not point the harness at WP-CLI command classes.
+- Adapters own CLI-only normalization like queue defaults, JSON payload decoding, flag branching, and file/export behavior so the same semantics stay reusable outside WP-CLI.
 
 ## WP-CLI Commands
 
@@ -192,14 +202,23 @@ All constants are optional. Define them in `wp-config.php` or `queuety-config.ph
 | `wp queuety pause <queue>` | Pause a queue |
 | `wp queuety resume <queue>` | Resume a queue |
 | `wp queuety metrics` | Show per-handler metrics |
-| `wp queuety discover <dir> --namespace=<ns>` | Auto-discover handlers |
+| `wp queuety discover <directory> <namespace> [--register]` | Auto-discover handlers |
 | `wp queuety workflow status <id>` | Show workflow progress |
 | `wp queuety workflow retry <id>` | Retry from failed step |
+| `wp queuety workflow approve <id> [--data=<json>] [--signal=<name>]` | Send approval data to a workflow |
+| `wp queuety workflow reject <id> [--data=<json>] [--signal=<name>]` | Send rejection data to a workflow |
+| `wp queuety workflow input <id> [--data=<json>] [--signal=<name>]` | Send structured input to a workflow |
+| `wp queuety workflow artifacts <id> [--with-content]` | List stored workflow artifacts |
+| `wp queuety workflow artifact <id> <key>` | Show one workflow artifact |
 | `wp queuety workflow pause <id>` | Pause a workflow |
 | `wp queuety workflow resume <id>` | Resume a workflow |
 | `wp queuety workflow list [--status=<status>]` | List workflows |
 | `wp queuety workflow cancel <id>` | Cancel a workflow and run cleanup handlers |
 | `wp queuety workflow timeline <id>` | Show the full event timeline for a workflow |
+| `wp queuety workflow rewind <id> <step>` | Rewind a workflow to an earlier step |
+| `wp queuety workflow fork <id>` | Fork a workflow into an independent copy |
+| `wp queuety workflow export <id> [--output=<file>]` | Export a workflow to JSON |
+| `wp queuety workflow replay <file>` | Replay a workflow export |
 | `wp queuety workflow state-at <id> <step>` | Show workflow state snapshot at a specific step |
 | `wp queuety schedule list` | List recurring schedules |
 | `wp queuety schedule add <handler> [--every=<interval>] [--cron=<expr>]` | Add a recurring schedule |

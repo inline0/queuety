@@ -209,10 +209,10 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * @param array $assoc_args Associative arguments.
 	 */
 	public function artifacts( $args, $assoc_args ) {
-		$workflow_id      = (int) $args[0];
-		$format           = $assoc_args['format'] ?? 'table';
-		$include_content  = isset( $assoc_args['with-content'] );
-		$artifacts        = Queuety::workflow_artifacts( $workflow_id, $include_content );
+		$workflow_id     = (int) $args[0];
+		$format          = $assoc_args['format'] ?? 'table';
+		$include_content = isset( $assoc_args['with-content'] );
+		$artifacts       = Queuety::workflow_artifacts( $workflow_id, $include_content );
 
 		if ( 'json' === $format ) {
 			\WP_CLI::log( json_encode( $artifacts, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
@@ -332,7 +332,7 @@ class WorkflowCommand extends \WP_CLI_Command {
 			$status_filter = \Queuety\Enums\WorkflowStatus::tryFrom( $assoc_args['status'] );
 		}
 
-		$workflows = Queuety::workflow_manager()->list( $status_filter );
+		$workflows = Queuety::list_workflows( $status_filter?->value );
 
 		$items = array_map(
 			fn( $wf ) => array(
@@ -456,16 +456,20 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 */
 	public function export( $args, $assoc_args ) {
 		try {
-			$data = Queuety::export_workflow( (int) $args[0] );
-			$json = json_encode( $data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR );
-
 			if ( isset( $assoc_args['output'] ) ) {
-				file_put_contents( $assoc_args['output'], $json );
+				Queuety::export_workflow_to_file( (int) $args[0], $assoc_args['output'] );
 				\WP_CLI::success( "Workflow #{$args[0]} exported to {$assoc_args['output']}." );
 			} else {
-				\WP_CLI::log( $json );
+				\WP_CLI::log(
+					json_encode(
+						Queuety::export_workflow( (int) $args[0] ),
+						JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
+					)
+				);
 			}
 		} catch ( \RuntimeException $e ) {
+			\WP_CLI::error( $e->getMessage() );
+		} catch ( \JsonException $e ) {
 			\WP_CLI::error( $e->getMessage() );
 		}
 	}
@@ -480,17 +484,8 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * @param array $assoc_args Associative arguments.
 	 */
 	public function replay( $args, $assoc_args ) {
-		$file = $args[0];
-
-		if ( ! file_exists( $file ) ) {
-			\WP_CLI::error( "File not found: {$file}" );
-			return;
-		}
-
 		try {
-			$json   = file_get_contents( $file );
-			$data   = json_decode( $json, true, 512, JSON_THROW_ON_ERROR );
-			$new_id = Queuety::replay_workflow( $data );
+			$new_id = Queuety::replay_workflow_file( $args[0] );
 			\WP_CLI::success( "Workflow replayed. New workflow ID: {$new_id}." );
 		} catch ( \JsonException $e ) {
 			\WP_CLI::error( "Invalid JSON: {$e->getMessage()}" );

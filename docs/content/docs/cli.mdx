@@ -7,6 +7,11 @@ description: Complete WP-CLI command reference for Queuety.
 
 All Queuety operations are available through WP-CLI under the `wp queuety` namespace.
 
+For agent harnesses and other virtual-bash integrations, treat this page as the human reference and use the PHP bridge as the machine contract:
+
+- `Queuety::cli_command_map()` exposes the serializable command catalog
+- `Queuety::resolve_cli_command( $path, $args, $assoc_args )` turns parsed `wp queuety ...` input into a normalized execution plan that prefers direct PHP callables
+
 ## Job commands
 
 ### `wp queuety work`

@@ -120,6 +120,7 @@ add_action(
 	}
 );
 
+// phpcs:disable WordPress.WP.CronInterval.CronSchedulesInterval -- The plugin ships a one-minute cron fallback so jobs continue without a dedicated worker.
 add_filter(
 	'cron_schedules',
 	function ( $schedules ) {
@@ -130,6 +131,7 @@ add_filter(
 		return $schedules;
 	}
 );
+// phpcs:enable WordPress.WP.CronInterval.CronSchedulesInterval
 
 add_action(
 	'queuety_cron_process',
@@ -144,9 +146,11 @@ add_action(
 );
 
 if ( defined( 'WP_CLI' ) && WP_CLI ) {
-	\WP_CLI::add_command( 'queuety', Queuety\CLI\QueuetyCommand::class );
-	\WP_CLI::add_command( 'queuety workflow', Queuety\CLI\WorkflowCommand::class );
-	\WP_CLI::add_command( 'queuety log', Queuety\CLI\LogCommand::class );
-	\WP_CLI::add_command( 'queuety schedule', Queuety\CLI\ScheduleCommand::class );
-	\WP_CLI::add_command( 'queuety webhook', Queuety\CLI\WebhookCommand::class );
+	$queuety_cli_command = Queuety\Queuety::cli_command();
+
+	\WP_CLI::add_command( $queuety_cli_command, Queuety\CLI\QueuetyCommand::class );
+	\WP_CLI::add_command( $queuety_cli_command . ' workflow', Queuety\CLI\WorkflowCommand::class );
+	\WP_CLI::add_command( $queuety_cli_command . ' log', Queuety\CLI\LogCommand::class );
+	\WP_CLI::add_command( $queuety_cli_command . ' schedule', Queuety\CLI\ScheduleCommand::class );
+	\WP_CLI::add_command( $queuety_cli_command . ' webhook', Queuety\CLI\WebhookCommand::class );
 }

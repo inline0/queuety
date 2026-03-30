@@ -32,7 +32,7 @@ class WebhookCommand extends \WP_CLI_Command {
 		$event = $args[0];
 		$url   = $args[1];
 
-		$id = Queuety::webhook_notifier()->register( $event, $url );
+		$id = Queuety::register_webhook( $event, $url );
 		\WP_CLI::success( "Webhook #{$id} registered for event '{$event}'." );
 	}
 
@@ -51,7 +51,7 @@ class WebhookCommand extends \WP_CLI_Command {
 	 */
 	public function list_( $args, $assoc_args ) {
 		$format   = $assoc_args['format'] ?? 'table';
-		$webhooks = Queuety::webhook_notifier()->list();
+		$webhooks = Queuety::list_webhooks();
 
 		if ( empty( $webhooks ) ) {
 			\WP_CLI::log( 'No webhooks registered.' );
@@ -75,7 +75,7 @@ class WebhookCommand extends \WP_CLI_Command {
 	 */
 	public function remove( $args, $assoc_args ) {
 		$id = (int) $args[0];
-		Queuety::webhook_notifier()->remove( $id );
+		Queuety::remove_webhook( $id );
 		\WP_CLI::success( "Webhook #{$id} removed." );
 	}
 }
