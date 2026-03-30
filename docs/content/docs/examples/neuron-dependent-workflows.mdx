@@ -1,0 +1,129 @@
+---
+title: Neuron Dependent Workflows
+description: Make one Neuron-powered workflow wait for another before it continues.
+---
+
+# Neuron Dependent Workflows
+
+This example answers a common agentic question:
+
+> Can one workflow decide that another workflow should only continue after an earlier workflow finishes?
+
+Yes. The important nuance is that Queuety already supports this with `await_workflow()` and `await_workflows()`.
+
+That means:
+
+- workflow `X` can be dispatched now
+- `X` can park in `waiting_workflow`
+- `X` only resumes when workflow `Y` completes
+
+## Example: research first, writing second
+
+Use one top-level workflow to build a research packet, and a second top-level workflow to draft the final copy.
+
+### Research workflow
+
+```php
+use Queuety\Enums\WaitMode;
+use Queuety\Queuety;
+
+$research_agent = Queuety::workflow('research_agent')
+    ->then(ResearchTopicStep::class);
+
+$research_id = Queuety::workflow('research_packet')
+    ->then(PlanResearchTasksStep::class)
+    ->spawn_agents('agent_tasks', $research_agent)
+    ->await_agents(mode: WaitMode::All, result_key: 'agent_results')
+    ->then(SynthesizeResearchPacketStep::class)
+    ->dispatch([
+        'brief_id' => 42,
+        'provider' => 'anthropic',
+    ]);
+```
+
+### Writing workflow
+
+```php
+Queuety::workflow('write_brief')
+    ->await_workflow('research_workflow_id', 'research')
+    ->then(WriteBriefWithNeuronStep::class)
+    ->await_decision(result_key: 'editor_review')
+    ->then(PublishBriefStep::class)
+    ->dispatch([
+        'brief_id' => 42,
+        'research_workflow_id' => $research_id,
+        'provider' => 'openai',
+    ]);
+```
+
+When the writing workflow starts, it immediately pauses in `waiting_workflow` until the research workflow has completed successfully.
+
+## The Neuron writing step
+
+```php
+namespace App\Workflow\Steps;
+
+use App\Neuron\WriterAgent;
+use NeuronAI\Chat\Messages\UserMessage;
+use Queuety\Step;
+
+final class WriteBriefWithNeuronStep implements Step
+{
+    public function handle(array $state): array
+    {
+        $agent = new WriterAgent(
+            providerName: $state['provider'] ?? 'openai',
+        );
+
+        $message = $agent->chat(
+            new UserMessage(sprintf(
+                "Write the final brief for brief %d using this research packet:\n\n%s",
+                $state['brief_id'],
+                json_encode($state['research'], JSON_PRETTY_PRINT),
+            ))
+        )->getMessage();
+
+        return [
+            'draft_markdown' => $message->getContent(),
+        ];
+    }
+
+    public function config(): array
+    {
+        return [];
+    }
+}
+```
+
+`$state['research']` is available because `await_workflow()` copied the completed public state from the dependency workflow into the current workflow under the `research` key.
+
+## When to use this instead of one giant workflow
+
+Prefer separate top-level workflows when:
+
+- the stages have different owners or operational lifecycles
+- you want to inspect and retry them independently
+- a later stage should be dispatchable even before the earlier stage is finished
+
+Prefer one workflow when:
+
+- the stages are tightly coupled
+- they share one lifecycle and one state bag
+
+## One important distinction
+
+This pattern means:
+
+- `X` exists now, but waits for `Y`
+
+It does **not** mean:
+
+- `X` is not created until `Y` is done
+
+If you want the second behavior, have a parent workflow wait for `Y` and only then call `spawn_workflows()` or `spawn_agents()` for `X`.
+
+## Related docs
+
+- [Workflow Dependencies](/docs/workflows/dependencies)
+- [Async Handoffs](/docs/workflows/async-handoffs)
+- [Agent Orchestration](/docs/workflows/agent-orchestration)

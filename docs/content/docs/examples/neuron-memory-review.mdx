@@ -1,0 +1,176 @@
+---
+title: Neuron Memory + Review Loop
+description: Combine Neuron SQL chat history with Queuety human review steps.
+---
+
+# Neuron Memory + Review Loop
+
+This pattern is useful when an agent should keep conversational context across a review loop, but the overall lifecycle should still be orchestrated by Queuety.
+
+The split is:
+
+- Queuety owns the review state machine
+- Neuron owns the agent memory for the drafting thread
+
+## Why Neuron memory helps here
+
+If a reviewer rejects a draft and asks for revisions, the next agent call should not have to reconstruct the whole context from scratch.
+
+Neuron's `SQLChatHistory` is a good fit for that because the agent can keep working inside the same conversation thread while Queuety pauses, resumes, and routes the workflow.
+
+## The Neuron agent with SQL-backed history
+
+```php
+namespace App\Neuron;
+
+use NeuronAI\Agent\Agent;
+use NeuronAI\Chat\History\ChatHistoryInterface;
+use NeuronAI\Chat\History\SQLChatHistory;
+use NeuronAI\Providers\AIProviderInterface;
+use NeuronAI\Providers\Anthropic\Anthropic;
+use NeuronAI\SystemPrompt;
+
+final class EditorAgent extends Agent
+{
+    public function __construct(
+        private readonly string $threadId,
+        private readonly \PDO $pdo,
+    ) {}
+
+    protected function provider(): AIProviderInterface
+    {
+        return new Anthropic(
+            key: $_ENV['ANTHROPIC_API_KEY'],
+            model: $_ENV['ANTHROPIC_MODEL'],
+        );
+    }
+
+    protected function chatHistory(): ChatHistoryInterface
+    {
+        return new SQLChatHistory(
+            thread_id: $this->threadId,
+            pdo: $this->pdo,
+            table: 'neuron_chat_history',
+            contextWindow: 50000,
+        );
+    }
+
+    public function instructions(): string
+    {
+        return (string) new SystemPrompt(
+            background: [
+                'You are an editorial agent for long-form product briefs.',
+                'Apply reviewer notes without losing the original intent.',
+            ],
+        );
+    }
+}
+```
+
+## Draft once, revise with the same memory thread
+
+```php
+namespace App\Workflow\Steps;
+
+use App\Neuron\EditorAgent;
+use NeuronAI\Chat\Messages\UserMessage;
+use Queuety\Step;
+
+final class DraftBriefStep implements Step
+{
+    public function __construct(private readonly \PDO $pdo) {}
+
+    public function handle(array $state): array
+    {
+        $threadId = $state['neuron_thread_id'] ?? sprintf(
+            'brief:%d:editor',
+            $state['brief_id'],
+        );
+
+        $agent = new EditorAgent($threadId, $this->pdo);
+
+        $message = $agent->chat(
+            new UserMessage("Write the first draft for brief {$state['brief_id']}.")
+        )->getMessage();
+
+        return [
+            'neuron_thread_id' => $threadId,
+            'draft_markdown' => $message->getContent(),
+        ];
+    }
+
+    public function config(): array
+    {
+        return [];
+    }
+}
+
+final class ReviseBriefStep implements Step
+{
+    public function __construct(private readonly \PDO $pdo) {}
+
+    public function handle(array $state): array
+    {
+        $agent = new EditorAgent($state['neuron_thread_id'], $this->pdo);
+
+        $message = $agent->chat(
+            new UserMessage(sprintf(
+                "Revise the draft using these review notes: %s",
+                $state['review']['data']['reason'] ?? 'No notes provided.',
+            ))
+        )->getMessage();
+
+        return [
+            'draft_markdown' => $message->getContent(),
+        ];
+    }
+
+    public function config(): array
+    {
+        return [];
+    }
+}
+```
+
+## The Queuety workflow
+
+```php
+use Queuety\Queuety;
+
+Queuety::workflow('brief_review_loop')
+    ->then(DraftBriefStep::class)
+    ->await_decision(result_key: 'review')
+    ->then(RouteDecisionStep::class)
+    ->then(ReviseBriefStep::class)
+    ->await_decision(result_key: 'review')
+    ->then(PublishBriefStep::class)
+    ->dispatch([
+        'brief_id' => 42,
+    ]);
+```
+
+`RouteDecisionStep` can inspect `$state['review']['outcome']` and branch with `_goto` if the draft was rejected.
+
+The important part is that `ReviseBriefStep` uses the same Neuron `thread_id`, so the agent keeps its prior conversation context while Queuety keeps the durable workflow state and review gates.
+
+## Why this is cleaner than storing everything only in workflow state
+
+Workflow state is excellent for orchestration facts:
+
+- review outcome
+- artifact IDs
+- workflow IDs
+- routing decisions
+
+Neuron memory is better for conversational context:
+
+- prior prompts
+- iterative revisions
+- model responses that should remain part of the drafting thread
+
+Using both gives each system the job it is best at.
+
+## Related docs
+
+- [Workflow Signals](/docs/workflows/signals)
+- [Agent Orchestration](/docs/workflows/agent-orchestration)
