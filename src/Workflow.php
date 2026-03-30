@@ -69,7 +69,7 @@ class Workflow {
 	 * Resolve the step type from a step definition.
 	 *
 	 * @param array|string $step_def Step definition.
-	 * @return string Step type: 'single', 'parallel', 'fan_out', 'sub_workflow', 'spawn_workflows', 'timer', 'signal', or 'workflow_wait'.
+	 * @return string Step type: 'single', 'parallel', 'fan_out', 'sub_workflow', 'spawn_workflows', 'timer', 'signal', 'workflow_wait', or 'loop'.
 	 */
 	private function resolve_step_type( array|string $step_def ): string {
 		if ( is_string( $step_def ) ) {
@@ -98,6 +98,7 @@ class Workflow {
 			'fan_out' => '__queuety_fan_out',
 			'sub_workflow' => '__queuety_sub_workflow',
 			'spawn_workflows' => '__queuety_spawn_workflows',
+			'loop' => '__queuety_loop',
 			'timer' => '__queuety_timer',
 			default => $this->resolve_step_handler( $step_def ),
 		};
@@ -632,10 +633,33 @@ class Workflow {
 	 * @param mixed $left  Left-hand value.
 	 * @param mixed $right Right-hand value.
 	 * @return bool
+	 * @throws \JsonException If the comparable values cannot be encoded.
 	 */
 	private function values_equal( mixed $left, mixed $right ): bool {
 		return json_encode( $this->canonicalize_comparable_value( $left ), JSON_THROW_ON_ERROR )
 			=== json_encode( $this->canonicalize_comparable_value( $right ), JSON_THROW_ON_ERROR );
+	}
+
+	/**
+	 * Decide whether a loop step should jump back to its target.
+	 *
+	 * @param array $step_def Step definition.
+	 * @param array $state    Current workflow state.
+	 * @return bool
+	 * @throws \JsonException|\RuntimeException If the comparable values cannot be encoded or the loop mode is invalid.
+	 */
+	private function loop_should_continue( array $step_def, array $state ): bool {
+		$mode     = (string) ( $step_def['loop_mode'] ?? 'while' );
+		$state_key = trim( (string) ( $step_def['state_key'] ?? '' ) );
+		$expected = $step_def['expected'] ?? true;
+		$actual   = $state[ $state_key ] ?? null;
+		$matches  = $this->values_equal( $actual, $expected );
+
+		return match ( $mode ) {
+			'while' => $matches,
+			'until' => ! $matches,
+			default => throw new \RuntimeException( "Unsupported loop mode '{$mode}'." ),
+		};
 	}
 
 	/**
@@ -1917,6 +1941,16 @@ class Workflow {
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 			);
+		} elseif ( 'loop' === $type ) {
+			$this->queue->dispatch(
+				handler: '__queuety_loop',
+				payload: array( 'step_index' => $step_index ),
+				queue: $queue_name,
+				priority: $priority,
+				max_attempts: $max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
 		} else {
 			$handler          = $this->resolve_step_handler( $step_def );
 			$handler_defaults = HandlerMetadata::from_class( $handler );
@@ -2499,6 +2533,39 @@ class Workflow {
 		foreach ( array_values( array_unique( $terminal_ids ) ) as $terminal_workflow_id ) {
 			$this->reconcile_waiting_workflows_for_dependency( $terminal_workflow_id );
 		}
+	}
+
+	/**
+	 * Evaluate a loop control step and emit a `_goto` when the loop should continue.
+	 *
+	 * @param int   $workflow_id    Workflow ID.
+	 * @param array $step_def       Step definition.
+	 * @param int   $step_index     Step index.
+	 * @param array $workflow_state Current workflow state.
+	 * @return array
+	 * @throws \RuntimeException If the loop definition is invalid.
+	 */
+	public function handle_loop_step( int $workflow_id, array $step_def, int $step_index, array $workflow_state ): array {
+		if ( 'loop' !== ( $step_def['type'] ?? '' ) ) {
+			throw new \RuntimeException( "Workflow {$workflow_id}: step {$step_index} is not a loop definition." );
+		}
+
+		$target_step = trim( (string) ( $step_def['target_step'] ?? '' ) );
+		$state_key   = trim( (string) ( $step_def['state_key'] ?? '' ) );
+
+		if ( '' === $target_step ) {
+			throw new \RuntimeException( "Workflow {$workflow_id}: loop step {$step_index} is missing a target step." );
+		}
+
+		if ( '' === $state_key ) {
+			throw new \RuntimeException( "Workflow {$workflow_id}: loop step {$step_index} is missing a state key." );
+		}
+
+		if ( ! $this->loop_should_continue( $step_def, $workflow_state ) ) {
+			return array();
+		}
+
+		return array( '_goto' => $target_step );
 	}
 
 	/**

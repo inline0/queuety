@@ -269,7 +269,7 @@ class Worker {
 	 * Execute a single job.
 	 *
 	 * @param Job $job The claimed job.
-	 * @throws TimeoutException If the job exceeds max execution time (caught internally).
+	 * @throws TimeoutException|\RuntimeException If execution times out or an internal workflow placeholder is malformed.
 	 */
 	public function process_job( Job $job ): void {
 		$start_time       = hrtime( true );
@@ -388,6 +388,30 @@ class Worker {
 						)
 					);
 				}
+			} elseif ( $job->is_workflow_step() && '__queuety_loop' === $job->handler ) {
+				$wf_state = $this->workflow->get_state( $job->workflow_id ) ?? array();
+				$steps    = $wf_state['_steps'] ?? array();
+				$step_def = $steps[ $job->step_index ] ?? null;
+
+				if ( ! $step_def || 'loop' !== ( $step_def['type'] ?? '' ) ) {
+					throw new \RuntimeException( "Workflow loop step {$job->step_index} is missing or invalid." );
+				}
+
+				$step_output = $this->workflow->handle_loop_step(
+					workflow_id: $job->workflow_id,
+					step_def: $step_def,
+					step_index: $job->step_index,
+					workflow_state: $wf_state,
+				);
+
+				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
+
+				$this->workflow->advance_step(
+					workflow_id: $job->workflow_id,
+					completed_job_id: $job->id,
+					step_output: $step_output,
+					duration_ms: $duration_ms,
+				);
 			} elseif ( $job->is_workflow_step() && '__queuety_timer' === $job->handler ) {
 				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 

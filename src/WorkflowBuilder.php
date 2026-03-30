@@ -158,6 +158,22 @@ class WorkflowBuilder {
 	}
 
 	/**
+	 * Whether a previously added step exists under the given name.
+	 *
+	 * @param string $name Step name.
+	 * @return bool
+	 */
+	private function has_prior_step_named( string $name ): bool {
+		foreach ( $this->steps as $step ) {
+			if ( isset( $step['name'] ) && $step['name'] === $name ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
 	 * Add a parallel step group to the workflow.
 	 *
 	 * All handlers in the group run concurrently. The workflow advances
@@ -212,6 +228,99 @@ class WorkflowBuilder {
 			'quorum'        => $quorum,
 			'reducer_class' => $reducer_class,
 		);
+		return $this;
+	}
+
+	/**
+	 * Add a loop control step that jumps back while a state key matches the expected value.
+	 *
+	 * The loop target must reference a step that already exists in the workflow definition.
+	 *
+	 * @param string      $target_step Step name to jump back to when the loop should continue.
+	 * @param string      $state_key   Public state key to inspect.
+	 * @param mixed       $expected    Value that keeps the loop running.
+	 * @param string|null $name        Optional step name.
+	 * @return self
+	 * @throws \RuntimeException If the target step or state key is empty, or if the target does not exist yet.
+	 */
+	public function repeat_while(
+		string $target_step,
+		string $state_key,
+		mixed $expected = true,
+		?string $name = null,
+	): self {
+		return $this->add_loop_step( 'while', $target_step, $state_key, $expected, $name );
+	}
+
+	/**
+	 * Add a loop control step that jumps back until a state key matches the expected value.
+	 *
+	 * The loop target must reference a step that already exists in the workflow definition.
+	 *
+	 * @param string      $target_step Step name to jump back to when the loop should continue.
+	 * @param string      $state_key   Public state key to inspect.
+	 * @param mixed       $expected    Value that stops the loop once matched.
+	 * @param string|null $name        Optional step name.
+	 * @return self
+	 * @throws \RuntimeException If the target step or state key is empty, or if the target does not exist yet.
+	 */
+	public function repeat_until(
+		string $target_step,
+		string $state_key,
+		mixed $expected = true,
+		?string $name = null,
+	): self {
+		return $this->add_loop_step( 'until', $target_step, $state_key, $expected, $name );
+	}
+
+	/**
+	 * Add a serializable loop control step.
+	 *
+	 * @param string      $mode        Loop mode: while or until.
+	 * @param string      $target_step Step name to jump back to.
+	 * @param string      $state_key   Public state key to inspect.
+	 * @param mixed       $expected    Comparison value.
+	 * @param string|null $name        Optional step name.
+	 * @return self
+	 * @throws \RuntimeException If the loop target is invalid.
+	 */
+	private function add_loop_step(
+		string $mode,
+		string $target_step,
+		string $state_key,
+		mixed $expected,
+		?string $name = null,
+	): self {
+		$target_step = trim( $target_step );
+		$state_key   = trim( $state_key );
+
+		if ( '' === $target_step ) {
+			throw new \RuntimeException( 'Loop steps require a non-empty target step name.' );
+		}
+
+		if ( '' === $state_key ) {
+			throw new \RuntimeException( 'Loop steps require a non-empty state key.' );
+		}
+
+		if ( ! $this->has_prior_step_named( $target_step ) ) {
+			throw new \RuntimeException(
+				sprintf(
+					"Loop target '%s' must reference an earlier named step.",
+					$target_step
+				)
+			);
+		}
+
+		$index         = count( $this->steps );
+		$this->steps[] = array(
+			'type'        => 'loop',
+			'name'        => $name ?? 'repeat_' . $mode . '_' . $index,
+			'loop_mode'   => $mode,
+			'target_step' => $target_step,
+			'state_key'   => $state_key,
+			'expected'    => $expected,
+		);
+
 		return $this;
 	}
 
@@ -1022,6 +1131,16 @@ class WorkflowBuilder {
 					'result_key'         => $step['result_key'],
 					'compensation'       => $step['compensation'] ?? null,
 				);
+			} elseif ( 'loop' === $step['type'] ) {
+				$result[] = array(
+					'type'         => 'loop',
+					'name'         => $step['name'],
+					'loop_mode'    => $step['loop_mode'],
+					'target_step'  => $step['target_step'],
+					'state_key'    => $step['state_key'],
+					'expected'     => $step['expected'],
+					'compensation' => $step['compensation'] ?? null,
+				);
 			} elseif ( 'spawn_workflows' === $step['type'] ) {
 				$result[] = array(
 					'type'                => 'spawn_workflows',
@@ -1375,6 +1494,16 @@ class WorkflowBuilder {
 		} elseif ( 'workflow_wait' === $step_def['type'] ) {
 			$this->queue_ops->dispatch(
 				handler: '__queuety_workflow_wait',
+				payload: array( 'step_index' => $step_index ),
+				queue: $this->queue,
+				priority: $this->priority,
+				max_attempts: $this->max_attempts,
+				workflow_id: $workflow_id,
+				step_index: $step_index,
+			);
+		} elseif ( 'loop' === $step_def['type'] ) {
+			$this->queue_ops->dispatch(
+				handler: '__queuety_loop',
 				payload: array( 'step_index' => $step_index ),
 				queue: $this->queue,
 				priority: $this->priority,

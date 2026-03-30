@@ -1,0 +1,127 @@
+<?php
+
+namespace Queuety\Tests\Integration;
+
+use Queuety\Config;
+use Queuety\Enums\WorkflowStatus;
+use Queuety\HandlerRegistry;
+use Queuety\Logger;
+use Queuety\Queue;
+use Queuety\Queuety;
+use Queuety\Tests\Integration\Fixtures\AccumulatingStep;
+use Queuety\Tests\Integration\Fixtures\DataFetchStep;
+use Queuety\Tests\Integration\Fixtures\LoopFlagStep;
+use Queuety\Tests\IntegrationTestCase;
+use Queuety\Worker;
+use Queuety\Workflow;
+
+class LoopWorkflowTest extends IntegrationTestCase {
+
+	private Queue $queue;
+	private Logger $logger;
+	private Workflow $workflow_mgr;
+	private Worker $worker;
+
+	protected function setUp(): void {
+		parent::setUp();
+
+		$this->queue        = new Queue( $this->conn );
+		$this->logger       = new Logger( $this->conn );
+		$this->workflow_mgr = new Workflow( $this->conn, $this->queue, $this->logger );
+		$this->worker       = new Worker(
+			$this->conn,
+			$this->queue,
+			$this->logger,
+			$this->workflow_mgr,
+			new HandlerRegistry(),
+			new Config(),
+		);
+
+		Queuety::reset();
+		Queuety::init( $this->conn );
+	}
+
+	private function process_one(): void {
+		$job = $this->queue->claim();
+		if ( null !== $job ) {
+			$this->worker->process_job( $job );
+		}
+	}
+
+	public function test_repeat_until_loops_back_until_state_matches(): void {
+		$workflow_id = Queuety::workflow( 'repeat_until_counter' )
+			->then( AccumulatingStep::class, 'increment' )
+			->repeat_until( 'increment', 'counter', 3, 'keep_counting' )
+			->then( DataFetchStep::class, 'done' )
+			->dispatch( array( 'user_id' => 7 ) );
+
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $workflow_id );
+		$this->assertSame( 1, $status->current_step );
+		$this->assertSame( 1, $status->state['counter'] );
+
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $workflow_id );
+		$this->assertSame( 0, $status->current_step );
+		$this->assertSame( 1, $status->state['counter'] );
+
+		$this->process_one();
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $workflow_id );
+		$this->assertSame( 0, $status->current_step );
+		$this->assertSame( 2, $status->state['counter'] );
+
+		$this->process_one();
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $workflow_id );
+		$this->assertSame( WorkflowStatus::Running, $status->status );
+		$this->assertSame( 2, $status->current_step );
+		$this->assertSame( 3, $status->state['counter'] );
+
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $workflow_id );
+		$this->assertSame( WorkflowStatus::Completed, $status->status );
+		$this->assertSame( 3, $status->state['counter'] );
+		$this->assertArrayHasKey( 'user_name', $status->state );
+	}
+
+	public function test_repeat_while_loops_back_while_state_matches(): void {
+		$workflow_id = Queuety::workflow( 'repeat_while_flag' )
+			->then( LoopFlagStep::class, 'poll' )
+			->repeat_while( 'poll', 'should_repeat', true, 'repeat_poll' )
+			->then( DataFetchStep::class, 'done' )
+			->dispatch(
+				array(
+					'user_id' => 3,
+					'limit'   => 3,
+				)
+			);
+
+		$this->process_one();
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $workflow_id );
+		$this->assertSame( 0, $status->current_step );
+		$this->assertSame( 1, $status->state['counter'] );
+		$this->assertTrue( $status->state['should_repeat'] );
+
+		$this->process_one();
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $workflow_id );
+		$this->assertSame( 0, $status->current_step );
+		$this->assertSame( 2, $status->state['counter'] );
+		$this->assertTrue( $status->state['should_repeat'] );
+
+		$this->process_one();
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $workflow_id );
+		$this->assertSame( WorkflowStatus::Running, $status->status );
+		$this->assertSame( 2, $status->current_step );
+		$this->assertSame( 3, $status->state['counter'] );
+		$this->assertFalse( $status->state['should_repeat'] );
+
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $workflow_id );
+		$this->assertSame( WorkflowStatus::Completed, $status->status );
+		$this->assertArrayHasKey( 'user_name', $status->state );
+	}
+}

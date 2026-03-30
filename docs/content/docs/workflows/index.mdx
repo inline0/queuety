@@ -139,13 +139,14 @@ Use workflow guardrails when you need safer long-running orchestration: `version
 
 ## Step types
 
-Queuety supports ten types of steps within a workflow:
+Queuety supports eleven types of steps within a workflow:
 
 - [Sequential chains](/docs/workflows/chains) using `->then()` for one-at-a-time execution
 - [Parallel groups](/docs/workflows/parallel) using `->parallel()` for concurrent execution
 - [Dynamic fan-out](/docs/workflows/fan-out) using `->fan_out()` for runtime-discovered branch work and explicit join semantics
 - [Async handoffs](/docs/workflows/async-handoffs) using `->spawn_workflows()` or `->spawn_agents()` to dispatch independent child workflows from runtime-discovered items
 - [Conditional branching](/docs/workflows/conditional) using named steps and `_goto`
+- [Loops](/docs/workflows/loops) using `->repeat_until()` and `->repeat_while()` for durable back-edges to earlier named steps
 - [Sub-workflows](/docs/workflows/sub-workflows) using `->sub_workflow()` for nested composition
 - [Durable timers](/docs/workflows/timers) using `->sleep()` for time-based delays
 - [Signals](/docs/workflows/signals) using `->wait_for_signal()`, `->wait_for_signals()`, `->await_approval()`, `->await_input()`, and `->await_decision()` for external event triggers

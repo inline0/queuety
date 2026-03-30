@@ -7,6 +7,8 @@ description: Using named steps and _goto to branch workflow execution.
 
 Workflows can skip to a named step based on the output of a previous step. This is done by returning a special `_goto` key in the step's return value.
 
+If you specifically want to jump back to an earlier step based on workflow state, see [Loops](/docs/workflows/loops). That keeps the back-edge explicit in the workflow definition instead of burying it inside a step class.
+
 ## Named steps
 
 Give steps a name using the second argument to `->then()`:

@@ -131,6 +131,23 @@ class WorkflowGuardrailsTest extends IntegrationTestCase {
 		$this->assertSame( WorkflowStatus::Failed, $status->status );
 	}
 
+	public function test_max_transitions_fails_repeating_workflow_when_loop_runs_too_long(): void {
+		$workflow_id = ( new WorkflowBuilder( 'loop_transition_budget', $this->conn, $this->queue, $this->logger ) )
+			->max_transitions( 3 )
+			->then( AccumulatingStep::class, 'increment' )
+			->repeat_until( 'increment', 'counter', 99, 'keep_counting' )
+			->then( DataFetchStep::class )
+			->dispatch();
+
+		$this->process_one();
+		$this->process_one();
+		$this->process_one();
+		$this->process_one();
+
+		$status = $this->workflow->status( $workflow_id );
+		$this->assertSame( WorkflowStatus::Failed, $status->status );
+	}
+
 	public function test_max_state_bytes_fails_workflow_when_public_state_grows_too_large(): void {
 		$workflow_id = ( new WorkflowBuilder( 'state_budget', $this->conn, $this->queue, $this->logger ) )
 			->max_state_bytes( 64 )

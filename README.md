@@ -143,6 +143,19 @@ Queuety::workflow( 'editorial_run' )
     ->dispatch();
 ```
 
+Repeat an earlier step until review state says the run can continue:
+
+```php
+Queuety::workflow( 'brief_review_loop' )
+    ->max_transitions( 10 )
+    ->then( DraftBriefStep::class, 'draft' )
+    ->await_decision( result_key: 'review' )
+    ->then( NormalizeReviewOutcomeStep::class )
+    ->repeat_until( 'draft', 'review_approved', true )
+    ->then( PublishBriefStep::class )
+    ->dispatch( [ 'brief_id' => 42 ] );
+```
+
 Trigger workflows directly from WordPress actions:
 
 ```php
@@ -253,6 +266,7 @@ wp queuety work
 - **Workflow dependencies** -- `await_workflow()` and `await_workflows()` coordinate top-level workflows without forcing them into one workflow definition
 - **Async workflow handoffs** -- `spawn_workflows()` turns runtime-discovered items into independent top-level workflows that can be awaited later, including named spawned groups
 - **Dynamic fan-out** -- `fan_out()` expands runtime-discovered work with `All`, `FirstSuccess`, and `Quorum` join modes
+- **Durable loops** -- `repeat_until()` and `repeat_while()` revisit earlier named steps without hiding the back-edge inside arbitrary step code
 - **Durable artifacts** -- store named workflow outputs outside the main state bag and inspect them later through status, CLI, export, and replay
 - **Workflow guardrails** -- `version()`, a deterministic definition hash, `idempotency_key()`, `max_transitions()`, `max_fan_out_items()`, and `max_state_bytes()` make long-running agent workflows easier to inspect and safer to operate
 - **Step compensation** -- `compensate_with()` and `compensate_on_failure()` provide saga-style rollback hooks for completed steps
@@ -265,7 +279,7 @@ wp queuety work
 - **Schedule overlap policies** -- Allow, Skip, or Buffer for recurring jobs
 - **Multi-queue worker priorities** -- process multiple queues with strict priority ordering
 - **Parallel steps** -- run steps concurrently and wait for all to complete before advancing
-- **Conditional branching** -- skip to named steps based on prior state
+- **Conditional branching** -- skip to named steps based on prior state or use first-class loop steps for explicit back-edges
 - **Sub-workflows** -- spawn child workflows that feed results back to the parent
 - **Priority queues** -- 4 levels (Low, Normal, High, Urgent) via type-safe enums
 - **Rate limiting** -- per-handler execution limits with sliding window

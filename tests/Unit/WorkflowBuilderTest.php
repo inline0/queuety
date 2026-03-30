@@ -150,6 +150,49 @@ class WorkflowBuilderTest extends TestCase {
 		);
 	}
 
+	public function test_repeat_until_builds_serializable_definition(): void {
+		$steps = $this->make_builder( 'loop' )
+			->then( 'FetchDraftStep', 'draft' )
+			->repeat_until( 'draft', 'approved', true, 'await_approval_loop' )
+			->compensate_with( 'UndoLoopControl' )
+			->build_steps();
+
+		$this->assertSame(
+			array(
+				'type'         => 'loop',
+				'name'         => 'await_approval_loop',
+				'loop_mode'    => 'until',
+				'target_step'  => 'draft',
+				'state_key'    => 'approved',
+				'expected'     => true,
+				'compensation' => 'UndoLoopControl',
+			),
+			$steps[1]
+		);
+	}
+
+	public function test_repeat_while_accepts_default_index_names(): void {
+		$steps = $this->make_builder( 'loop' )
+			->then( 'PollStatusStep' )
+			->repeat_while( '0', 'poll_again' )
+			->build_steps();
+
+		$this->assertSame( 'loop', $steps[1]['type'] );
+		$this->assertSame( 'while', $steps[1]['loop_mode'] );
+		$this->assertSame( '0', $steps[1]['target_step'] );
+		$this->assertSame( 'poll_again', $steps[1]['state_key'] );
+		$this->assertTrue( $steps[1]['expected'] );
+	}
+
+	public function test_repeat_until_requires_prior_named_step(): void {
+		$builder = $this->make_builder( 'loop' );
+
+		$this->expectException( \RuntimeException::class );
+		$this->expectExceptionMessage( "Loop target 'draft' must reference an earlier named step." );
+
+		$builder->repeat_until( 'draft', 'approved' );
+	}
+
 	public function test_special_steps_preserve_compensation_in_build_steps(): void {
 		$sub_builder = $this->make_builder( 'child' )->then( 'ChildStep' );
 

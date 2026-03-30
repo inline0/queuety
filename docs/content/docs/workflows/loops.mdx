@@ -1,0 +1,92 @@
+---
+title: Loops
+description: Repeat an earlier workflow step until or while a state condition matches.
+---
+
+# Loops
+
+Queuety workflows are still ordered step chains, but they can now revisit an earlier named step with a first-class loop control node instead of hand-writing `_goto` logic.
+
+Use:
+
+- `repeat_until()` when the workflow should keep looping until a state key reaches the expected value
+- `repeat_while()` when the workflow should keep looping while a state key matches the expected value
+
+Both methods target an earlier named step, so the loop stays serializable, replayable, and guarded by the same workflow runtime as every other step.
+
+## `repeat_until()`
+
+```php
+Queuety::workflow( 'approval_revision_loop' )
+    ->max_transitions( 12 )
+    ->then( DraftBriefStep::class, 'draft' )
+    ->await_decision( result_key: 'review' )
+    ->then( NormalizeReviewOutcomeStep::class, 'review_outcome' )
+    ->repeat_until( 'draft', 'review_approved', true, 'repeat_draft_until_approved' )
+    ->then( PublishBriefStep::class )
+    ->dispatch( [ 'brief_id' => 42 ] );
+```
+
+`NormalizeReviewOutcomeStep` can flatten the decision payload into a simple public key:
+
+```php
+class NormalizeReviewOutcomeStep implements \Queuety\Step {
+    public function handle( array $state ): array {
+        return [
+            'review_approved' => 'approved' === ( $state['review']['outcome'] ?? null ),
+        ];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+```
+
+If `review_approved` is still not `true`, the loop step jumps back to `draft`. Once it becomes `true`, the workflow falls through to `PublishBriefStep`.
+
+## `repeat_while()`
+
+```php
+Queuety::workflow( 'poll_remote_status' )
+    ->max_transitions( 20 )
+    ->then( PollRemoteStatusStep::class, 'poll' )
+    ->sleep( seconds: 30 )
+    ->repeat_while( 'poll', 'should_poll_again', true, 'repeat_poll' )
+    ->then( FinalizeImportStep::class )
+    ->dispatch( [ 'import_id' => 99 ] );
+```
+
+This pattern is useful when a step writes a simple boolean such as `should_poll_again`, `has_more_pages`, or `needs_revision`.
+
+## Why loops are separate from `_goto`
+
+You can still branch manually by returning `_goto` from a normal step. The loop helpers exist for the narrower case where:
+
+- the target is an earlier step
+- the condition comes from public workflow state
+- you want the loop logic to stay visible in the workflow definition itself
+
+That makes loops easier to inspect in exports, event logs, and docs than burying the back-edge inside arbitrary step code.
+
+## Guarding loops
+
+Loops can still run forever if the state never changes. Use `max_transitions()` on any workflow that can revisit earlier steps:
+
+```php
+Queuety::workflow( 'safe_revision_loop' )
+    ->max_transitions( 10 )
+    ->then( DraftBriefStep::class, 'draft' )
+    ->await_decision( result_key: 'review' )
+    ->then( NormalizeReviewOutcomeStep::class )
+    ->repeat_until( 'draft', 'review_approved', true )
+    ->dispatch();
+```
+
+If the workflow exceeds that transition budget, Queuety fails it instead of letting it loop forever.
+
+## Related docs
+
+- [Conditional Branching](/docs/workflows/conditional)
+- [Signals](/docs/workflows/signals)
+- [Guardrails](/docs/workflows/guardrails)

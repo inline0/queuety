@@ -254,6 +254,8 @@ $workflow_id = Queuety::workflow( 'generate_report' )
 | `then( string $class, ?string $name )` | Add a sequential step. Optional name for conditional branching. |
 | `parallel( array $classes )` | Add a parallel step group. |
 | `fan_out( string $items_key, string $handler_class, ?string $result_key = null, JoinMode $join_mode = JoinMode::All, ?int $quorum = null, ?string $reducer_class = null, ?string $name = null )` | Add a dynamic fan-out step that expands one branch job per item in workflow state. |
+| `repeat_while( string $target_step, string $state_key, mixed $expected = true, ?string $name = null )` | Jump back to an earlier named step while a public state key matches the expected value. |
+| `repeat_until( string $target_step, string $state_key, mixed $expected = true, ?string $name = null )` | Jump back to an earlier named step until a public state key matches the expected value. |
 | `sub_workflow( string $name, WorkflowBuilder $builder )` | Add a sub-workflow step. |
 | `sleep( int $seconds, int $minutes, int $hours, int $days )` | Add a durable timer step. All durations are summed. |
 | `wait_for_signal( string $name, ?string $result_key = null, ?string $step_name = null, array $match_payload = [], ?string $correlation_key = null )` | Add a signal wait step. Optional `match_payload` and `correlation_key` let you ignore unrelated events. |

@@ -138,20 +138,20 @@ final class ReviseBriefStep implements Step
 use Queuety\Queuety;
 
 Queuety::workflow('brief_review_loop')
-    ->then(DraftBriefStep::class)
+    ->max_transitions(10)
+    ->then(DraftBriefStep::class, 'draft')
     ->await_decision(result_key: 'review')
-    ->then(RouteDecisionStep::class)
-    ->then(ReviseBriefStep::class)
-    ->await_decision(result_key: 'review')
+    ->then(NormalizeReviewOutcomeStep::class)
+    ->repeat_until('draft', 'review_approved', true)
     ->then(PublishBriefStep::class)
     ->dispatch([
         'brief_id' => 42,
     ]);
 ```
 
-`RouteDecisionStep` can inspect `$state['review']['outcome']` and branch with `_goto` if the draft was rejected.
+`NormalizeReviewOutcomeStep` can flatten `$state['review']['outcome']` into a simple `review_approved` boolean, and `repeat_until()` keeps the workflow on the drafting loop until that value becomes `true`.
 
-The important part is that `ReviseBriefStep` uses the same Neuron `thread_id`, so the agent keeps its prior conversation context while Queuety keeps the durable workflow state and review gates.
+The important part is that `DraftBriefStep` can keep using the same Neuron `thread_id` on each pass, so the agent keeps its prior conversation context while Queuety keeps the durable workflow state and review gates.
 
 ## Why this is cleaner than storing everything only in workflow state
 
