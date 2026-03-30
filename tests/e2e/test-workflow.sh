@@ -79,6 +79,25 @@ php -r "
         public function config(): array { return []; }
     }
 
+    class ArtifactStep implements Step {
+        public function handle(array \$state): array {
+            Queuety::put_current_artifact(
+                'draft',
+                array(
+                    'topic'  => \$state['topic'] ?? 'unknown',
+                    'status' => 'ready',
+                ),
+                'json',
+                array(
+                    'source' => 'workflow-e2e',
+                )
+            );
+
+            return array('artifact_saved' => true);
+        }
+        public function config(): array { return []; }
+    }
+
     \$conn = new Connection('${DB_HOST}', '${DB_NAME}', '${DB_USER}', '${DB_PASS}', '${DB_PREFIX}');
 
     Schema::uninstall(\$conn);
@@ -210,6 +229,42 @@ php -r "
     assert(\$status->status === WorkflowStatus::Failed, 'Workflow should be failed');
     assert(\$status->state['step1_result'] === 'hello from step 1', 'Should preserve state from completed steps');
     echo \"PASS: workflow failure preserves state\n\";
+
+    // Test 5: Artifact lifecycle.
+    echo \"Test 5: Artifact lifecycle\n\";
+    Schema::uninstall(\$conn);
+    Schema::install(\$conn);
+
+    Queuety::reset();
+    Queuety::init(\$conn);
+    \$queue_ops = new Queue(\$conn);
+    \$logger = new Logger(\$conn);
+    \$workflow_mgr = new Workflow(\$conn, \$queue_ops, \$logger);
+    \$worker = new Worker(\$conn, \$queue_ops, \$logger, \$workflow_mgr, \$registry, new Config());
+
+    \$wf_id4 = Queuety::workflow('artifact_flow')
+        ->then(ArtifactStep::class)
+        ->dispatch(array('topic' => 'reviews'));
+
+    \$worker->flush('default');
+
+    \$status = Queuety::workflow_status(\$wf_id4);
+    assert(\$status->status === WorkflowStatus::Completed, 'Artifact workflow should complete');
+    assert(\$status->artifact_count === 1, 'Workflow should report one artifact');
+    assert(\$status->artifact_keys === array('draft'), 'Workflow should expose the artifact key summary');
+
+    \$artifact = Queuety::workflow_artifact(\$wf_id4, 'draft');
+    assert(\$artifact !== null, 'Stored artifact should exist');
+    assert(\$artifact['content']['topic'] === 'reviews', 'Artifact should contain the workflow topic');
+    assert(\$artifact['metadata']['source'] === 'workflow-e2e', 'Artifact metadata should be stored');
+
+    \$artifact_list = Queuety::workflow_artifacts(\$wf_id4, true);
+    assert(count(\$artifact_list) === 1, 'Artifact list should include the stored artifact');
+    assert(\$artifact_list[0]['content']['status'] === 'ready', 'Artifact list with content should decode JSON payloads');
+
+    Queuety::delete_workflow_artifact(\$wf_id4, 'draft');
+    assert(Queuety::workflow_artifact(\$wf_id4, 'draft') === null, 'Artifact should be deleted');
+    echo \"PASS: artifact lifecycle\n\";
 
     // Cleanup.
     Schema::uninstall(\$conn);

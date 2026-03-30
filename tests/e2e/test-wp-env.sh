@@ -68,6 +68,30 @@ wp_cli() {
     cd "$PROJECT_DIR" && npx wp-env run cli wp "$@" 2>/dev/null
 }
 
+wp_eval() {
+    local code="$1"
+    wp_cli eval "require_once WP_PLUGIN_DIR . '/queuety/tests/e2e/fixtures/wp-env-workflows.php'; ${code}"
+}
+
+wp_flush() {
+    wp_eval "Queuety\\Queuety::worker()->flush();"
+}
+
+wait_for_wordpress() {
+    local port="$1"
+    local tries="${2:-30}"
+    local i
+
+    for i in $(seq 1 "$tries"); do
+        if curl -s -o /dev/null -w "%{http_code}" "http://localhost:${port}/" | grep -q "200\\|301\\|302"; then
+            return 0
+        fi
+        sleep 1
+    done
+
+    return 1
+}
+
 cleanup() {
     cd "$PROJECT_DIR" && npx wp-env stop >/dev/null 2>&1 || true
 }
@@ -105,22 +129,27 @@ printf '%s\n' "$WP_ENV_START_OUT"
 
 # Wait for WordPress to be ready.
 echo "Waiting for WordPress..."
-WP_READY=0
-for i in $(seq 1 30); do
-    if curl -s -o /dev/null -w "%{http_code}" http://localhost:8888/ | grep -q "200\|301\|302"; then
-        WP_READY=1
-        break
-    fi
-    sleep 1
-done
-
-if [ "$WP_READY" -ne 1 ]; then
+if ! wait_for_wordpress 8888 30; then
     fail "wp-env startup" "WordPress did not become ready on http://localhost:8888/"
     exit 1
 fi
 
 if [ "$WP_ENV_START_STATUS" -ne 0 ]; then
     echo "wp-env start exited with status $WP_ENV_START_STATUS after the environment became ready."
+fi
+
+echo "Provisioning wp-env PHP runtime..."
+if bash "$PROJECT_DIR/tests/e2e/provision-wp-env-pdo.sh"; then
+    pass "wp-env runtime provisioning succeeds"
+else
+    fail "wp-env runtime provisioning succeeds" "Could not provision pdo_mysql in the wp-env containers"
+    exit 1
+fi
+
+echo "Waiting for WordPress after provisioning..."
+if ! wait_for_wordpress 8888 30; then
+    fail "wp-env restart after provisioning" "WordPress did not recover on http://localhost:8888/"
+    exit 1
 fi
 
 echo ""
@@ -135,13 +164,10 @@ VERSION=$(wp_cli eval "echo QUEUETY_VERSION;" 2>/dev/null || true)
 assert_equals "$EXPECTED_VERSION" "$VERSION" "QUEUETY_VERSION matches plugin constant"
 
 PDO_MYSQL_AVAILABLE=$(wp_cli eval "echo extension_loaded('pdo_mysql') ? 'yes' : 'no';" 2>/dev/null || true)
-if [ "$PDO_MYSQL_AVAILABLE" != "yes" ]; then
-    echo ""
-    echo "--- Runtime Requirements ---"
-    pass "plugin loads without fataling when pdo_mysql is unavailable"
-    echo "SKIP: wp-env does not provide pdo_mysql; skipping WordPress runtime checks."
-    exit 0
-fi
+assert_equals "yes" "$PDO_MYSQL_AVAILABLE" "wp-env CLI has pdo_mysql"
+
+WORDPRESS_PDO_MYSQL=$(cd "$PROJECT_DIR" && npx wp-env run wordpress php -r "echo extension_loaded('pdo_mysql') ? 'yes' : 'no';" 2>/dev/null || true)
+assert_equals "yes" "$WORDPRESS_PDO_MYSQL" "wp-env WordPress runtime has pdo_mysql"
 
 echo ""
 echo "--- Table Creation ---"
@@ -248,7 +274,7 @@ if [ -n "$WF_ID" ] && [ "$WF_ID" != "0" ]; then
     assert_contains "$WF_STATUS" "running" "workflow status shows running"
     assert_contains "$WF_STATUS" "0/2" "workflow status shows step 0/2"
 
-    wp_cli eval "Queuety\\Queuety::put_artifact($WF_ID, 'brief', ['status' => 'ready']);" > /dev/null 2>&1 || true
+    wp_eval "Queuety\\Queuety::put_artifact($WF_ID, 'brief', ['status' => 'ready']);" > /dev/null 2>&1 || true
     WF_ARTIFACTS=$(wp_cli queuety workflow artifacts "$WF_ID" 2>/dev/null || true)
     assert_contains "$WF_ARTIFACTS" "brief" "workflow artifacts lists stored artifact"
     WF_ARTIFACT=$(wp_cli queuety workflow artifact "$WF_ID" brief 2>/dev/null || true)
@@ -282,6 +308,96 @@ if [ -n "$WF_ID" ] && [ "$WF_ID" != "0" ]; then
     assert_contains "$WF_RESUMED" "running" "workflow is running after resume"
 else
     fail "workflow dispatch via PHP API" "Could not create workflow"
+fi
+
+echo ""
+echo "--- WP-CLI: Review Workflow ---"
+
+REVIEW_WF_ID=$(wp_eval "
+    \$wf_id = Queuety\Queuety::workflow('review_gate')
+        ->await_approval(result_key: 'approval')
+        ->await_input(result_key: 'revision_notes')
+        ->then('WpEnvReviewFinalizeStep')
+        ->dispatch(['draft_id' => 9]);
+    echo \$wf_id;
+" 2>/dev/null || true)
+
+if [ -n "$REVIEW_WF_ID" ] && [ "$REVIEW_WF_ID" != "0" ]; then
+    pass "review workflow dispatch via PHP API (ID: $REVIEW_WF_ID)"
+
+    wp_flush > /dev/null 2>&1 || true
+
+    REVIEW_WAIT=$(wp_cli queuety workflow status "$REVIEW_WF_ID" 2>/dev/null || true)
+    assert_contains "$REVIEW_WAIT" "waiting_signal" "review workflow waits for approval"
+    assert_contains "$REVIEW_WAIT" "approval" "review workflow status shows approval wait"
+
+    REVIEW_APPROVE=$(wp_cli queuety workflow approve "$REVIEW_WF_ID" --data='{\"approved\":true,\"by\":\"editor\"}' 2>/dev/null || true)
+    assert_contains "$REVIEW_APPROVE" "Approval sent" "workflow approve command succeeds"
+
+    wp_flush > /dev/null 2>&1 || true
+
+    REVIEW_INPUT_WAIT=$(wp_cli queuety workflow status "$REVIEW_WF_ID" 2>/dev/null || true)
+    assert_contains "$REVIEW_INPUT_WAIT" "waiting_signal" "review workflow waits for input after approval"
+    assert_contains "$REVIEW_INPUT_WAIT" "editor" "approval payload is visible in workflow state"
+
+    REVIEW_INPUT=$(wp_cli queuety workflow input "$REVIEW_WF_ID" --data='{\"note\":\"ship it\"}' 2>/dev/null || true)
+    assert_contains "$REVIEW_INPUT" "Input sent" "workflow input command succeeds"
+
+    wp_flush > /dev/null 2>&1 || true
+
+    REVIEW_DONE=$(wp_cli queuety workflow status "$REVIEW_WF_ID" 2>/dev/null || true)
+    assert_contains "$REVIEW_DONE" "completed" "review workflow completes after input"
+    assert_contains "$REVIEW_DONE" "\"review_outcome\": \"approved\"" "review workflow stores approved outcome"
+    assert_contains "$REVIEW_DONE" "\"revision_note\": \"ship it\"" "review workflow stores revision note"
+else
+    fail "review workflow dispatch via PHP API" "Could not create review workflow"
+fi
+
+echo ""
+echo "--- WP-CLI: Agent Workflow Group ---"
+
+AGENT_WF_ID=$(wp_eval "
+    \$child = Queuety\Queuety::workflow('wp_env_agent')
+        ->then('WpEnvAgentTaskStep')
+        ->max_attempts(1);
+
+    \$wf_id = Queuety\Queuety::workflow('wp_env_agent_parent')
+        ->spawn_agents('agent_tasks', \$child, group_key: 'researchers')
+        ->await_agent_group('researchers', \Queuety\Enums\WaitMode::Quorum, 2, 'agent_results')
+        ->then('WpEnvAgentSummaryStep')
+        ->dispatch([
+            'agent_tasks' => [
+                ['topic' => 'pricing'],
+                ['topic' => 'reviews'],
+                ['topic' => 'faq', 'should_fail' => true]
+            ]
+        ]);
+
+    echo \$wf_id;
+" 2>/dev/null || true)
+
+if [ -n "$AGENT_WF_ID" ] && [ "$AGENT_WF_ID" != "0" ]; then
+    pass "agent workflow group dispatch via PHP API (ID: $AGENT_WF_ID)"
+
+    wp_flush > /dev/null 2>&1 || true
+    wp_flush > /dev/null 2>&1 || true
+
+    AGENT_WAIT=$(wp_cli queuety workflow status "$AGENT_WF_ID" 2>/dev/null || true)
+    assert_contains "$AGENT_WAIT" "waiting_workflow" "agent workflow waits on spawned children"
+    assert_contains "$AGENT_WAIT" "WaitMode: quorum" "agent workflow status shows quorum wait mode"
+    assert_contains "$AGENT_WAIT" "researchers" "agent workflow wait details show the group key"
+
+    for _ in 1 2 3 4 5 6; do
+        wp_flush > /dev/null 2>&1 || true
+    done
+
+    AGENT_DONE=$(wp_cli queuety workflow status "$AGENT_WF_ID" 2>/dev/null || true)
+    assert_contains "$AGENT_DONE" "completed" "agent workflow completes after quorum"
+    assert_contains "$AGENT_DONE" "\"joined_count\": 2" "agent workflow stores joined quorum result count"
+    assert_contains "$AGENT_DONE" "pricing" "agent workflow summary includes successful topics"
+    assert_contains "$AGENT_DONE" "reviews" "agent workflow summary includes multiple successful topics"
+else
+    fail "agent workflow group dispatch via PHP API" "Could not create agent workflow"
 fi
 
 echo ""
@@ -372,6 +488,30 @@ if echo "$FULL_WF" | grep -q "completed"; then
     assert_contains "$FULL_WF" "result from: data for user 42" "workflow state accumulates correctly"
 else
     fail "full workflow completes via worker" "Got: $FULL_WF"
+fi
+
+echo ""
+echo "--- WP-CLI: Runtime Artifacts ---"
+
+ARTIFACT_WF_ID=$(wp_eval "
+    \$wf_id = Queuety\Queuety::workflow('artifact_runtime')
+        ->then('WpEnvArtifactStep')
+        ->dispatch(['topic' => 'launch']);
+    echo \$wf_id;
+" 2>/dev/null || true)
+
+if [ -n "$ARTIFACT_WF_ID" ] && [ "$ARTIFACT_WF_ID" != "0" ]; then
+    pass "runtime artifact workflow dispatch via PHP API (ID: $ARTIFACT_WF_ID)"
+    wp_flush > /dev/null 2>&1 || true
+
+    ARTIFACT_STATUS=$(wp_cli queuety workflow status "$ARTIFACT_WF_ID" 2>/dev/null || true)
+    assert_contains "$ARTIFACT_STATUS" "Artifacts: 1" "workflow status shows runtime artifact summary"
+
+    RUNTIME_ARTIFACT=$(wp_cli queuety workflow artifact "$ARTIFACT_WF_ID" draft 2>/dev/null || true)
+    assert_contains "$RUNTIME_ARTIFACT" "\"topic\": \"launch\"" "runtime artifact stores the workflow topic"
+    assert_contains "$RUNTIME_ARTIFACT" "\"source\": \"wp-env\"" "runtime artifact stores metadata"
+else
+    fail "runtime artifact workflow dispatch via PHP API" "Could not create artifact workflow"
 fi
 
 echo ""
