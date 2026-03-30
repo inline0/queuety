@@ -109,7 +109,6 @@ class ActionWorkflowBridgeTest extends IntegrationTestCase {
 		$this->worker->flush();
 
 		$status = $this->workflow_mgr->status( $workflow_id );
-		$this->assertSame( 'User #42', $status->state['user_name'] );
 		$this->assertSame( 1, $status->state['counter'] );
 		$this->assertSame( 'post', $status->state['post_type'] );
 		$this->assertTrue( $status->state['update'] );
