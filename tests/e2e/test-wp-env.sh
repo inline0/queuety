@@ -77,6 +77,20 @@ wp_flush() {
     wp_eval "Queuety\\Queuety::worker()->flush();"
 }
 
+wp_process_one() {
+    wp_eval "
+        \$queue = new Queuety\\Queue(Queuety\\Queuety::connection());
+        \$job = \$queue->claim();
+
+        if (null === \$job) {
+            echo '0';
+        } else {
+            Queuety\\Queuety::worker()->process_job(\$job);
+            echo '1';
+        }
+    "
+}
+
 wait_for_wordpress() {
     local port="$1"
     local tries="${2:-30}"
@@ -325,25 +339,25 @@ REVIEW_WF_ID=$(wp_eval "
 if [ -n "$REVIEW_WF_ID" ] && [ "$REVIEW_WF_ID" != "0" ]; then
     pass "review workflow dispatch via PHP API (ID: $REVIEW_WF_ID)"
 
-    wp_flush > /dev/null 2>&1 || true
+    wp_process_one > /dev/null 2>&1 || true
 
     REVIEW_WAIT=$(wp_cli queuety workflow status "$REVIEW_WF_ID" 2>/dev/null || true)
     assert_contains "$REVIEW_WAIT" "waiting_signal" "review workflow waits for approval"
     assert_contains "$REVIEW_WAIT" "approval" "review workflow status shows approval wait"
 
-    REVIEW_APPROVE=$(wp_cli queuety workflow approve "$REVIEW_WF_ID" --data='{\"approved\":true,\"by\":\"editor\"}' 2>/dev/null || true)
+    REVIEW_APPROVE=$(wp_cli queuety workflow approve "$REVIEW_WF_ID" --data='{"approved":true,"by":"editor"}' 2>/dev/null || true)
     assert_contains "$REVIEW_APPROVE" "Approval sent" "workflow approve command succeeds"
 
-    wp_flush > /dev/null 2>&1 || true
+    wp_process_one > /dev/null 2>&1 || true
 
     REVIEW_INPUT_WAIT=$(wp_cli queuety workflow status "$REVIEW_WF_ID" 2>/dev/null || true)
     assert_contains "$REVIEW_INPUT_WAIT" "waiting_signal" "review workflow waits for input after approval"
     assert_contains "$REVIEW_INPUT_WAIT" "editor" "approval payload is visible in workflow state"
 
-    REVIEW_INPUT=$(wp_cli queuety workflow input "$REVIEW_WF_ID" --data='{\"note\":\"ship it\"}' 2>/dev/null || true)
+    REVIEW_INPUT=$(wp_cli queuety workflow input "$REVIEW_WF_ID" --data='{"note":"ship it"}' 2>/dev/null || true)
     assert_contains "$REVIEW_INPUT" "Input sent" "workflow input command succeeds"
 
-    wp_flush > /dev/null 2>&1 || true
+    wp_process_one > /dev/null 2>&1 || true
 
     REVIEW_DONE=$(wp_cli queuety workflow status "$REVIEW_WF_ID" 2>/dev/null || true)
     assert_contains "$REVIEW_DONE" "completed" "review workflow completes after input"
@@ -379,17 +393,21 @@ AGENT_WF_ID=$(wp_eval "
 if [ -n "$AGENT_WF_ID" ] && [ "$AGENT_WF_ID" != "0" ]; then
     pass "agent workflow group dispatch via PHP API (ID: $AGENT_WF_ID)"
 
-    wp_flush > /dev/null 2>&1 || true
-    wp_flush > /dev/null 2>&1 || true
+    wp_process_one > /dev/null 2>&1 || true
+
+    AGENT_RUNNING=$(wp_cli queuety workflow status "$AGENT_WF_ID" 2>/dev/null || true)
+    assert_contains "$AGENT_RUNNING" "running" "agent workflow continues after spawning children"
+
+    wp_process_one > /dev/null 2>&1 || true
 
     AGENT_WAIT=$(wp_cli queuety workflow status "$AGENT_WF_ID" 2>/dev/null || true)
     assert_contains "$AGENT_WAIT" "waiting_workflow" "agent workflow waits on spawned children"
     assert_contains "$AGENT_WAIT" "WaitMode: quorum" "agent workflow status shows quorum wait mode"
     assert_contains "$AGENT_WAIT" "researchers" "agent workflow wait details show the group key"
 
-    for _ in 1 2 3 4 5 6; do
-        wp_flush > /dev/null 2>&1 || true
-    done
+    wp_process_one > /dev/null 2>&1 || true
+    wp_process_one > /dev/null 2>&1 || true
+    wp_process_one > /dev/null 2>&1 || true
 
     AGENT_DONE=$(wp_cli queuety workflow status "$AGENT_WF_ID" 2>/dev/null || true)
     assert_contains "$AGENT_DONE" "completed" "agent workflow completes after quorum"
@@ -409,19 +427,16 @@ wp_cli db query "DELETE FROM wp_queuety_workflows;" > /dev/null 2>&1 || true
 wp_cli db query "DELETE FROM wp_queuety_logs;" > /dev/null 2>&1 || true
 
 # Register a test handler and dispatch a job.
-WORK_RESULT=$(wp_cli eval "
-    class E2eTestHandler implements Queuety\Handler {
-        public function handle(array \\\$payload): void {
-            update_option('queuety_e2e_result', json_encode(\\\$payload));
-        }
-        public function config(): array { return []; }
-    }
-    Queuety\Queuety::register('e2e_test', 'E2eTestHandler');
+WORK_RESULT=$(wp_eval "
+    Queuety\Queuety::register('e2e_test', 'WpEnvQueueHandler');
     Queuety\Queuety::dispatch('e2e_test', ['msg' => 'hello from e2e'])->id();
 
-    // Process the job inline since we can't run work --once in a separate process easily.
-    \\\$worker = Queuety\Queuety::worker();
-    \\\$worker->flush();
+    \$queue = new Queuety\Queue(Queuety\Queuety::connection());
+    \$job = \$queue->claim();
+
+    if (null !== \$job) {
+        Queuety\Queuety::worker()->process_job(\$job);
+    }
 
     echo get_option('queuety_e2e_result', 'NOT_SET');
 " 2>/dev/null || true)
@@ -456,32 +471,18 @@ echo ""
 echo "--- WP-CLI: Full Workflow E2E ---"
 
 # Run a complete workflow through the worker.
-FULL_WF=$(wp_cli eval "
-    class FetchStep implements Queuety\Step {
-        public function handle(array \\\$state): array {
-            return ['fetched' => 'data for user ' . \\\$state['user_id']];
-        }
-        public function config(): array { return []; }
-    }
-    class ProcessStep implements Queuety\Step {
-        public function handle(array \\\$state): array {
-            return ['processed' => 'result from: ' . \\\$state['fetched']];
-        }
-        public function config(): array { return []; }
-    }
-
-    \\\$wf_id = Queuety\Queuety::workflow('full_e2e')
-        ->then('FetchStep')
-        ->then('ProcessStep')
+FULL_WF_ID=$(wp_eval "
+    \$wf_id = Queuety\Queuety::workflow('full_e2e')
+        ->then('WpEnvFetchStep')
+        ->then('WpEnvProcessStep')
         ->dispatch(['user_id' => 42]);
-
-    // Process all steps.
-    Queuety\Queuety::worker()->flush();
-    Queuety\Queuety::worker()->flush();
-
-    \\\$status = Queuety\Queuety::workflow_status(\\\$wf_id);
-    echo \\\$status->status->value . '|' . (\\\$status->state['processed'] ?? 'MISSING');
+    echo \$wf_id;
 " 2>/dev/null || true)
+
+wp_process_one > /dev/null 2>&1 || true
+wp_process_one > /dev/null 2>&1 || true
+
+FULL_WF=$(wp_cli queuety workflow status "$FULL_WF_ID" 2>/dev/null || true)
 
 if echo "$FULL_WF" | grep -q "completed"; then
     pass "full workflow completes via worker"

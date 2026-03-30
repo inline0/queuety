@@ -111,3 +111,46 @@ if ( ! class_exists( 'WpEnvAgentSummaryStep', false ) ) {
 		}
 	}
 }
+
+if ( ! class_exists( 'WpEnvQueueHandler', false ) ) {
+	class WpEnvQueueHandler implements \Queuety\Handler {
+
+		public function handle( array $payload ): void {
+			update_option( 'queuety_e2e_result', wp_json_encode( $payload ) );
+		}
+
+		public function config(): array {
+			return array();
+		}
+	}
+}
+
+if ( ! class_exists( 'WpEnvFetchStep', false ) ) {
+	class WpEnvFetchStep implements \Queuety\Step {
+
+		public function handle( array $state ): array {
+			return array(
+				'fetched' => 'data for user ' . ( $state['user_id'] ?? 'unknown' ),
+			);
+		}
+
+		public function config(): array {
+			return array();
+		}
+	}
+}
+
+if ( ! class_exists( 'WpEnvProcessStep', false ) ) {
+	class WpEnvProcessStep implements \Queuety\Step {
+
+		public function handle( array $state ): array {
+			return array(
+				'processed' => 'result from: ' . ( $state['fetched'] ?? 'missing' ),
+			);
+		}
+
+		public function config(): array {
+			return array();
+		}
+	}
+}

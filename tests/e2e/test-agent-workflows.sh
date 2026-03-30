@@ -86,18 +86,10 @@ php -r "
     \$workflow_mgr = new Workflow(\$conn, \$queue, \$logger);
     \$worker = new Worker(\$conn, \$queue, \$logger, \$workflow_mgr, new HandlerRegistry(), new Config());
 
-    \$process_until = static function (callable \$condition, int \$maxJobs = 24) use (\$queue, \$worker): void {
-        for (\$i = 0; \$i < \$maxJobs; \$i++) {
-            if (\$condition()) {
-                return;
-            }
-
-            \$job = \$queue->claim();
-            assert(null !== \$job, 'Expected a queued job while processing the workflow graph.');
-            \$worker->process_job(\$job);
-        }
-
-        assert(\$condition(), 'Condition was not satisfied within the allotted job budget.');
+    \$process_one = static function () use (\$queue, \$worker): void {
+        \$job = \$queue->claim();
+        assert(null !== \$job, 'Expected a queued job while processing the workflow graph.');
+        \$worker->process_job(\$job);
     };
 
     echo \"Test 1: spawned agent group quorum success\\n\";
@@ -120,18 +112,33 @@ php -r "
             )
         );
 
-    \$process_until(
-        static fn (): bool => WorkflowStatus::WaitingWorkflow === Queuety::workflow_status(\$success_id)->status
-    );
+    \$process_one();
 
     \$status = Queuety::workflow_status(\$success_id);
+    assert(\$status->status === WorkflowStatus::Running, 'Parent should still be running after spawning agents.');
+
+    \$process_one();
+
+    \$status = Queuety::workflow_status(\$success_id);
+    assert(\$status->status === WorkflowStatus::WaitingWorkflow, 'Parent should wait on the agent group.');
     assert(\$status->wait_mode === 'quorum', 'Parent should be waiting with quorum mode.');
 
-    \$process_until(
-        static fn (): bool => WorkflowStatus::Completed === Queuety::workflow_status(\$success_id)->status
-    );
+    \$process_one();
 
     \$status = Queuety::workflow_status(\$success_id);
+    assert(\$status->status === WorkflowStatus::WaitingWorkflow, 'Parent should keep waiting after the first matching agent completes.');
+    assert(count(\$status->wait_details['matched'] ?? array()) === 1, 'Parent should track one matched child after the first success.');
+
+    \$process_one();
+
+    \$status = Queuety::workflow_status(\$success_id);
+    assert(\$status->status === WorkflowStatus::Running, 'Parent should resume once quorum is satisfied.');
+    assert(count(\$status->state['agent_results'] ?? array()) === 2, 'Parent should expose the quorum-sized agent result set.');
+
+    \$process_one();
+
+    \$status = Queuety::workflow_status(\$success_id);
+    assert(\$status->status === WorkflowStatus::Completed, 'Parent should complete after running the summary step.');
     assert((\$status->state['joined_count'] ?? null) === 2, 'Parent should continue after two agent results.');
     assert((\$status->state['joined_topics'] ?? array()) === array('pricing', 'reviews'), 'Parent should summarize the completed agent topics.');
     echo \"PASS: spawned agent group quorum success\\n\";
@@ -152,9 +159,28 @@ php -r "
             )
         );
 
-    \$process_until(
-        static fn (): bool => WorkflowStatus::Failed === Queuety::workflow_status(\$failure_id)->status
-    );
+    \$process_one();
+
+    \$status = Queuety::workflow_status(\$failure_id);
+    assert(\$status->status === WorkflowStatus::Running, 'Failure parent should still be running after spawning agents.');
+
+    \$process_one();
+
+    \$status = Queuety::workflow_status(\$failure_id);
+    assert(\$status->status === WorkflowStatus::WaitingWorkflow, 'Failure parent should wait on the agent group.');
+    assert(\$status->wait_mode === 'quorum', 'Failure parent should wait with quorum mode.');
+
+    \$process_one();
+    \$status = Queuety::workflow_status(\$failure_id);
+    assert(\$status->status === WorkflowStatus::WaitingWorkflow, 'Failure parent should still be waiting after one success.');
+    assert(count(\$status->wait_details['matched'] ?? array()) === 1, 'Failure parent should track the first success.');
+
+    \$process_one();
+    \$status = Queuety::workflow_status(\$failure_id);
+    assert(\$status->status === WorkflowStatus::WaitingWorkflow, 'Failure parent should still be waiting after the first failed child.');
+    assert(count(\$status->wait_details['failed'] ?? array()) === 1, 'Failure parent should track one failed child.');
+
+    \$process_one();
 
     \$status = Queuety::workflow_status(\$failure_id);
     assert(\$status->status === WorkflowStatus::Failed, 'Parent should fail once quorum becomes impossible.');
