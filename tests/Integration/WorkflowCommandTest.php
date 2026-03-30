@@ -291,7 +291,7 @@ class WorkflowCommandTest extends TestCase {
 
 		$call = $this->last_format_call();
 		$this->assertCount( 2, $call['items'] );
-		$this->assertSame( array( 'started', 'completed' ), array_column( $call['items'], 'Event' ) );
+		$this->assertSame( array( 'step_started', 'step_completed' ), array_column( $call['items'], 'Event' ) );
 		$this->assertSame( array( 'FakeStep', 'FakeStep' ), array_column( $call['items'], 'Handler' ) );
 	}
 
