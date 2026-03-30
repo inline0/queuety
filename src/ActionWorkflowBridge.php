@@ -158,7 +158,20 @@ class ActionWorkflowBridge {
 	 * @return int
 	 */
 	private static function callable_arity( callable $callable ): int {
-		$reflection = \ReflectionFunction::fromCallable( $callable );
+		if ( $callable instanceof \Closure ) {
+			$reflection = new \ReflectionFunction( $callable );
+		} elseif ( is_string( $callable ) ) {
+			if ( str_contains( $callable, '::' ) ) {
+				list( $class, $method ) = explode( '::', $callable, 2 );
+				$reflection             = new \ReflectionMethod( $class, $method );
+			} else {
+				$reflection = new \ReflectionFunction( $callable );
+			}
+		} elseif ( is_array( $callable ) ) {
+			$reflection = new \ReflectionMethod( $callable[0], $callable[1] );
+		} else {
+			$reflection = new \ReflectionMethod( $callable, '__invoke' );
+		}
 
 		if ( $reflection->isVariadic() ) {
 			return 99;
