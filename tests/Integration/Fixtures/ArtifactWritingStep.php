@@ -16,7 +16,8 @@ class ArtifactWritingStep implements Step {
 			),
 			'json',
 			array(
-				'step_index' => Queuety::current_step_index(),
+				'step_index'  => Queuety::current_step_index(),
+				'workflow_id' => Queuety::current_workflow_id(),
 			)
 		);
 

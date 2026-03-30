@@ -34,6 +34,9 @@ namespace {
 			/** @var array Captured line messages for test assertions. */
 			public static array $line_messages = array();
 
+			/** @var array Captured formatted item tables for test assertions. */
+			public static array $format_calls = array();
+
 			public static function log( $message ) {
 				self::$log_messages[] = $message;
 			}
@@ -68,6 +71,7 @@ namespace {
 				self::$error_messages   = array();
 				self::$warning_messages = array();
 				self::$line_messages    = array();
+				self::$format_calls     = array();
 			}
 		}
 	}
@@ -76,7 +80,13 @@ namespace {
 namespace WP_CLI\Utils {
 
 	if ( ! function_exists( 'WP_CLI\Utils\format_items' ) ) {
-		function format_items( $format, $items, $fields ) {}
+		function format_items( $format, $items, $fields ) {
+			\WP_CLI::$format_calls[] = array(
+				'format' => $format,
+				'items'  => $items,
+				'fields' => $fields,
+			);
+		}
 	}
 
 	if ( ! function_exists( 'WP_CLI\Utils\get_flag_value' ) ) {

@@ -15,6 +15,7 @@ use Queuety\HandlerRegistry;
 use Queuety\Job;
 use Queuety\Logger;
 use Queuety\Queue;
+use Queuety\Tests\Integration\Fixtures\ConditionalFailingStep;
 use Queuety\Tests\Integration\Fixtures\AccumulatingStep;
 use Queuety\Worker;
 use Queuety\Workflow;
@@ -239,5 +240,59 @@ class WorkflowSpawnTest extends IntegrationTestCase {
 		$status = $this->workflow_mgr->status( $parent_id );
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
 		$this->assertSame( 1, $status->state['counter'] );
+	}
+
+	public function test_spawned_workflow_group_quorum_fails_when_not_enough_children_can_still_succeed(): void {
+		$child = ( new WorkflowBuilder( 'agent_task', $this->conn, $this->queue, $this->logger ) )
+			->then( ConditionalFailingStep::class )
+			->max_attempts( 1 );
+
+		$parent_id = ( new WorkflowBuilder( 'planner_group_failure', $this->conn, $this->queue, $this->logger ) )
+			->with_priority( Priority::Urgent )
+			->spawn_agents( 'agent_tasks', $child, group_key: 'researchers' )
+			->await_agent_group( 'researchers', WaitMode::Quorum, 2, 'selected_results' )
+			->then( AccumulatingStep::class )
+			->dispatch(
+				array(
+					'campaign'    => 'launch',
+					'agent_tasks' => array(
+						array(
+							'topic'       => 'pricing',
+							'should_fail' => false,
+						),
+						array(
+							'topic'       => 'reviews',
+							'should_fail' => true,
+						),
+						array(
+							'topic'       => 'faq',
+							'should_fail' => true,
+						),
+					),
+				)
+			);
+
+		$this->process_one();
+		$this->process_one();
+
+		$status = $this->workflow_mgr->status( $parent_id );
+		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
+		$this->assertSame( 'researchers', $status->wait_details['group_key'] );
+		$this->assertSame( 2, $status->wait_details['quorum'] );
+
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $parent_id );
+		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
+		$this->assertCount( 1, $status->wait_details['matched'] );
+
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $parent_id );
+		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
+		$this->assertCount( 1, $status->wait_details['failed'] );
+		$this->assertCount( 1, $status->wait_details['remaining'] );
+
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $parent_id );
+		$this->assertSame( WorkflowStatus::Failed, $status->status );
 	}
 }

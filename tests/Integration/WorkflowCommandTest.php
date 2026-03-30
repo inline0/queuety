@@ -14,11 +14,7 @@ use Queuety\CLI\WorkflowCommand;
 use Queuety\Config;
 use Queuety\Connection;
 use Queuety\Enums\WorkflowStatus;
-use Queuety\Logger;
-use Queuety\Queue;
 use Queuety\Queuety;
-use Queuety\Workflow;
-use Queuety\WorkflowEventLog;
 
 /**
  * Tests for WorkflowCommand CLI methods.
@@ -32,6 +28,7 @@ class WorkflowCommandTest extends TestCase {
 		parent::setUp();
 
 		$this->cmd = new WorkflowCommand();
+		\WP_CLI::reset_capture();
 
 		try {
 			$dsn = sprintf(
@@ -67,6 +64,7 @@ class WorkflowCommandTest extends TestCase {
 			}
 			Queuety::reset();
 		}
+		\WP_CLI::reset_capture();
 		parent::tearDown();
 	}
 
@@ -79,12 +77,12 @@ class WorkflowCommandTest extends TestCase {
 	/**
 	 * Create a test workflow directly in the database.
 	 */
-	private function create_test_workflow( string $status = 'running' ): int {
+	private function create_test_workflow( string $status = 'running', ?array $state = null, int $current_step = 0, ?int $total_steps = null ): int {
 		$conn   = Queuety::connection();
 		$wf_tbl = $conn->table( Config::table_workflows() );
 		$pdo    = $conn->pdo();
 
-		$state = json_encode( array(
+		$state ??= array(
 			'_steps'        => array(
 				array( 'type' => 'single', 'class' => 'FakeStep' ),
 				array( 'type' => 'single', 'class' => 'FakeStep2' ),
@@ -93,20 +91,41 @@ class WorkflowCommandTest extends TestCase {
 			'_priority'     => 0,
 			'_max_attempts' => 3,
 			'user_id'       => 42,
-		) );
+		);
+
+		$total_steps ??= count( $state['_steps'] ?? array() );
 
 		$stmt = $pdo->prepare(
 			"INSERT INTO {$wf_tbl}
 			(name, status, state, current_step, total_steps)
-			VALUES (:name, :status, :state, 0, 2)"
+			VALUES (:name, :status, :state, :current_step, :total_steps)"
 		);
 		$stmt->execute( array(
-			'name'   => 'test_workflow',
-			'status' => $status,
-			'state'  => $state,
+			'name'       => 'test_workflow',
+			'status'     => $status,
+			'state'      => json_encode( $state, JSON_THROW_ON_ERROR ),
+			'current_step' => $current_step,
+			'total_steps'  => $total_steps,
 		) );
 
 		return (int) $pdo->lastInsertId();
+	}
+
+	private function assert_logged_contains( string $needle ): void {
+		$matched = array_filter(
+			\WP_CLI::$log_messages,
+			static fn( string $message ): bool => str_contains( $message, $needle )
+		);
+
+		$this->assertNotEmpty(
+			$matched,
+			sprintf( 'Expected WP_CLI log to contain "%s". Logs were: %s', $needle, json_encode( \WP_CLI::$log_messages ) )
+		);
+	}
+
+	private function last_format_call(): array {
+		$this->assertNotEmpty( \WP_CLI::$format_calls, 'Expected WP_CLI to record a formatted table.' );
+		return \WP_CLI::$format_calls[ array_key_last( \WP_CLI::$format_calls ) ];
 	}
 
 	// -- status() shows workflow info ----------------------------------------
@@ -114,9 +133,43 @@ class WorkflowCommandTest extends TestCase {
 	public function test_status_shows_workflow_info(): void {
 		$this->skip_without_db();
 
-		$wf_id = $this->create_test_workflow();
+		$dependency_id = $this->create_test_workflow();
+		$wf_id         = $this->create_test_workflow(
+			'waiting_workflow',
+			array(
+				'_steps' => array(
+					array(
+						'type'       => 'workflow_wait',
+						'name'       => 'await_dependency',
+						'workflows'  => array( $dependency_id ),
+						'wait_mode'  => 'all',
+						'result_key' => 'dependency',
+					),
+				),
+				'_wait'  => array(
+					'type'        => 'workflow',
+					'waiting_for' => array( (string) $dependency_id ),
+					'wait_mode'   => 'all',
+					'result_key'  => 'dependency',
+				),
+				'user_id' => 42,
+			),
+			0,
+			1
+		);
+		Queuety::put_artifact( $wf_id, 'research_brief', array( 'summary' => 'ok' ) );
+
 		$this->cmd->status( array( $wf_id ), array() );
-		$this->assertTrue( true );
+
+		$this->assert_logged_contains( "Workflow: test_workflow (#{$wf_id})" );
+		$this->assert_logged_contains( 'Status:   waiting_workflow' );
+		$this->assert_logged_contains( 'Step:     0/1' );
+		$this->assert_logged_contains( 'StepName: await_dependency' );
+		$this->assert_logged_contains( "Waiting:  workflow => {$dependency_id}" );
+		$this->assert_logged_contains( 'WaitMode: all' );
+		$this->assert_logged_contains( 'Artifacts: 1' );
+		$this->assert_logged_contains( 'ArtifactKeys: research_brief' );
+		$this->assert_logged_contains( '"user_id": 42' );
 	}
 
 	public function test_status_nonexistent_workflow_throws(): void {
@@ -199,7 +252,14 @@ class WorkflowCommandTest extends TestCase {
 		$this->create_test_workflow( 'failed' );
 
 		$this->cmd->list_( array(), array() );
-		$this->assertTrue( true );
+
+		$call = $this->last_format_call();
+		$statuses = array_values( array_unique( array_column( $call['items'], 'Status' ) ) );
+		sort( $statuses );
+		$this->assertSame( 'table', $call['format'] );
+		$this->assertSame( array( 'ID', 'Name', 'Version', 'Hash', 'Status', 'Step', 'StepName', 'WaitMode', 'Waiting' ), $call['fields'] );
+		$this->assertCount( 2, $call['items'] );
+		$this->assertSame( array( 'failed', 'running' ), $statuses );
 	}
 
 	public function test_list_with_status_filter(): void {
@@ -209,7 +269,10 @@ class WorkflowCommandTest extends TestCase {
 		$this->create_test_workflow( 'failed' );
 
 		$this->cmd->list_( array(), array( 'status' => 'running' ) );
-		$this->assertTrue( true );
+
+		$call = $this->last_format_call();
+		$this->assertCount( 1, $call['items'] );
+		$this->assertSame( 'running', $call['items'][0]['Status'] );
 	}
 
 	// -- timeline() shows events ---------------------------------------------
@@ -225,7 +288,11 @@ class WorkflowCommandTest extends TestCase {
 		$event_log->record_step_completed( $wf_id, 0, 'FakeStep', array( 'user_id' => 42 ), array(), 100 );
 
 		$this->cmd->timeline( array( $wf_id ), array() );
-		$this->assertTrue( true );
+
+		$call = $this->last_format_call();
+		$this->assertCount( 2, $call['items'] );
+		$this->assertSame( array( 'started', 'completed' ), array_column( $call['items'], 'Event' ) );
+		$this->assertSame( array( 'FakeStep', 'FakeStep' ), array_column( $call['items'], 'Handler' ) );
 	}
 
 	public function test_timeline_no_events(): void {
@@ -233,7 +300,8 @@ class WorkflowCommandTest extends TestCase {
 
 		$wf_id = $this->create_test_workflow();
 		$this->cmd->timeline( array( $wf_id ), array() );
-		$this->assertTrue( true );
+
+		$this->assertSame( array( "No events found for workflow #{$wf_id}." ), \WP_CLI::$log_messages );
 	}
 
 	public function test_approve_reject_and_input_commands_store_signals(): void {
@@ -255,6 +323,14 @@ class WorkflowCommandTest extends TestCase {
 			array( 'approval', 'rejected', 'input' ),
 			array_map( static fn( array $row ): string => $row['signal_name'], $stmt->fetchAll() )
 		);
+		$this->assertSame(
+			array(
+				"Approval sent to workflow #{$wf_id}.",
+				"Rejection sent to workflow #{$wf_id}.",
+				"Input sent to workflow #{$wf_id}.",
+			),
+			\WP_CLI::$success_messages
+		);
 	}
 
 	public function test_artifact_and_artifacts_commands_show_stored_artifacts(): void {
@@ -263,9 +339,16 @@ class WorkflowCommandTest extends TestCase {
 		$wf_id = $this->create_test_workflow();
 		Queuety::put_artifact( $wf_id, 'research_brief', array( 'summary' => 'ok' ) );
 
-		$this->cmd->artifacts( array( $wf_id ), array() );
+		$this->cmd->artifacts( array( $wf_id ), array( 'with-content' => true ) );
+		$call = $this->last_format_call();
+		$this->assertCount( 1, $call['items'] );
+		$this->assertSame( 'research_brief', $call['items'][0]['Key'] );
+		$this->assertSame( '{"summary":"ok"}', $call['items'][0]['Content'] );
+
+		\WP_CLI::reset_capture();
 		$this->cmd->artifact( array( $wf_id, 'research_brief' ), array() );
-		$this->assertTrue( true );
+		$this->assert_logged_contains( '"key": "research_brief"' );
+		$this->assert_logged_contains( '"summary": "ok"' );
 	}
 
 	// -- state_at() shows state snapshot -------------------------------------
@@ -278,7 +361,8 @@ class WorkflowCommandTest extends TestCase {
 		$event_log->record_step_completed( $wf_id, 0, 'FakeStep', array( 'data' => 'test' ), array( 'data' => 'test' ), 50 );
 
 		$this->cmd->state_at( array( $wf_id, 0 ), array() );
-		$this->assertTrue( true );
+		$this->assert_logged_contains( "State at step 0 for workflow #{$wf_id}:" );
+		$this->assert_logged_contains( '"data": "test"' );
 	}
 
 	public function test_state_at_not_found_throws(): void {
