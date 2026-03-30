@@ -530,15 +530,62 @@ Register a workflow template.
 Queuety::register_workflow_template( $builder );
 ```
 
-### `Queuety::run_workflow( $name, $payload )`
+### `Queuety::run_workflow( $name, $payload, $options = [] )`
 
 Dispatch a registered workflow template by name. Returns the workflow ID.
 
 ```php
 $workflow_id = Queuety::run_workflow( 'onboarding', [ 'email' => 'user@example.com' ] );
+
+$workflow_id = Queuety::run_workflow(
+    'onboarding',
+    [ 'email' => 'user@example.com' ],
+    [ 'idempotency_key' => 'onboarding:user@example.com' ],
+);
 ```
 
 Throws `RuntimeException` if the template is not registered.
+
+### `Queuety::dispatch_workflow_definition( $definition, $payload, $options = [] )`
+
+Dispatch a workflow from a runtime definition bundle.
+
+Most application code should prefer `run_workflow()` or `workflow()->dispatch()`. This lower-level method exists so reusable adapters can dispatch a serialized workflow definition without depending on internal workflow manager methods.
+
+```php
+$workflow_id = Queuety::dispatch_workflow_definition(
+    $definition,
+    [ 'email' => 'user@example.com' ],
+    [ 'idempotency_key' => 'onboarding:user@example.com' ],
+);
+```
+
+### `Queuety::on_action( $hook, $workflow, $map = null, $when = null, $idempotency_key = null, $priority = 10, $accepted_args = null )`
+
+Register a WordPress action that dispatches a workflow.
+
+```php
+Queuety::on_action(
+    'save_post',
+    workflow: 'content_review',
+    map: static fn ( int $post_id, object $post, bool $update ): array => [
+        'post_id' => $post_id,
+        'post_type' => $post->post_type,
+        'update' => $update,
+    ],
+    when: static fn ( int $post_id, object $post ): bool => 'post' === $post->post_type,
+    idempotency_key: static fn ( int $post_id ): string => "save_post:{$post_id}",
+);
+```
+
+`$workflow` may be either:
+
+- a registered workflow template name
+- an inline `WorkflowBuilder`
+
+`map`, `when`, and `idempotency_key` run synchronously inside the current WordPress request. Only the workflow steps themselves run asynchronously after dispatch.
+
+See [Action Triggers](/docs/features/action-triggers) for the full guide.
 
 ### `Queuety::workflow_templates()`
 

@@ -614,6 +614,29 @@ class Queuety {
 	}
 
 	/**
+	 * Register a WordPress action that dispatches a workflow.
+	 *
+	 * @param string                 $hook            WordPress action hook name.
+	 * @param string|WorkflowBuilder $workflow        Registered workflow name or inline workflow builder.
+	 * @param callable|null          $map             Map raw action arguments to workflow payload.
+	 * @param callable|null          $when            Return false to skip dispatch for this action event.
+	 * @param callable|string|null   $idempotency_key Static or computed durable dispatch key.
+	 * @param int                    $priority        WordPress hook priority.
+	 * @param int|null               $accepted_args   Explicit accepted arg count. Inferred when omitted.
+	 */
+	public static function on_action(
+		string $hook,
+		string|WorkflowBuilder $workflow,
+		?callable $map = null,
+		?callable $when = null,
+		callable|string|null $idempotency_key = null,
+		int $priority = 10,
+		?int $accepted_args = null,
+	): void {
+		ActionWorkflowBridge::register( $hook, $workflow, $map, $when, $idempotency_key, $priority, $accepted_args );
+	}
+
+	/**
 	 * Register a handler class under a name.
 	 *
 	 * @param string $name  Handler name.
@@ -1082,6 +1105,7 @@ class Queuety {
 			queue: $builder->get_queue(),
 			priority: $builder->get_priority(),
 			max_attempts: $builder->get_max_attempts(),
+			definition: $builder->build_runtime_definition(),
 		);
 
 		self::$workflow_registry->register( $builder->get_name(), $template );
@@ -1092,10 +1116,11 @@ class Queuety {
 	 *
 	 * @param string $name    Template name.
 	 * @param array  $payload Initial payload/state.
+	 * @param array  $options Per-dispatch options like idempotency_key.
 	 * @return int The workflow ID.
 	 * @throws \RuntimeException If the template is not registered.
 	 */
-	public static function run_workflow( string $name, array $payload = array() ): int {
+	public static function run_workflow( string $name, array $payload = array(), array $options = array() ): int {
 		self::ensure_initialized();
 
 		$template = self::$workflow_registry->get( $name );
@@ -1103,7 +1128,20 @@ class Queuety {
 			throw new \RuntimeException( "Workflow template '{$name}' is not registered." );
 		}
 
-		return $template->dispatch( $payload );
+		return $template->dispatch( $payload, $options );
+	}
+
+	/**
+	 * Dispatch a workflow directly from a runtime definition bundle.
+	 *
+	 * @param array $definition Workflow definition bundle.
+	 * @param array $payload    Initial payload/state.
+	 * @param array $options    Per-dispatch options like idempotency_key.
+	 * @return int The workflow ID.
+	 */
+	public static function dispatch_workflow_definition( array $definition, array $payload = array(), array $options = array() ): int {
+		self::ensure_initialized();
+		return self::$workflow->dispatch_definition( $definition, $payload, $options );
 	}
 
 	/**
@@ -1502,6 +1540,7 @@ class Queuety {
 		self::$queue_fake         = null;
 		self::$fake_queue         = null;
 		self::$fake_batch_manager = null;
+		ActionWorkflowBridge::reset();
 		ExecutionContext::clear();
 	}
 

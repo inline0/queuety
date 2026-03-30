@@ -184,4 +184,39 @@ class WorkflowTemplateTest extends IntegrationTestCase {
 		$this->assertSame( Priority::High, $template->priority );
 		$this->assertSame( 5, $template->max_attempts );
 	}
+
+	public function test_run_workflow_preserves_runtime_definition_metadata(): void {
+		$builder = Queuety::define_workflow( 'rich_template' )
+			->version( 'rich-template.v2' )
+			->max_transitions( 4 )
+			->prune_state_after( 1 )
+			->must_complete_within( minutes: 5 )
+			->compensate_on_failure()
+			->then( DataFetchStep::class );
+
+		Queuety::register_workflow_template( $builder );
+
+		$wf_id = Queuety::run_workflow(
+			'rich_template',
+			array( 'user_id' => 7 ),
+			array( 'idempotency_key' => 'rich-template:7' )
+		);
+
+		$status = $this->workflow_mgr->status( $wf_id );
+		$this->assertSame( 'rich-template.v2', $status->definition_version );
+		$this->assertSame( 'rich-template:7', $status->idempotency_key );
+		$this->assertSame( 4, $status->budget['max_transitions'] );
+
+		$wf_tbl = $this->conn->table( Config::table_workflows() );
+		$stmt   = $this->conn->pdo()->prepare( "SELECT state, deadline_at FROM {$wf_tbl} WHERE id = :id" );
+		$stmt->execute( array( 'id' => $wf_id ) );
+		$row = $stmt->fetch( \PDO::FETCH_ASSOC );
+
+		$this->assertIsArray( $row );
+
+		$state = json_decode( $row['state'], true, 512, JSON_THROW_ON_ERROR );
+		$this->assertSame( 1, $state['_prune_state_after'] );
+		$this->assertTrue( $state['_compensate_on_failure'] );
+		$this->assertNotNull( $row['deadline_at'] );
+	}
 }

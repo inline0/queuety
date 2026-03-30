@@ -210,6 +210,64 @@ class Workflow {
 	}
 
 	/**
+	 * Normalize the per-dispatch idempotency key for definition-based workflows.
+	 *
+	 * @param array $dispatch_options Dispatch options.
+	 * @return string|null
+	 * @throws \InvalidArgumentException If the dispatch key is not a non-empty string.
+	 */
+	private function normalize_workflow_dispatch_idempotency_key( array $dispatch_options ): ?string {
+		$key = $dispatch_options['idempotency_key'] ?? null;
+		if ( null === $key ) {
+			return null;
+		}
+
+		if ( ! is_string( $key ) ) {
+			throw new \InvalidArgumentException( 'Workflow idempotency_key must be a string.' );
+		}
+
+		$key = trim( $key );
+		if ( '' === $key ) {
+			throw new \InvalidArgumentException( 'Workflow idempotency_key cannot be empty.' );
+		}
+
+		return $key;
+	}
+
+	/**
+	 * Find an existing workflow ID for a durable idempotency key.
+	 *
+	 * @param string    $key Workflow idempotency key.
+	 * @param \PDO|null $pdo Optional PDO handle to reuse.
+	 * @return int|null
+	 */
+	private function find_existing_workflow_id_for_key( string $key, ?\PDO $pdo = null ): ?int {
+		$pdo     = $pdo ?? $this->conn->pdo();
+		$key_tbl = $this->conn->table( Config::table_workflow_dispatch_keys() );
+		$stmt    = $pdo->prepare(
+			"SELECT workflow_id FROM {$key_tbl} WHERE dispatch_key = :dispatch_key LIMIT 1"
+		);
+		$stmt->execute( array( 'dispatch_key' => $key ) );
+		$workflow_id = $stmt->fetchColumn();
+
+		return false === $workflow_id ? null : (int) $workflow_id;
+	}
+
+	/**
+	 * Whether the given database error represents a duplicate key violation.
+	 *
+	 * @param \PDOException $e Database exception.
+	 * @return bool
+	 */
+	private function is_duplicate_key_error( \PDOException $e ): bool {
+		$sql_state = (string) $e->getCode();
+		$error_info = $e->errorInfo; // phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase -- PDO exposes this property with a fixed name.
+		$driver     = $error_info[1] ?? null;
+
+		return '23000' === $sql_state || 1062 === $driver;
+	}
+
+	/**
 	 * Compute the size of the public workflow state.
 	 *
 	 * @param array $state Workflow state.
@@ -3167,6 +3225,7 @@ class Workflow {
 	 * @param array    $initial_state       Initial public state.
 	 * @param int|null $spawned_by_workflow Workflow ID that spawned this workflow, if any.
 	 * @param int|null $spawned_by_step     Parent step index that spawned this workflow, if any.
+	 * @param array    $dispatch_options    Per-dispatch options.
 	 * @return array{state: array, deadline_at: string|null}
 	 * @throws \RuntimeException If the definition requires an initial-state budget that is already exceeded.
 	 */
@@ -3175,6 +3234,7 @@ class Workflow {
 		array $initial_state,
 		?int $spawned_by_workflow = null,
 		?int $spawned_by_step = null,
+		array $dispatch_options = array(),
 	): array {
 		$state                  = $initial_state;
 		$state['_steps']        = is_array( $definition['steps'] ?? null ) ? $definition['steps'] : array();
@@ -3247,6 +3307,11 @@ class Workflow {
 			$state['_compensate_on_failure'] = true;
 		}
 
+		$idempotency_key = $this->normalize_workflow_dispatch_idempotency_key( $dispatch_options );
+		if ( null !== $idempotency_key ) {
+			$state['_idempotency_key'] = $idempotency_key;
+		}
+
 		if ( null !== $spawned_by_workflow ) {
 			$state['_spawned_by_workflow_id'] = $spawned_by_workflow;
 			$state['_spawned_by_step_index']  = $spawned_by_step;
@@ -3267,7 +3332,10 @@ class Workflow {
 	 * @param int|null $parent_step_index   Parent step index when dispatching a sub-workflow.
 	 * @param int|null $spawned_by_workflow Workflow ID that spawned this workflow, if any.
 	 * @param int|null $spawned_by_step     Step index that spawned this workflow, if any.
+	 * @param array    $dispatch_options    Per-dispatch options.
 	 * @return int
+	 * @throws \PDOException If the idempotency key insert races with another dispatch.
+	 * @throws \Throwable If the database transaction fails.
 	 */
 	private function dispatch_defined_workflow(
 		array $definition,
@@ -3276,59 +3344,123 @@ class Workflow {
 		?int $parent_step_index = null,
 		?int $spawned_by_workflow = null,
 		?int $spawned_by_step = null,
+		array $dispatch_options = array(),
 	): int {
 		$pdo    = $this->conn->pdo();
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
 
-		$state_bundle  = $this->materialize_defined_workflow_state( $definition, $initial_state, $spawned_by_workflow, $spawned_by_step );
+		$state_bundle  = $this->materialize_defined_workflow_state( $definition, $initial_state, $spawned_by_workflow, $spawned_by_step, $dispatch_options );
 		$state         = $state_bundle['state'];
 		$deadline_at   = $state_bundle['deadline_at'];
 		$steps         = $state['_steps'] ?? array();
 		$queue_name    = $state['_queue'] ?? 'default';
 		$priority      = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
 		$max_attempts  = $state['_max_attempts'] ?? 3;
+		$idempotency_key = $this->idempotency_key_from_state( $state );
 		$workflow_name = is_string( $definition['name'] ?? null ) && '' !== trim( $definition['name'] )
 			? trim( $definition['name'] )
 			: 'workflow';
 
-		$stmt = $pdo->prepare(
-			"INSERT INTO {$wf_tbl}
-			(name, status, state, current_step, total_steps, parent_workflow_id, parent_step_index, deadline_at)
-			VALUES (:name, 'running', :state, 0, :total_steps, :parent_id, :parent_step, :deadline_at)"
-		);
-		$stmt->execute(
-			array(
-				'name'        => $workflow_name,
-				'state'       => json_encode( $state, JSON_THROW_ON_ERROR ),
-				'total_steps' => count( $steps ),
-				'parent_id'   => $parent_workflow_id,
-				'parent_step' => $parent_step_index,
-				'deadline_at' => $deadline_at,
-			)
-		);
-		$workflow_id = (int) $pdo->lastInsertId();
+		$pdo->beginTransaction();
+		try {
+			if ( null !== $idempotency_key ) {
+				$existing_workflow_id = $this->find_existing_workflow_id_for_key( $idempotency_key, $pdo );
+				if ( null !== $existing_workflow_id ) {
+					$pdo->commit();
+					return $existing_workflow_id;
+				}
+			}
 
-		if ( ! empty( $steps ) ) {
-			$this->enqueue_step_def(
-				$steps[0],
-				$workflow_id,
-				0,
-				$queue_name,
-				$priority,
-				$max_attempts,
+			$stmt = $pdo->prepare(
+				"INSERT INTO {$wf_tbl}
+				(name, status, state, current_step, total_steps, parent_workflow_id, parent_step_index, deadline_at)
+				VALUES (:name, 'running', :state, 0, :total_steps, :parent_id, :parent_step, :deadline_at)"
 			);
+			$stmt->execute(
+				array(
+					'name'        => $workflow_name,
+					'state'       => json_encode( $state, JSON_THROW_ON_ERROR ),
+					'total_steps' => count( $steps ),
+					'parent_id'   => $parent_workflow_id,
+					'parent_step' => $parent_step_index,
+					'deadline_at' => $deadline_at,
+				)
+			);
+			$workflow_id = (int) $pdo->lastInsertId();
+
+			if ( null !== $idempotency_key ) {
+				$key_tbl  = $this->conn->table( Config::table_workflow_dispatch_keys() );
+				$key_stmt = $pdo->prepare(
+					"INSERT INTO {$key_tbl} (dispatch_key, workflow_id)
+					VALUES (:dispatch_key, :workflow_id)"
+				);
+				$key_stmt->execute(
+					array(
+						'dispatch_key' => $idempotency_key,
+						'workflow_id'  => $workflow_id,
+					)
+				);
+			}
+
+			if ( ! empty( $steps ) ) {
+				$this->enqueue_step_def(
+					$steps[0],
+					$workflow_id,
+					0,
+					$queue_name,
+					$priority,
+					$max_attempts,
+				);
+			}
+
+			$this->logger->log(
+				LogEvent::WorkflowStarted,
+				array(
+					'workflow_id' => $workflow_id,
+					'handler'     => $workflow_name,
+					'queue'       => $queue_name,
+				)
+			);
+
+			$pdo->commit();
+			return $workflow_id;
+		} catch ( \PDOException $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+
+			if ( null !== $idempotency_key && $this->is_duplicate_key_error( $e ) ) {
+				$existing_workflow_id = $this->find_existing_workflow_id_for_key( $idempotency_key );
+				if ( null !== $existing_workflow_id ) {
+					return $existing_workflow_id;
+				}
+			}
+
+			throw $e;
+		} catch ( \Throwable $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+
+			throw $e;
+		}
+	}
+
+	/**
+	 * Dispatch a workflow from a runtime definition bundle.
+	 *
+	 * @param array $definition       Workflow definition bundle.
+	 * @param array $initial_state    Initial public state.
+	 * @param array $dispatch_options Per-dispatch options.
+	 * @return int
+	 * @throws \RuntimeException If the definition has no steps or the workflow dispatch fails.
+	 */
+	public function dispatch_definition( array $definition, array $initial_state = array(), array $dispatch_options = array() ): int {
+		if ( empty( $definition['steps'] ) || ! is_array( $definition['steps'] ) ) {
+			throw new \RuntimeException( 'Workflow definition must have at least one step.' );
 		}
 
-		$this->logger->log(
-			LogEvent::WorkflowStarted,
-			array(
-				'workflow_id' => $workflow_id,
-				'handler'     => $workflow_name,
-				'queue'       => $queue_name,
-			)
-		);
-
-		return $workflow_id;
+		return $this->dispatch_defined_workflow( $definition, $initial_state, null, null, null, null, $dispatch_options );
 	}
 
 	/**

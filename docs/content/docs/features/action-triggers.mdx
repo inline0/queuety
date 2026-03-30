@@ -1,0 +1,137 @@
+---
+title: Action Triggers
+description: Start durable workflows directly from WordPress action hooks.
+---
+
+# Action Triggers
+
+`Queuety::on_action()` lets you turn a normal WordPress action into a durable workflow dispatch.
+
+That gives you a clean bridge:
+
+`WordPress action -> mapped payload -> durable workflow`
+
+This is useful when the interesting event already exists in WordPress and the expensive or long-running response should happen asynchronously.
+
+## Example: review content when a post is saved
+
+```php
+use Queuety\Queuety;
+
+Queuety::on_action(
+    'save_post',
+    workflow: 'content_review',
+    map: static fn ( int $post_id, object $post, bool $update ): array => [
+        'post_id' => $post_id,
+        'post_type' => $post->post_type,
+        'update' => $update,
+    ],
+    when: static fn ( int $post_id, object $post ): bool => 'post' === $post->post_type,
+    idempotency_key: static fn ( int $post_id ): string => "save_post:{$post_id}",
+);
+```
+
+In that example:
+
+- `save_post` is still the original WordPress event
+- `map` turns raw hook arguments into plain workflow state
+- `when` skips unwanted events before anything is queued
+- `idempotency_key` keeps repeated hook fires from dispatching duplicate runs
+
+## What runs synchronously
+
+The action callback itself still runs inside the current WordPress request.
+
+That means these parts are synchronous:
+
+- `when`
+- `map`
+- `idempotency_key`
+
+Only the workflow steps run asynchronously after dispatch.
+
+## Payload rules
+
+Mapped payloads should contain plain arrays, scalars, and `null`.
+
+Do not pass raw WordPress objects like `WP_Post` straight into workflow state. Normalize them inside `map()` first:
+
+```php
+Queuety::on_action(
+    'save_post',
+    workflow: 'content_review',
+    map: static fn ( int $post_id, object $post, bool $update ): array => [
+        'post_id' => $post_id,
+        'post_type' => $post->post_type,
+        'post_status' => $post->post_status,
+        'update' => $update,
+    ],
+);
+```
+
+Keys that start with `_` are rejected because those names are reserved for internal workflow state.
+
+## Accepted arguments
+
+WordPress requires an `accepted_args` count when registering an action callback.
+
+Queuety infers it from your `map`, `when`, and `idempotency_key` callbacks by default, so the common case does not need extra configuration:
+
+```php
+Queuety::on_action(
+    'save_post',
+    workflow: 'content_review',
+    map: static fn ( int $post_id, object $post, bool $update ): array => [
+        'post_id' => $post_id,
+        'update' => $update,
+    ],
+);
+```
+
+If you need a manual override, pass `accepted_args` explicitly:
+
+```php
+Queuety::on_action(
+    'comment_post',
+    workflow: 'comment_review',
+    accepted_args: 2,
+);
+```
+
+## Inline workflow builders
+
+You can dispatch a registered workflow name or an inline `WorkflowBuilder`.
+
+Inline builders are useful when the hook-specific workflow is defined in the same bootstrap file:
+
+```php
+$review = Queuety::workflow( 'comment_review' )
+    ->then( ModerateCommentStep::class )
+    ->then( NotifyModeratorStep::class );
+
+Queuety::on_action(
+    'comment_post',
+    workflow: $review,
+    map: static fn ( int $comment_id ): array => [
+        'comment_id' => $comment_id,
+    ],
+    idempotency_key: static fn ( int $comment_id ): string => "comment:{$comment_id}",
+);
+```
+
+## When this is a good fit
+
+Use action triggers when:
+
+- WordPress already emits the event you care about
+- the response should survive request timeouts or worker restarts
+- the follow-up work may branch, wait, or require approval
+- duplicate hook fires need durable idempotency
+
+Use a direct `Queuety::dispatch()` or `Queuety::workflow()` call instead when the work is not tied to a WordPress event boundary.
+
+## Not for filters
+
+`Queuety::on_action()` is intentionally action-only.
+
+Filters are synchronous request-time transformations. They should usually stay synchronous, because WordPress expects a filtered value to be returned immediately.

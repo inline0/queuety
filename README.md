@@ -143,6 +143,22 @@ Queuety::workflow( 'editorial_run' )
     ->dispatch();
 ```
 
+Trigger workflows directly from WordPress actions:
+
+```php
+Queuety::on_action(
+    'save_post',
+    workflow: 'content_review',
+    map: static fn ( int $post_id, object $post, bool $update ): array => [
+        'post_id' => $post_id,
+        'post_type' => $post->post_type,
+        'update' => $update,
+    ],
+    when: static fn ( int $post_id, object $post ): bool => 'post' === $post->post_type,
+    idempotency_key: static fn ( int $post_id ): string => "save_post:{$post_id}",
+);
+```
+
 Hand work off to independent child workflows and join later:
 
 ```php
@@ -161,6 +177,7 @@ Queuety::workflow( 'brief_research' )
 ```
 
 For a fuller planner/executor walkthrough with human review and cross-workflow waits, see the `Agent Orchestration` docs page.
+For WordPress-specific workflow triggers, see the `Action Triggers` docs page.
 
 Add workflow guardrails for agent runs:
 

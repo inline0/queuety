@@ -18,11 +18,15 @@ class QueuetyTestCase extends TestCase {
 
 	protected function setUp(): void {
 		parent::setUp();
+		global $_queuety_test_actions;
+		$_queuety_test_actions = array();
 		$this->tmp_dir = QUEUETY_TEST_TMPDIR . '/' . uniqid( 'test-', true );
 		mkdir( $this->tmp_dir, 0755, true );
 	}
 
 	protected function tearDown(): void {
+		global $_queuety_test_actions;
+
 		if ( is_dir( $this->tmp_dir ) ) {
 			$it    = new \RecursiveDirectoryIterator( $this->tmp_dir, \RecursiveDirectoryIterator::SKIP_DOTS );
 			$files = new \RecursiveIteratorIterator( $it, \RecursiveIteratorIterator::CHILD_FIRST );
@@ -35,6 +39,7 @@ class QueuetyTestCase extends TestCase {
 			}
 			rmdir( $this->tmp_dir );
 		}
+		$_queuety_test_actions = array();
 		parent::tearDown();
 	}
 }

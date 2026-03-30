@@ -5,6 +5,69 @@
 
 require_once dirname( __DIR__ ) . '/vendor/autoload.php';
 
+if ( ! function_exists( 'add_action' ) ) {
+	/**
+	 * Capture registered WordPress actions for tests.
+	 *
+	 * @param string   $hook_name     Hook name.
+	 * @param callable $callback      Registered callback.
+	 * @param int      $priority      Hook priority.
+	 * @param int      $accepted_args Accepted argument count.
+	 * @return bool
+	 */
+	function add_action( string $hook_name, callable $callback, int $priority = 10, int $accepted_args = 1 ): bool {
+		global $_queuety_test_actions;
+
+		if ( ! is_array( $_queuety_test_actions ) ) {
+			$_queuety_test_actions = array();
+		}
+
+		$_queuety_test_actions[] = array(
+			'hook'          => $hook_name,
+			'callback'      => $callback,
+			'priority'      => $priority,
+			'accepted_args' => $accepted_args,
+		);
+
+		return true;
+	}
+}
+
+if ( ! function_exists( 'remove_action' ) ) {
+	/**
+	 * Remove a captured WordPress action for tests.
+	 *
+	 * @param string   $hook_name Hook name.
+	 * @param callable $callback  Registered callback.
+	 * @param int      $priority  Hook priority.
+	 * @return bool
+	 */
+	function remove_action( string $hook_name, callable $callback, int $priority = 10 ): bool {
+		global $_queuety_test_actions;
+
+		if ( ! is_array( $_queuety_test_actions ) ) {
+			return false;
+		}
+
+		foreach ( $_queuety_test_actions as $index => $action ) {
+			if (
+				$hook_name === ( $action['hook'] ?? null )
+				&& $priority === ( $action['priority'] ?? null )
+				&& $callback === ( $action['callback'] ?? null )
+			) {
+				unset( $_queuety_test_actions[ $index ] );
+				$_queuety_test_actions = array_values( $_queuety_test_actions );
+				return true;
+			}
+		}
+
+		return false;
+	}
+}
+
+global $_queuety_test_actions;
+$_queuety_test_actions = array();
+
 // WordPress constant stubs.
 if ( ! defined( 'ABSPATH' ) ) {
 	define( 'ABSPATH', '/tmp/wordpress/' );
