@@ -87,9 +87,9 @@ readonly class Job {
 			step_index: $row['step_index'] !== null ? (int) $row['step_index'] : null,
 			created_at: new \DateTimeImmutable( $row['created_at'] ),
 			payload_hash: $row['payload_hash'] ?? null,
-			depends_on: isset( $row['depends_on'] ) && null !== $row['depends_on'] ? (int) $row['depends_on'] : null,
-			batch_id: isset( $row['batch_id'] ) && null !== $row['batch_id'] ? (int) $row['batch_id'] : null,
-			heartbeat_data: isset( $row['heartbeat_data'] ) && null !== $row['heartbeat_data']
+			depends_on: array_key_exists( 'depends_on', $row ) && null !== $row['depends_on'] ? (int) $row['depends_on'] : null,
+			batch_id: array_key_exists( 'batch_id', $row ) && null !== $row['batch_id'] ? (int) $row['batch_id'] : null,
+			heartbeat_data: array_key_exists( 'heartbeat_data', $row ) && null !== $row['heartbeat_data']
 				? ( json_decode( $row['heartbeat_data'], true ) ?: null )
 				: null,
 		);

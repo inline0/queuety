@@ -101,7 +101,6 @@ class QueueFake {
 			}
 		}
 
-		\PHPUnit\Framework\Assert::assertTrue( true );
 	}
 
 	/**
@@ -136,7 +135,6 @@ class QueueFake {
 			);
 		}
 
-		\PHPUnit\Framework\Assert::assertTrue( true );
 	}
 
 	/**
@@ -157,7 +155,6 @@ class QueueFake {
 			);
 		}
 
-		\PHPUnit\Framework\Assert::assertTrue( true );
 	}
 
 	/**
@@ -180,7 +177,6 @@ class QueueFake {
 			}
 		}
 
-		\PHPUnit\Framework\Assert::assertTrue( true );
 	}
 
 	/**

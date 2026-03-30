@@ -53,11 +53,7 @@ class HandlerDiscovery {
 				continue;
 			}
 
-			try {
-				$reflection = new \ReflectionClass( $class_name );
-			} catch ( \ReflectionException ) {
-				continue;
-			}
+			$reflection = new \ReflectionClass( $class_name );
 
 			if ( $reflection->isAbstract() || $reflection->isInterface() ) {
 				continue;

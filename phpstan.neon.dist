@@ -1,10 +1,14 @@
 parameters:
     level: 5
+    treatPhpDocTypesAsCertain: false
     paths:
         - src
         - cli
     tmpDir: .phpstan
     scanFiles:
+        - phpstan/stubs/wp-config.php
         - phpstan/stubs/wordpress.php
         - phpstan/stubs/wp-cli.php
-
+    ignoreErrors:
+        -
+            identifier: trait.unused

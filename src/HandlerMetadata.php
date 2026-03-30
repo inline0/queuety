@@ -43,11 +43,7 @@ class HandlerMetadata {
 			return $defaults;
 		}
 
-		try {
-			$reflection = new \ReflectionClass( $class );
-		} catch ( \ReflectionException ) {
-			return $defaults;
-		}
+		$reflection = new \ReflectionClass( $class );
 
 		if ( $reflection->isAbstract() || $reflection->isInterface() ) {
 			return $defaults;

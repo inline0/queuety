@@ -40,13 +40,6 @@ class WorkerPool {
 	private const MAX_RESTARTS_PER_MINUTE = 10;
 
 	/**
-	 * Seconds to wait for children to exit before sending SIGKILL.
-	 *
-	 * @var int
-	 */
-	private const SHUTDOWN_TIMEOUT = 30;
-
-	/**
 	 * Constructor.
 	 *
 	 * @param int    $worker_count Number of worker processes to fork.

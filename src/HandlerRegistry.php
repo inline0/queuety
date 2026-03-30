@@ -123,11 +123,7 @@ class HandlerRegistry {
 			return;
 		}
 
-		try {
-			$reflection = new \ReflectionClass( $class );
-		} catch ( \ReflectionException ) {
-			return;
-		}
+		$reflection = new \ReflectionClass( $class );
 
 		$attrs = $reflection->getAttributes( QueuetyHandler::class );
 		if ( ! empty( $attrs ) ) {

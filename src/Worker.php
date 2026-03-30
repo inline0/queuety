@@ -49,7 +49,7 @@ class Worker {
 		private readonly Logger $logger,
 		private readonly Workflow $workflow,
 		private readonly HandlerRegistry $registry,
-		private readonly Config $config,
+		Config $config,
 		private readonly ?RateLimiter $rate_limiter = null,
 		private readonly ?Scheduler $scheduler = null,
 		private readonly ?WebhookNotifier $webhook_notifier = null,
@@ -277,9 +277,8 @@ class Worker {
 		$max_attempts     = $job->max_attempts;
 		$backoff_strategy = null;
 		$custom_backoff   = null;
-		$pcntl_available  = function_exists( 'pcntl_alarm' ) && function_exists( 'pcntl_signal' );
-		$previous_handler = null;
-		$job_instance     = null;
+		$pcntl_available = function_exists( 'pcntl_alarm' ) && function_exists( 'pcntl_signal' );
+		$job_instance    = null;
 
 		if ( $this->registry->is_job_class( $job->handler ) ) {
 			$job_props = $this->read_job_properties( $job->handler );
@@ -331,9 +330,9 @@ class Worker {
 			$alarm_callback   = static function () use ( $timeout_seconds ): void {
 				throw new TimeoutException( $timeout_seconds );
 			};
-			$previous_handler = pcntl_signal( SIGALRM, $alarm_callback );
-			pcntl_alarm( $timeout_seconds );
-		}
+				pcntl_signal( SIGALRM, $alarm_callback );
+				pcntl_alarm( $timeout_seconds );
+			}
 
 		Heartbeat::init( $job->id, $this->conn );
 		ExecutionContext::enter( $job->id, $job->workflow_id, $job->step_index );
@@ -771,11 +770,7 @@ class Worker {
 
 			if ( $pcntl_available ) {
 				pcntl_alarm( 0 );
-				if ( is_callable( $previous_handler ) || SIG_DFL === $previous_handler || SIG_IGN === $previous_handler ) {
-					pcntl_signal( SIGALRM, $previous_handler );
-				} else {
-					pcntl_signal( SIGALRM, SIG_DFL );
-				}
+				pcntl_signal( SIGALRM, SIG_DFL );
 			}
 		}
 	}
@@ -1048,7 +1043,7 @@ class Worker {
 		}
 
 		$metadata = HandlerMetadata::from_class( $class );
-		if ( isset( $metadata['rate_limit'] ) && is_array( $metadata['rate_limit'] ) ) {
+		if ( isset( $metadata['rate_limit'] ) ) {
 			$this->rate_limiter->register(
 				$handler,
 				$metadata['rate_limit'][0],

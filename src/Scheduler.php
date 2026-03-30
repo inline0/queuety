@@ -208,7 +208,7 @@ class Scheduler {
 							continue;
 						}
 
-						if ( OverlapPolicy::Buffer === $policy ) {
+						else {
 							$update = $pdo->prepare(
 								"UPDATE {$table}
 								SET next_run = :next_run

@@ -35,7 +35,7 @@ class FakeBatchManager extends BatchManager {
 	 * @param QueueFake $fake Recorder instance.
 	 */
 	public function __construct(
-		private readonly QueueFake $fake,
+		QueueFake $fake,
 	) {}
 
 	/**
@@ -47,8 +47,6 @@ class FakeBatchManager extends BatchManager {
 	 * @return int
 	 */
 	public function create( int $total_jobs, ?string $name = null, array $options = array() ): int {
-		unset( $this->fake );
-
 		$batch_id                = $this->next_batch_id++;
 		$this->batches[ $batch_id ] = new Batch(
 			id: $batch_id,
