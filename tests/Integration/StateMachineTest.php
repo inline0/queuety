@@ -225,7 +225,6 @@ class StateMachineTest extends IntegrationTestCase {
 		$this->assertSame(
 			array(
 				'machine_started',
-				'action_started',
 				'action_failed',
 				'machine_failed',
 			),
