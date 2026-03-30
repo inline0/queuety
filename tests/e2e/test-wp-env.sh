@@ -151,8 +151,8 @@ TABLES=$(wp_cli db query "SHOW TABLES LIKE '%queuety%';" --skip-column-names 2>/
 assert_contains "$TABLES" "queuety_jobs" "queuety_jobs table exists"
 assert_contains "$TABLES" "queuety_workflows" "queuety_workflows table exists"
 assert_contains "$TABLES" "queuety_logs" "queuety_logs table exists"
+assert_contains "$TABLES" "queuety_artifacts" "queuety_artifacts table exists"
 
-echo ""
 echo "--- WP-CLI: Status ---"
 
 # Test: status command works.
@@ -247,6 +247,12 @@ if [ -n "$WF_ID" ] && [ "$WF_ID" != "0" ]; then
     assert_contains "$WF_STATUS" "test_wf" "workflow status shows name"
     assert_contains "$WF_STATUS" "running" "workflow status shows running"
     assert_contains "$WF_STATUS" "0/2" "workflow status shows step 0/2"
+
+    wp_cli eval "Queuety\\Queuety::put_artifact($WF_ID, 'brief', ['status' => 'ready']);" > /dev/null 2>&1 || true
+    WF_ARTIFACTS=$(wp_cli queuety workflow artifacts "$WF_ID" 2>/dev/null || true)
+    assert_contains "$WF_ARTIFACTS" "brief" "workflow artifacts lists stored artifact"
+    WF_ARTIFACT=$(wp_cli queuety workflow artifact "$WF_ID" brief 2>/dev/null || true)
+    assert_contains "$WF_ARTIFACT" "\"key\": \"brief\"" "workflow artifact shows stored artifact"
 
     # Test: workflow list command.
     WF_LIST=$(wp_cli queuety workflow list 2>/dev/null || true)

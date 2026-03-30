@@ -257,6 +257,17 @@ class WorkflowCommandTest extends TestCase {
 		);
 	}
 
+	public function test_artifact_and_artifacts_commands_show_stored_artifacts(): void {
+		$this->skip_without_db();
+
+		$wf_id = $this->create_test_workflow();
+		Queuety::put_artifact( $wf_id, 'research_brief', array( 'summary' => 'ok' ) );
+
+		$this->cmd->artifacts( array( $wf_id ), array() );
+		$this->cmd->artifact( array( $wf_id, 'research_brief' ), array() );
+		$this->assertTrue( true );
+	}
+
 	// -- state_at() shows state snapshot -------------------------------------
 
 	public function test_state_at_shows_snapshot(): void {

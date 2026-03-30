@@ -81,6 +81,7 @@ If you want end-to-end integration examples, see [Examples](/docs/examples), whi
 - **Durable timers and waits.** `sleep()` adds process-restart-safe delays. `wait_for_signal()`, `wait_for_signals()`, `await_approval()`, `await_input()`, and `await_workflow()` let workflows pause on external events or other workflows without keeping PHP alive.
 - **Dynamic fan-out.** `fan_out()` expands runtime-discovered branch work from workflow state and supports all-success, first-success, and quorum joins.
 - **Async workflow handoffs.** `spawn_workflows()` turns runtime-discovered items into independent top-level workflows that can be awaited later.
+- **Durable artifacts.** Store named workflow outputs outside the main state bag and carry them through status, CLI inspection, export, and replay.
 - **Workflow guardrails.** `version()`, a deterministic definition hash, idempotent dispatch keys, and workflow budgets make agent-style runs easier to inspect and harder to duplicate or let run away silently.
 - **Step compensation.** `compensate_with()` and `compensate_on_failure()` provide rollback hooks for completed steps when workflows are cancelled or fail.
 - **Heartbeats.** Long-running steps send heartbeats to prevent the stale-job recovery system from reclaiming active work.

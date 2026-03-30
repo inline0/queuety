@@ -90,4 +90,20 @@ class WorkflowStateTest extends TestCase {
 		$this->assertSame( 10, $state->budget['max_transitions'] );
 		$this->assertSame( 128, $state->budget['public_state_bytes'] );
 	}
+
+	public function test_exposes_artifact_summary_when_present(): void {
+		$state = new WorkflowState(
+			workflow_id: 21,
+			name: 'agent_run',
+			status: WorkflowStatus::Running,
+			current_step: 1,
+			total_steps: 2,
+			state: array(),
+			artifact_count: 2,
+			artifact_keys: array( 'draft', 'citations' ),
+		);
+
+		$this->assertSame( 2, $state->artifact_count );
+		$this->assertSame( array( 'draft', 'citations' ), $state->artifact_keys );
+	}
 }

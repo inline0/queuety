@@ -32,6 +32,7 @@ class WorkflowExporter {
 		$ev_tbl = $conn->table( Config::table_workflow_events() );
 		$sig_tbl = $conn->table( Config::table_signals() );
 		$dep_tbl = $conn->table( Config::table_workflow_dependencies() );
+		$art_tbl = $conn->table( Config::table_artifacts() );
 
 		$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id" );
 		$stmt->execute( array( 'id' => $workflow_id ) );
@@ -171,12 +172,36 @@ class WorkflowExporter {
 			);
 		}
 
+		$stmt = $pdo->prepare(
+			"SELECT * FROM {$art_tbl} WHERE workflow_id = :workflow_id ORDER BY artifact_key ASC"
+		);
+		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
+		$artifact_rows = $stmt->fetchAll();
+
+		$artifacts = array();
+		foreach ( $artifact_rows as $row ) {
+			$artifacts[] = array(
+				'id'          => (int) $row['id'],
+				'workflow_id' => (int) $row['workflow_id'],
+				'key'         => $row['artifact_key'],
+				'kind'        => $row['kind'],
+				'content'     => 'json' === strtolower( (string) $row['kind'] )
+					? json_decode( $row['content'], true )
+					: $row['content'],
+				'metadata'    => null !== $row['metadata'] ? json_decode( $row['metadata'], true ) : array(),
+				'step_index'  => $row['step_index'] !== null ? (int) $row['step_index'] : null,
+				'created_at'  => $row['created_at'],
+				'updated_at'  => $row['updated_at'],
+			);
+		}
+
 		return array(
 			'workflow'        => $wf_data,
 			'jobs'            => $jobs,
 			'events'          => $events,
 			'logs'            => $logs,
 			'signals'         => $signals,
+			'artifacts'       => $artifacts,
 			'wait_dependencies' => $wait_dependencies,
 			'exported_at'     => gmdate( 'c' ),
 			'queuety_version' => Schema::CURRENT_VERSION,

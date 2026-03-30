@@ -14,7 +14,8 @@ For fuller planner/executor examples, see [Agent Orchestration](/docs/workflows/
 Queuety provides two builder methods:
 
 - `await_workflow()` for one workflow
-- `await_workflows()` for several workflows with `all` or `any` semantics
+- `await_workflows()` for several workflows with `all`, `any`, or `quorum` semantics
+- `await_workflow_group()` when the workflow IDs come from a previously spawned group
 
 ## Wait for one workflow
 
@@ -55,6 +56,19 @@ Queuety::workflow( 'synthesis_run' )
 
 - `WaitMode::All` resumes only when every listed workflow has completed.
 - `WaitMode::Any` resumes when the first listed workflow completes.
+- `WaitMode::Quorum` resumes once a required number of workflows have completed successfully.
+
+```php
+Queuety::workflow( 'synthesis_run' )
+    ->await_workflows(
+        [ $research_id, $editorial_id, $legal_id ],
+        WaitMode::Quorum,
+        'dependencies',
+        quorum: 2,
+    )
+    ->then( PublishPacketStep::class )
+    ->dispatch();
+```
 
 With `result_key`, multi-workflow waits store completed dependency state keyed by workflow ID:
 
@@ -86,6 +100,19 @@ Queuety::workflow( 'aggregator' )
     ->dispatch( [ 'dependency_ids' => [ 12, 18, 22 ] ] );
 ```
 
+## Wait on a spawned workflow group
+
+If a previous `spawn_workflows()` or `spawn_agents()` step stored a durable group key, you can wait on that group directly instead of plumbing workflow IDs through public state yourself.
+
+```php
+Queuety::workflow( 'brief_research' )
+    ->then( PlanTopicsStep::class )
+    ->spawn_agents( 'agent_tasks', $agent_run, group_key: 'researchers' )
+    ->await_agent_group( 'researchers', WaitMode::Quorum, 2, 'agent_results' )
+    ->then( SynthesizeBriefStep::class )
+    ->dispatch();
+```
+
 ## What happens while waiting
 
 When a workflow reaches one of these steps it moves to `waiting_workflow` status. No worker stays attached to it while it waits.
@@ -105,5 +132,6 @@ Workflow dependency waits are success-oriented:
 
 - `await_workflow()` and `WaitMode::All` fail if any required dependency fails or is cancelled.
 - `WaitMode::Any` fails only when every dependency has reached a terminal state and none completed successfully.
+- `WaitMode::Quorum` fails when the remaining active workflows can no longer satisfy the required quorum.
 
 This makes workflow waits useful for planner/executor systems where one workflow can fan out work, and another can wait on `all` results or on the first successful branch that finishes.

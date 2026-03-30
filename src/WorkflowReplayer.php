@@ -52,6 +52,7 @@ class WorkflowReplayer {
 		$logs    = $export_data['logs'] ?? array();
 		$signals = $export_data['signals'] ?? array();
 		$waits   = $export_data['wait_dependencies'] ?? array();
+		$artifacts = $export_data['artifacts'] ?? array();
 
 		$pdo    = $conn->pdo();
 		$wf_tbl = $conn->table( Config::table_workflows() );
@@ -59,6 +60,7 @@ class WorkflowReplayer {
 		$lg_tbl = $conn->table( Config::table_logs() );
 		$sig_tbl = $conn->table( Config::table_signals() );
 		$dep_tbl = $conn->table( Config::table_workflow_dependencies() );
+		$art_tbl = $conn->table( Config::table_artifacts() );
 
 		$state        = $wf_data['state'] ?? array();
 		$current_step = (int) ( $wf_data['current_step'] ?? 0 );
@@ -181,6 +183,29 @@ class WorkflowReplayer {
 						'dependency_workflow_id' => $dependency_workflow_id,
 						'satisfied_at'           => $wait['satisfied_at'] ?? null,
 						'created_at'             => $wait['created_at'] ?? gmdate( 'Y-m-d H:i:s' ),
+					)
+				);
+			}
+
+			foreach ( $artifacts as $artifact ) {
+				$ins = $pdo->prepare(
+					"INSERT INTO {$art_tbl}
+						(workflow_id, artifact_key, kind, content, metadata, step_index, created_at, updated_at)
+					VALUES
+						(:workflow_id, :artifact_key, :kind, :content, :metadata, :step_index, :created_at, :updated_at)"
+				);
+				$ins->execute(
+					array(
+						'workflow_id'  => $new_id,
+						'artifact_key' => $artifact['key'] ?? '',
+						'kind'         => $artifact['kind'] ?? 'json',
+						'content'      => 'json' === strtolower( (string) ( $artifact['kind'] ?? 'json' ) )
+							? json_encode( $artifact['content'] ?? null, JSON_THROW_ON_ERROR )
+							: (string) ( $artifact['content'] ?? '' ),
+						'metadata'     => json_encode( $artifact['metadata'] ?? array(), JSON_THROW_ON_ERROR ),
+						'step_index'   => $artifact['step_index'] ?? null,
+						'created_at'   => $artifact['created_at'] ?? gmdate( 'Y-m-d H:i:s' ),
+						'updated_at'   => $artifact['updated_at'] ?? gmdate( 'Y-m-d H:i:s' ),
 					)
 				);
 			}

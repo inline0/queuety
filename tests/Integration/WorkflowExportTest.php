@@ -7,6 +7,7 @@
 
 namespace Queuety\Tests\Integration;
 
+use Queuety\ArtifactStore;
 use Queuety\Config;
 use Queuety\Enums\WorkflowStatus;
 use Queuety\Logger;
@@ -162,6 +163,27 @@ class WorkflowExportTest extends IntegrationTestCase {
 
 		$this->assertArrayHasKey( 'wait_dependencies', $wait_export );
 		$this->assertCount( 1, $wait_export['wait_dependencies'] );
+	}
+
+	public function test_export_and_replay_include_artifacts(): void {
+		$wf_id      = $this->create_and_complete_workflow();
+		$artifacts  = new ArtifactStore( $this->conn );
+
+		$artifacts->put( $wf_id, 'research_brief', "# Brief\n\nDone.", 'markdown', 1, array( 'source' => 'agent' ) );
+		$data = WorkflowExporter::export( $wf_id, $this->conn );
+
+		$this->assertArrayHasKey( 'artifacts', $data );
+		$this->assertCount( 1, $data['artifacts'] );
+		$this->assertSame( 'research_brief', $data['artifacts'][0]['key'] );
+		$this->assertSame( 'markdown', $data['artifacts'][0]['kind'] );
+
+		$new_id = WorkflowReplayer::replay( $data, $this->conn );
+		$copied = $artifacts->get( $new_id, 'research_brief' );
+
+		$this->assertNotNull( $copied );
+		$this->assertSame( 'markdown', $copied['kind'] );
+		$this->assertSame( "# Brief\n\nDone.", $copied['content'] );
+		$this->assertSame( 'agent', $copied['metadata']['source'] );
 	}
 
 	public function test_export_json_returns_valid_json(): void {

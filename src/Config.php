@@ -207,6 +207,15 @@ class Config {
 	}
 
 	/**
+	 * Get the workflow artifacts table name.
+	 *
+	 * @return string
+	 */
+	public static function table_artifacts(): string {
+		return defined( 'QUEUETY_TABLE_ARTIFACTS' ) ? QUEUETY_TABLE_ARTIFACTS : 'queuety_artifacts';
+	}
+
+	/**
 	 * Get the default cache TTL in seconds.
 	 *
 	 * @return int

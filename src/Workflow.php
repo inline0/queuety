@@ -38,6 +38,7 @@ class Workflow {
 	 * @param Logger                $logger    Logger instance.
 	 * @param Cache|null            $cache     Optional cache backend for reducing DB reads.
 	 * @param WorkflowEventLog|null $event_log Optional workflow event log for state snapshots.
+	 * @param ArtifactStore|null    $artifacts Optional workflow artifact store.
 	 */
 	public function __construct(
 		private readonly Connection $conn,
@@ -45,6 +46,7 @@ class Workflow {
 		private readonly Logger $logger,
 		private readonly ?Cache $cache = null,
 		private readonly ?WorkflowEventLog $event_log = null,
+		private readonly ?ArtifactStore $artifacts = null,
 	) {}
 
 	/**
@@ -449,6 +451,33 @@ class Workflow {
 	}
 
 	/**
+	 * Resolve the required quorum for a workflow wait step.
+	 *
+	 * @param array $step_def Step definition.
+	 * @return int|null
+	 */
+	private function workflow_wait_quorum_for_step( array $step_def ): ?int {
+		$quorum = isset( $step_def['quorum'] ) ? (int) $step_def['quorum'] : null;
+		return null !== $quorum && $quorum > 0 ? $quorum : null;
+	}
+
+	/**
+	 * Resolve an internal spawned-workflow group key for a workflow wait step.
+	 *
+	 * @param array $step_def Step definition.
+	 * @return string|null
+	 */
+	private function workflow_wait_group_key_for_step( array $step_def ): ?string {
+		$group_key = $step_def['workflow_group_key'] ?? null;
+		if ( ! is_string( $group_key ) ) {
+			return null;
+		}
+
+		$group_key = trim( $group_key );
+		return '' === $group_key ? null : $group_key;
+	}
+
+	/**
 	 * Resolve the public result key for a wait step.
 	 *
 	 * @param array $step_def Step definition.
@@ -462,6 +491,31 @@ class Workflow {
 
 		$result_key = trim( $result_key );
 		return '' === $result_key ? null : $result_key;
+	}
+
+	/**
+	 * Normalize one workflow ID source into a de-duplicated list of IDs.
+	 *
+	 * @param mixed $value Workflow ID or list source.
+	 * @return int[]
+	 */
+	private function normalize_workflow_ids( mixed $value ): array {
+		if ( is_array( $value ) ) {
+			return array_values(
+				array_unique(
+					array_filter(
+						array_map(
+							static fn( mixed $workflow_id ): int => (int) $workflow_id,
+							$value
+						),
+						static fn( int $workflow_id ): bool => $workflow_id > 0
+					)
+				)
+			);
+		}
+
+		$workflow_id = (int) $value;
+		return $workflow_id > 0 ? array( $workflow_id ) : array();
 	}
 
 	/**
@@ -766,17 +820,21 @@ class Workflow {
 	private function resolve_workflow_wait_ids( array $step_def, array $state ): array {
 		$workflow_ids = $step_def['workflow_ids'] ?? null;
 		if ( is_array( $workflow_ids ) ) {
-			return array_values(
-				array_unique(
-					array_filter(
-						array_map(
-							static fn( mixed $workflow_id ): int => (int) $workflow_id,
-							$workflow_ids
-						),
-						static fn( int $workflow_id ): bool => $workflow_id > 0
-					)
-				)
-			);
+			return $this->normalize_workflow_ids( $workflow_ids );
+		}
+
+		$group_key = $this->workflow_wait_group_key_for_step( $step_def );
+		if ( null !== $group_key ) {
+			$groups = $state['_workflow_groups'] ?? array();
+			if ( is_array( $groups ) && array_key_exists( $group_key, $groups ) ) {
+				return $this->normalize_workflow_ids( $groups[ $group_key ] );
+			}
+
+			if ( array_key_exists( $group_key, $state ) ) {
+				return $this->normalize_workflow_ids( $state[ $group_key ] );
+			}
+
+			return array();
 		}
 
 		$workflow_key = trim( (string) ( $step_def['workflow_id_key'] ?? '' ) );
@@ -789,22 +847,7 @@ class Workflow {
 			return array();
 		}
 
-		if ( is_array( $value ) ) {
-			return array_values(
-				array_unique(
-					array_filter(
-						array_map(
-							static fn( mixed $workflow_id ): int => (int) $workflow_id,
-							$value
-						),
-						static fn( int $workflow_id ): bool => $workflow_id > 0
-					)
-				)
-			);
-		}
-
-		$workflow_id = (int) $value;
-		return $workflow_id > 0 ? array( $workflow_id ) : array();
+		return $this->normalize_workflow_ids( $value );
 	}
 
 	/**
@@ -852,11 +895,13 @@ class Workflow {
 	 * @return string
 	 */
 	private function evaluate_workflow_wait_state( array $step_def, array $workflow_ids, array $workflow_rows ): string {
+		$mode = $this->wait_mode_for_step( $step_def );
+
 		if ( empty( $workflow_ids ) ) {
-			return WaitMode::All === $this->wait_mode_for_step( $step_def ) ? 'satisfied' : 'impossible';
+			return WaitMode::All === $mode ? 'satisfied' : 'impossible';
 		}
 
-		$mode              = $this->wait_mode_for_step( $step_def );
+		$quorum            = $this->workflow_wait_quorum_for_step( $step_def ) ?? 1;
 		$completed_count   = 0;
 		$terminal_failures = 0;
 		$active_count      = 0;
@@ -883,6 +928,14 @@ class Workflow {
 			}
 
 			return 0 === $active_count ? 'impossible' : 'pending';
+		}
+
+		if ( WaitMode::Quorum === $mode ) {
+			if ( $completed_count >= $quorum ) {
+				return 'satisfied';
+			}
+
+			return $completed_count + $active_count < $quorum ? 'impossible' : 'pending';
 		}
 
 		if ( $completed_count === count( $workflow_ids ) ) {
@@ -963,6 +1016,7 @@ class Workflow {
 		$details           = array(
 			'step_name'    => $step_def['name'] ?? null,
 			'result_key'   => $this->wait_result_key_for_step( $step_def ),
+			'human_wait'   => $step_def['human_wait'] ?? null,
 			'match_payload' => $this->signal_match_payload_for_step( $step_def ),
 			'matched'      => $matched_signals,
 			'remaining'    => $remaining_signals,
@@ -1014,7 +1068,9 @@ class Workflow {
 		return array_filter(
 			array(
 				'step_name'  => $step_def['name'] ?? null,
+				'group_key'  => $this->workflow_wait_group_key_for_step( $step_def ),
 				'result_key' => $this->wait_result_key_for_step( $step_def ),
+				'quorum'     => $this->workflow_wait_quorum_for_step( $step_def ),
 				'matched'    => $matched,
 				'remaining'  => $remaining,
 				'failed'     => $failed,
@@ -1223,6 +1279,11 @@ class Workflow {
 	private function merge_step_output_into_state( array &$state, array $step_output, int $current_step ): void {
 		$output_keys = array();
 		foreach ( $step_output as $key => $value ) {
+			if ( '_workflow_groups' === $key && is_array( $value ) ) {
+				$state['_workflow_groups'] = $value;
+				continue;
+			}
+
 			if ( ! str_starts_with( $key, '_' ) ) {
 				$state[ $key ] = $value;
 				$output_keys[] = $key;
@@ -1873,6 +1934,7 @@ class Workflow {
 					$this->wait_result_key_for_step( $step_def ),
 					array(
 						'step_name'       => $step_def['name'] ?? null,
+						'human_wait'      => $step_def['human_wait'] ?? null,
 						'match_payload'   => $this->signal_match_payload_for_step( $step_def ),
 						'correlation_key' => $this->signal_correlation_key_for_step( $step_def ),
 					),
@@ -1903,6 +1965,7 @@ class Workflow {
 						details: array(
 							'wait_mode'       => $this->wait_mode_for_step( $step_def )->value,
 							'step_name'       => $step_def['name'] ?? null,
+							'human_wait'      => $step_def['human_wait'] ?? null,
 							'result_key'      => $this->wait_result_key_for_step( $step_def ),
 							'match_payload'   => $this->signal_match_payload_for_step( $step_def ),
 							'correlation_key' => $this->signal_correlation_key_for_step( $step_def ),
@@ -2315,7 +2378,9 @@ class Workflow {
 					$this->wait_mode_for_step( $step_def ),
 					$this->wait_result_key_for_step( $step_def ),
 					array(
-						'step_name' => $step_def['name'] ?? null,
+						'step_name'  => $step_def['name'] ?? null,
+						'group_key'  => $this->workflow_wait_group_key_for_step( $step_def ),
+						'quorum'     => $this->workflow_wait_quorum_for_step( $step_def ),
 					),
 				);
 
@@ -2344,6 +2409,8 @@ class Workflow {
 						details: array(
 							'wait_mode'  => $this->wait_mode_for_step( $step_def )->value,
 							'step_name'  => $step_def['name'] ?? null,
+							'group_key'  => $this->workflow_wait_group_key_for_step( $step_def ),
+							'quorum'     => $this->workflow_wait_quorum_for_step( $step_def ),
 							'result_key' => $this->wait_result_key_for_step( $step_def ),
 						),
 					);
@@ -3389,6 +3456,7 @@ class Workflow {
 
 		$result_key    = trim( (string) ( $step_def['result_key'] ?? 'spawned_workflow_ids' ) );
 		$payload_key   = trim( (string) ( $step_def['payload_key'] ?? 'item' ) );
+		$group_key     = trim( (string) ( $step_def['group_key'] ?? '' ) );
 		$inherit_state = ! empty( $step_def['inherit_state'] );
 		$base_state    = $inherit_state ? $this->public_state( $workflow_state ) : array();
 
@@ -3420,7 +3488,16 @@ class Workflow {
 			);
 		}
 
-		return array( $result_key => $spawned_ids );
+		$output = array( $result_key => $spawned_ids );
+
+		if ( '' !== $group_key ) {
+			$groups               = $workflow_state['_workflow_groups'] ?? array();
+			$groups               = is_array( $groups ) ? $groups : array();
+			$groups[ $group_key ] = $spawned_ids;
+			$output['_workflow_groups'] = $groups;
+		}
+
+		return $output;
 	}
 
 	/**
@@ -3583,6 +3660,7 @@ class Workflow {
 		$waiting_for   = $wait['waiting_for'] ?? ( $wait['signal_names'] ?? null );
 		$wait_mode     = isset( $wait['wait_mode'] ) && is_string( $wait['wait_mode'] ) ? $wait['wait_mode'] : null;
 		$wait_details  = $this->wait_details_from_state( (int) $row['id'], $state, $current_step, $wait );
+		$artifact_meta = null !== $this->artifacts ? $this->artifacts->summary( (int) $row['id'] ) : null;
 
 		return new WorkflowState(
 			workflow_id: (int) $row['id'],
@@ -3602,6 +3680,8 @@ class Workflow {
 			current_step_name: $this->current_step_name_from_state( $state, $current_step ),
 			wait_mode: $wait_mode,
 			wait_details: $wait_details,
+			artifact_count: $artifact_meta['count'] ?? null,
+			artifact_keys: $artifact_meta['keys'] ?? null,
 		);
 	}
 

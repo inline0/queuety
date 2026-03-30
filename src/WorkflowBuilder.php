@@ -330,6 +330,10 @@ class WorkflowBuilder {
 			throw new \RuntimeException( 'Signal wait steps require at least one signal name.' );
 		}
 
+		if ( WaitMode::Quorum === $mode ) {
+			throw new \RuntimeException( 'Signal wait steps support only all/any semantics.' );
+		}
+
 		$index         = count( $this->steps );
 		$this->steps[] = array(
 			'type'            => 'signal',
@@ -360,7 +364,7 @@ class WorkflowBuilder {
 		array $match_payload = array(),
 		?string $correlation_key = null,
 	): self {
-		return $this->wait_for_signals(
+		$this->wait_for_signals(
 			array( $signal_name ),
 			WaitMode::All,
 			$result_key,
@@ -368,6 +372,10 @@ class WorkflowBuilder {
 			$match_payload,
 			$correlation_key,
 		);
+
+		$this->steps[ count( $this->steps ) - 1 ]['human_wait'] = 'approval';
+
+		return $this;
 	}
 
 	/**
@@ -402,6 +410,7 @@ class WorkflowBuilder {
 		);
 
 		$last_index = count( $this->steps ) - 1;
+		$this->steps[ $last_index ]['human_wait']   = 'decision';
 		$this->steps[ $last_index ]['decision_map'] = array(
 			$approve_signal => 'approved',
 			$reject_signal  => 'rejected',
@@ -427,7 +436,7 @@ class WorkflowBuilder {
 		array $match_payload = array(),
 		?string $correlation_key = null,
 	): self {
-		return $this->wait_for_signals(
+		$this->wait_for_signals(
 			array( $signal_name ),
 			WaitMode::All,
 			$result_key,
@@ -435,6 +444,10 @@ class WorkflowBuilder {
 			$match_payload,
 			$correlation_key,
 		);
+
+		$this->steps[ count( $this->steps ) - 1 ]['human_wait'] = 'input';
+
+		return $this;
 	}
 
 	/**
@@ -465,14 +478,16 @@ class WorkflowBuilder {
 	 * @param WaitMode     $mode       Whether all workflows or any workflow should unblock the step.
 	 * @param string|null  $result_key Optional state key for completed workflow state.
 	 * @param string|null  $name       Optional step name.
+	 * @param int|null     $quorum     Required completed workflow count when using WaitMode::Quorum.
 	 * @return self
-	 * @throws \RuntimeException If the provided state key is empty.
+	 * @throws \RuntimeException If the provided state key is empty or quorum is invalid.
 	 */
 	public function await_workflows(
 		array|string $workflows,
 		WaitMode $mode = WaitMode::All,
 		?string $result_key = null,
 		?string $name = null,
+		?int $quorum = null,
 	): self {
 		$index = count( $this->steps );
 		$step  = array(
@@ -481,6 +496,14 @@ class WorkflowBuilder {
 			'result_key' => $result_key,
 			'name'       => $name ?? 'await_workflows_' . $index,
 		);
+
+		if ( WaitMode::Quorum === $mode ) {
+			if ( null === $quorum || $quorum < 1 ) {
+				throw new \RuntimeException( 'Workflow quorum waits require a quorum of at least 1.' );
+			}
+
+			$step['quorum'] = $quorum;
+		}
 
 		if ( is_string( $workflows ) ) {
 			$workflow_key = trim( $workflows );
@@ -507,6 +530,46 @@ class WorkflowBuilder {
 	}
 
 	/**
+	 * Add a workflow dependency wait that resolves spawned workflow IDs by group.
+	 *
+	 * @param string      $group_key  Internal workflow group key created by spawn_workflows().
+	 * @param WaitMode    $mode       Whether all workflows, any workflow, or a quorum should unblock the step.
+	 * @param int|null    $quorum     Required completed workflow count when using WaitMode::Quorum.
+	 * @param string|null $result_key Optional state key for completed workflow state.
+	 * @param string|null $name       Optional step name.
+	 * @return self
+	 * @throws \RuntimeException If the group key is empty or quorum is invalid.
+	 */
+	public function await_workflow_group(
+		string $group_key,
+		WaitMode $mode = WaitMode::All,
+		?int $quorum = null,
+		?string $result_key = null,
+		?string $name = null,
+	): self {
+		$group_key = trim( $group_key );
+		if ( '' === $group_key ) {
+			throw new \RuntimeException( 'Workflow group waits require a non-empty group key.' );
+		}
+
+		if ( WaitMode::Quorum === $mode && ( null === $quorum || $quorum < 1 ) ) {
+			throw new \RuntimeException( 'Workflow quorum waits require a quorum of at least 1.' );
+		}
+
+		$index         = count( $this->steps );
+		$this->steps[] = array(
+			'type'               => 'workflow_wait',
+			'name'               => $name ?? 'await_workflow_group_' . $index,
+			'workflow_group_key' => $group_key,
+			'wait_mode'          => $mode,
+			'quorum'             => WaitMode::Quorum === $mode ? $quorum : null,
+			'result_key'         => $result_key,
+		);
+
+		return $this;
+	}
+
+	/**
 	 * Spawn one top-level workflow per runtime item and store the workflow IDs.
 	 *
 	 * @param string          $items_key        Public state key containing child payload items.
@@ -515,6 +578,7 @@ class WorkflowBuilder {
 	 * @param string          $payload_key      Key used when an item is scalar instead of an array.
 	 * @param bool            $inherit_state    Whether to merge parent public state into each child.
 	 * @param string|null     $name             Optional step name.
+	 * @param string|null     $group_key        Optional internal group key for later group waits.
 	 * @return self
 	 * @throws \InvalidArgumentException If a required key is empty.
 	 */
@@ -525,10 +589,12 @@ class WorkflowBuilder {
 		string $payload_key = 'item',
 		bool $inherit_state = true,
 		?string $name = null,
+		?string $group_key = null,
 	): self {
 		$items_key   = trim( $items_key );
 		$result_key  = trim( $result_key );
 		$payload_key = trim( $payload_key );
+		$group_key   = null !== $group_key ? trim( $group_key ) : null;
 
 		if ( '' === $items_key ) {
 			throw new \InvalidArgumentException( 'Workflow spawn steps require a non-empty items key.' );
@@ -550,6 +616,7 @@ class WorkflowBuilder {
 			'result_key'          => $result_key,
 			'payload_key'         => $payload_key,
 			'inherit_state'       => $inherit_state,
+			'group_key'           => '' !== (string) $group_key ? $group_key : null,
 			'workflow_definition' => $workflow_builder->build_runtime_definition(),
 		);
 
@@ -568,6 +635,7 @@ class WorkflowBuilder {
 	 * @param string          $payload_key       Key used when scalar items are wrapped for the child workflow.
 	 * @param bool            $inherit_state     Whether the agent workflow inherits the parent public state.
 	 * @param string|null     $name              Optional step name.
+	 * @param string|null     $group_key         Optional internal group key for later agent-group waits.
 	 * @return self
 	 */
 	public function spawn_agents(
@@ -577,6 +645,7 @@ class WorkflowBuilder {
 		string $payload_key = 'agent_task',
 		bool $inherit_state = true,
 		?string $name = null,
+		?string $group_key = null,
 	): self {
 		return $this->spawn_workflows(
 			$items_key,
@@ -585,6 +654,7 @@ class WorkflowBuilder {
 			$payload_key,
 			$inherit_state,
 			$name ?? 'spawn_agents',
+			$group_key,
 		);
 	}
 
@@ -595,6 +665,7 @@ class WorkflowBuilder {
 	 * @param WaitMode     $mode       Whether all agent workflows or any agent workflow should unblock the step.
 	 * @param string|null  $result_key Optional state key for completed agent workflow state.
 	 * @param string|null  $name       Optional step name.
+	 * @param int|null     $quorum     Required completed workflow count when using WaitMode::Quorum.
 	 * @return self
 	 */
 	public function await_agents(
@@ -602,12 +673,40 @@ class WorkflowBuilder {
 		WaitMode $mode = WaitMode::All,
 		?string $result_key = 'agent_results',
 		?string $name = null,
+		?int $quorum = null,
 	): self {
 		return $this->await_workflows(
 			$workflows,
 			$mode,
 			$result_key,
 			$name ?? 'await_agents',
+			$quorum,
+		);
+	}
+
+	/**
+	 * Wait for a previously spawned agent group.
+	 *
+	 * @param string      $group_key  Internal agent group key created by spawn_agents().
+	 * @param WaitMode    $mode       Whether all agents, any agent, or a quorum should unblock the step.
+	 * @param int|null    $quorum     Required completed workflow count when using WaitMode::Quorum.
+	 * @param string|null $result_key Optional state key for completed agent workflow state.
+	 * @param string|null $name       Optional step name.
+	 * @return self
+	 */
+	public function await_agent_group(
+		string $group_key = 'agents',
+		WaitMode $mode = WaitMode::All,
+		?int $quorum = null,
+		?string $result_key = 'agent_results',
+		?string $name = null,
+	): self {
+		return $this->await_workflow_group(
+			$group_key,
+			$mode,
+			$quorum,
+			$result_key,
+			$name ?? 'await_agent_group',
 		);
 	}
 
@@ -907,18 +1006,21 @@ class WorkflowBuilder {
 					'result_key'      => $step['result_key'],
 					'match_payload'   => $step['match_payload'] ?? array(),
 					'correlation_key' => $step['correlation_key'] ?? null,
+					'human_wait'      => $step['human_wait'] ?? null,
 					'decision_map'    => $step['decision_map'] ?? null,
 					'compensation'    => $step['compensation'] ?? null,
 				);
 			} elseif ( 'workflow_wait' === $step['type'] ) {
 				$result[] = array(
-					'type'            => 'workflow_wait',
-					'name'            => $step['name'],
-					'workflow_ids'    => $step['workflow_ids'] ?? null,
-					'workflow_id_key' => $step['workflow_id_key'] ?? null,
-					'wait_mode'       => $step['wait_mode']->value,
-					'result_key'      => $step['result_key'],
-					'compensation'    => $step['compensation'] ?? null,
+					'type'               => 'workflow_wait',
+					'name'               => $step['name'],
+					'workflow_ids'       => $step['workflow_ids'] ?? null,
+					'workflow_id_key'    => $step['workflow_id_key'] ?? null,
+					'workflow_group_key' => $step['workflow_group_key'] ?? null,
+					'wait_mode'          => $step['wait_mode']->value,
+					'quorum'             => $step['quorum'] ?? null,
+					'result_key'         => $step['result_key'],
+					'compensation'       => $step['compensation'] ?? null,
 				);
 			} elseif ( 'spawn_workflows' === $step['type'] ) {
 				$result[] = array(
@@ -928,6 +1030,7 @@ class WorkflowBuilder {
 					'result_key'          => $step['result_key'],
 					'payload_key'         => $step['payload_key'],
 					'inherit_state'       => (bool) $step['inherit_state'],
+					'group_key'           => $step['group_key'] ?? null,
 					'workflow_definition' => $step['workflow_definition'],
 					'compensation'        => $step['compensation'] ?? null,
 				);

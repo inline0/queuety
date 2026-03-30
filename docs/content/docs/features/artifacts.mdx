@@ -1,0 +1,132 @@
+---
+title: Artifacts
+description: Persist durable workflow outputs outside the main workflow state bag.
+---
+
+# Artifacts
+
+Artifacts let you store durable workflow outputs without inflating the main workflow state payload.
+
+Use them for things like:
+
+- draft documents
+- extracted JSON plans
+- citations or source manifests
+- generated file paths or URLs
+- prompt/response snapshots you want to inspect later
+
+This is especially useful for agent workflows, where the final state should stay small and inspectable even though each run may generate large intermediate outputs.
+
+## Why artifacts instead of workflow state
+
+Workflow state is ideal for the small public data the next step needs immediately.
+
+Artifacts are better when the output is:
+
+- larger than normal state values
+- mostly for later inspection
+- useful across review/export/debug surfaces
+- better modeled as named outputs than as one giant state array
+
+## Store an artifact for the current workflow step
+
+When code is already running inside a workflow step, use `Queuety::put_current_artifact()`:
+
+```php
+use Queuety\Queuety;
+use Queuety\Step;
+
+final class DraftBriefStep implements Step
+{
+    public function handle(array $state): array
+    {
+        $draft = [
+            'title' => 'Pricing brief',
+            'body' => '...',
+        ];
+
+        Queuety::put_current_artifact(
+            'draft',
+            $draft,
+            'json',
+            [ 'source' => 'planner' ],
+        );
+
+        return [ 'draft_ready' => true ];
+    }
+
+    public function config(): array
+    {
+        return [];
+    }
+}
+```
+
+Queuety automatically attaches the current workflow ID and step index.
+
+## Store an artifact from outside the workflow
+
+If you already know the workflow ID, use `Queuety::put_artifact()`:
+
+```php
+Queuety::put_artifact(
+    $workflow_id,
+    'research_brief',
+    "# Research Brief\n\nDone.",
+    'markdown',
+    metadata: [ 'reviewed_by' => 'editor@example.com' ],
+);
+```
+
+## Read artifacts back
+
+```php
+$artifact = Queuety::workflow_artifact( $workflow_id, 'draft' );
+
+$artifacts = Queuety::workflow_artifacts( $workflow_id );
+```
+
+Each artifact includes:
+
+- `key`
+- `kind`
+- `content`
+- `metadata`
+- `step_index`
+- `created_at`
+- `updated_at`
+
+## Workflow status integration
+
+`Queuety::workflow_status()` now includes a small artifact summary:
+
+```php
+$status = Queuety::workflow_status( $workflow_id );
+
+echo $status->artifact_count; // 2
+print_r( $status->artifact_keys ); // ['draft', 'citations']
+```
+
+That keeps artifacts visible without pulling their full content into status output.
+
+## CLI
+
+List artifacts for a workflow:
+
+```bash
+wp queuety workflow artifacts 42
+```
+
+Show one artifact with content:
+
+```bash
+wp queuety workflow artifact 42 draft
+```
+
+See [CLI](/docs/cli) for the full command reference.
+
+## Exports and replay
+
+Artifacts are included in workflow exports and copied into replayed workflows.
+
+That means artifact-backed agent runs stay inspectable even when you move them between environments or recreate a run from its exported execution history.

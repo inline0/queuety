@@ -131,6 +131,13 @@ class Queuety {
 	private static ?WorkflowEventLog $workflow_event_log = null;
 
 	/**
+	 * Workflow artifact storage instance.
+	 *
+	 * @var ArtifactStore|null
+	 */
+	private static ?ArtifactStore $artifact_store = null;
+
+	/**
 	 * Cache backend instance.
 	 *
 	 * @var Cache|null
@@ -173,7 +180,8 @@ class Queuety {
 		self::$queue              = new Queue( $conn, self::$cache );
 		self::$logger             = new Logger( $conn );
 		self::$workflow_event_log = new WorkflowEventLog( $conn );
-		self::$workflow           = new Workflow( $conn, self::$queue, self::$logger, self::$cache, self::$workflow_event_log );
+		self::$artifact_store     = new ArtifactStore( $conn );
+		self::$workflow           = new Workflow( $conn, self::$queue, self::$logger, self::$cache, self::$workflow_event_log, self::$artifact_store );
 		self::$registry           = new HandlerRegistry();
 		self::$rate_limiter       = new RateLimiter( $conn, self::$cache );
 		self::$scheduler          = new Scheduler( $conn, self::$queue );
@@ -499,6 +507,112 @@ class Queuety {
 	}
 
 	/**
+	 * Store one artifact for a workflow.
+	 *
+	 * @param int      $workflow_id  Workflow ID.
+	 * @param string   $artifact_key Artifact key.
+	 * @param mixed    $content      Artifact content.
+	 * @param string   $kind         Artifact kind.
+	 * @param int|null $step_index   Related workflow step index, if any.
+	 * @param array    $metadata     Optional metadata.
+	 * @throws \InvalidArgumentException If the artifact key or workflow ID is invalid.
+	 */
+	public static function put_artifact(
+		int $workflow_id,
+		string $artifact_key,
+		mixed $content,
+		string $kind = 'json',
+		?int $step_index = null,
+		array $metadata = array(),
+	): void {
+		self::ensure_initialized();
+		self::$artifact_store->put( $workflow_id, $artifact_key, $content, $kind, $step_index, $metadata );
+	}
+
+	/**
+	 * Store one artifact for the currently executing workflow step.
+	 *
+	 * @param string $artifact_key Artifact key.
+	 * @param mixed  $content      Artifact content.
+	 * @param string $kind         Artifact kind.
+	 * @param array  $metadata     Optional metadata.
+	 * @throws \RuntimeException If no workflow step is currently executing.
+	 */
+	public static function put_current_artifact(
+		string $artifact_key,
+		mixed $content,
+		string $kind = 'json',
+		array $metadata = array(),
+	): void {
+		$workflow_id = ExecutionContext::workflow_id();
+		if ( null === $workflow_id ) {
+			throw new \RuntimeException( 'No workflow is currently executing.' );
+		}
+
+		self::put_artifact(
+			$workflow_id,
+			$artifact_key,
+			$content,
+			$kind,
+			ExecutionContext::step_index(),
+			$metadata,
+		);
+	}
+
+	/**
+	 * Get one stored artifact for a workflow.
+	 *
+	 * @param int    $workflow_id Workflow ID.
+	 * @param string $artifact_key Artifact key.
+	 * @return array<string,mixed>|null
+	 */
+	public static function workflow_artifact( int $workflow_id, string $artifact_key ): ?array {
+		self::ensure_initialized();
+		return self::$artifact_store->get( $workflow_id, $artifact_key );
+	}
+
+	/**
+	 * List stored artifacts for a workflow.
+	 *
+	 * @param int  $workflow_id     Workflow ID.
+	 * @param bool $include_content Whether to include artifact content.
+	 * @return array<int,array<string,mixed>>
+	 */
+	public static function workflow_artifacts( int $workflow_id, bool $include_content = false ): array {
+		self::ensure_initialized();
+		return self::$artifact_store->list( $workflow_id, $include_content );
+	}
+
+	/**
+	 * Delete one stored artifact for a workflow.
+	 *
+	 * @param int    $workflow_id Workflow ID.
+	 * @param string $artifact_key Artifact key.
+	 */
+	public static function delete_workflow_artifact( int $workflow_id, string $artifact_key ): void {
+		self::ensure_initialized();
+		self::$artifact_store->delete( $workflow_id, $artifact_key );
+	}
+
+	/**
+	 * Get the currently executing workflow ID, if any.
+	 *
+	 * @return int|null
+	 */
+	public static function current_workflow_id(): ?int {
+		return ExecutionContext::workflow_id();
+	}
+
+	/**
+	 * Get the currently executing workflow step index, if any.
+	 *
+	 * @return int|null
+	 */
+	public static function current_step_index(): ?int {
+		return ExecutionContext::step_index();
+	}
+
+	/**
 	 * Cancel a workflow and run any cleanup handlers.
 	 *
 	 * @param int $workflow_id Workflow ID.
@@ -620,6 +734,16 @@ class Queuety {
 	public static function chunk_store(): ChunkStore {
 		self::ensure_initialized();
 		return self::$chunk_store;
+	}
+
+	/**
+	 * Get the workflow artifact store instance.
+	 *
+	 * @return ArtifactStore
+	 */
+	public static function artifacts(): ArtifactStore {
+		self::ensure_initialized();
+		return self::$artifact_store;
 	}
 
 	/**
@@ -933,10 +1057,12 @@ class Queuety {
 		self::$batch_manager      = null;
 		self::$chunk_store        = null;
 		self::$workflow_event_log = null;
+		self::$artifact_store     = null;
 		self::$cache              = null;
 		self::$queue_fake         = null;
 		self::$fake_queue         = null;
 		self::$fake_batch_manager = null;
+		ExecutionContext::clear();
 	}
 
 	/**

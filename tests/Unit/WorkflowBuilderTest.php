@@ -226,6 +226,7 @@ class WorkflowBuilderTest extends TestCase {
 
 		$this->assertSame( 'signal', $steps[0]['type'] );
 		$this->assertSame( 'approval', $steps[0]['signal_name'] );
+		$this->assertSame( 'approval', $steps[0]['human_wait'] );
 		$this->assertSame( 'approval', $steps[0]['result_key'] );
 	}
 
@@ -241,6 +242,7 @@ class WorkflowBuilderTest extends TestCase {
 
 		$this->assertSame( 'signal', $steps[0]['type'] );
 		$this->assertSame( 'any', $steps[0]['wait_mode'] );
+		$this->assertSame( 'decision', $steps[0]['human_wait'] );
 		$this->assertSame(
 			array(
 				'approved' => 'approved',
@@ -263,16 +265,34 @@ class WorkflowBuilderTest extends TestCase {
 
 		$this->assertSame(
 			array(
-				'type'            => 'workflow_wait',
-				'name'            => 'wait_for_dependency',
-				'workflow_ids'    => array( 12, 18 ),
-				'workflow_id_key' => null,
-				'wait_mode'       => 'any',
-				'result_key'      => 'dependency_results',
-				'compensation'    => null,
+				'type'               => 'workflow_wait',
+				'name'               => 'wait_for_dependency',
+				'workflow_ids'       => array( 12, 18 ),
+				'workflow_id_key'    => null,
+				'workflow_group_key' => null,
+				'wait_mode'          => 'any',
+				'quorum'             => null,
+				'result_key'         => 'dependency_results',
+				'compensation'       => null,
 			),
 			$steps[0]
 		);
+	}
+
+	public function test_await_workflows_quorum_builds_serializable_definition(): void {
+		$steps = $this->make_builder( 'deps' )
+			->await_workflows(
+				array( 12, 18, 24 ),
+				WaitMode::Quorum,
+				'dependency_results',
+				'wait_for_quorum',
+				2
+			)
+			->build_steps();
+
+		$this->assertSame( 'workflow_wait', $steps[0]['type'] );
+		$this->assertSame( 'quorum', $steps[0]['wait_mode'] );
+		$this->assertSame( 2, $steps[0]['quorum'] );
 	}
 
 	public function test_await_workflow_accepts_state_key_source(): void {
@@ -282,8 +302,21 @@ class WorkflowBuilderTest extends TestCase {
 
 		$this->assertSame( 'workflow_wait', $steps[0]['type'] );
 		$this->assertSame( 'child_workflow_id', $steps[0]['workflow_id_key'] );
+		$this->assertNull( $steps[0]['workflow_group_key'] );
 		$this->assertNull( $steps[0]['workflow_ids'] );
 		$this->assertSame( 'child_state', $steps[0]['result_key'] );
+	}
+
+	public function test_await_workflow_group_builds_serializable_definition(): void {
+		$steps = $this->make_builder( 'deps' )
+			->await_workflow_group( 'researchers', WaitMode::Quorum, 2, 'research_results' )
+			->build_steps();
+
+		$this->assertSame( 'workflow_wait', $steps[0]['type'] );
+		$this->assertSame( 'researchers', $steps[0]['workflow_group_key'] );
+		$this->assertSame( 'quorum', $steps[0]['wait_mode'] );
+		$this->assertSame( 2, $steps[0]['quorum'] );
+		$this->assertSame( 'research_results', $steps[0]['result_key'] );
 	}
 
 	public function test_spawn_workflows_builds_serializable_definition(): void {
@@ -308,9 +341,25 @@ class WorkflowBuilderTest extends TestCase {
 		$this->assertSame( 'child_workflow_ids', $steps[0]['result_key'] );
 		$this->assertSame( 'topic', $steps[0]['payload_key'] );
 		$this->assertTrue( $steps[0]['inherit_state'] );
+		$this->assertNull( $steps[0]['group_key'] );
 		$this->assertSame( 'agent_task', $steps[0]['workflow_definition']['name'] );
 		$this->assertSame( 'agent-task.v1', $steps[0]['workflow_definition']['definition_version'] );
 		$this->assertSame( 64, strlen( $steps[0]['workflow_definition']['definition_hash'] ) );
+	}
+
+	public function test_spawn_workflows_can_store_group_metadata(): void {
+		$child = $this->make_builder( 'agent_task' )
+			->then( 'ProcessTopicStep' );
+
+		$steps = $this->make_builder( 'planner' )
+			->spawn_workflows(
+				items_key: 'topics',
+				workflow_builder: $child,
+				group_key: 'researchers',
+			)
+			->build_steps();
+
+		$this->assertSame( 'researchers', $steps[0]['group_key'] );
 	}
 
 	public function test_spawn_agents_alias_uses_agent_defaults(): void {
@@ -329,6 +378,23 @@ class WorkflowBuilderTest extends TestCase {
 
 		$this->assertSame( 'workflow_wait', $steps[1]['type'] );
 		$this->assertSame( 'agent_workflow_ids', $steps[1]['workflow_id_key'] );
+		$this->assertNull( $steps[1]['workflow_group_key'] );
 		$this->assertSame( 'agent_results', $steps[1]['result_key'] );
+	}
+
+	public function test_await_agent_group_alias_uses_group_wait_defaults(): void {
+		$child = $this->make_builder( 'agent_task' )
+			->then( 'ProcessTopicStep' );
+
+		$steps = $this->make_builder( 'planner' )
+			->spawn_agents( 'tasks', $child, group_key: 'researchers' )
+			->await_agent_group( 'researchers', WaitMode::Quorum, 2 )
+			->build_steps();
+
+		$this->assertSame( 'researchers', $steps[0]['group_key'] );
+		$this->assertSame( 'workflow_wait', $steps[1]['type'] );
+		$this->assertSame( 'researchers', $steps[1]['workflow_group_key'] );
+		$this->assertSame( 'quorum', $steps[1]['wait_mode'] );
+		$this->assertSame( 2, $steps[1]['quorum'] );
 	}
 }

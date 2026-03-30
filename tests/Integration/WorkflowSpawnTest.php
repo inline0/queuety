@@ -189,4 +189,55 @@ class WorkflowSpawnTest extends IntegrationTestCase {
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
 		$this->assertCount( 2, $status->state['agent_results'] );
 	}
+
+	public function test_spawned_workflow_groups_can_be_waited_with_quorum(): void {
+		$child = ( new WorkflowBuilder( 'agent_task', $this->conn, $this->queue, $this->logger ) )
+			->then( AccumulatingStep::class );
+
+		$parent_id = ( new WorkflowBuilder( 'planner_group_wait', $this->conn, $this->queue, $this->logger ) )
+			->with_priority( Priority::Urgent )
+			->spawn_workflows( 'tasks', $child, 'child_workflow_ids', 'topic', true, 'spawn_agents', 'researchers' )
+			->await_workflow_group( 'researchers', WaitMode::Quorum, 2, 'selected_results' )
+			->then( AccumulatingStep::class )
+			->dispatch(
+				array(
+					'campaign' => 'launch',
+					'tasks'    => array(
+						array( 'topic' => 'pricing' ),
+						array( 'topic' => 'reviews' ),
+						array( 'topic' => 'faq' ),
+					),
+				)
+			);
+
+		$this->process_one();
+
+		$status = $this->workflow_mgr->status( $parent_id );
+		$this->assertSame( WorkflowStatus::Running, $status->status );
+		$this->assertSame( 1, $status->current_step );
+
+		$this->process_one();
+
+		$status = $this->workflow_mgr->status( $parent_id );
+		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
+		$this->assertSame( 'quorum', $status->wait_mode );
+		$this->assertSame( 'researchers', $status->wait_details['group_key'] );
+		$this->assertSame( 2, $status->wait_details['quorum'] );
+
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $parent_id );
+		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
+		$this->assertCount( 1, $status->wait_details['matched'] );
+
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $parent_id );
+		$this->assertSame( WorkflowStatus::Running, $status->status );
+		$this->assertCount( 2, $status->state['selected_results'] );
+
+		$this->process_one();
+
+		$status = $this->workflow_mgr->status( $parent_id );
+		$this->assertSame( WorkflowStatus::Completed, $status->status );
+		$this->assertSame( 1, $status->state['counter'] );
+	}
 }

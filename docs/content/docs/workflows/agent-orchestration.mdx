@@ -12,7 +12,7 @@ You do not need a runtime-editable DAG engine for most agent flows. In practice,
 - `fan_out()` when one workflow should expand work inside the same run
 - `spawn_agents()` and `await_agents()` when the planner should hand work off to independent top-level agent workflows
 - `await_decision()` and `await_input()` when a human needs to approve or steer the run
-- `await_workflow()` and `await_workflows()` when one top-level workflow should wait for another
+- `await_workflow()`, `await_workflows()`, and `await_agent_group()` when one top-level workflow should wait for another or for a spawned batch quorum
 
 ## A useful mental model
 
@@ -20,7 +20,7 @@ Think about agent orchestration in layers:
 
 1. a planner decides what work exists
 2. Queuety turns that work into durable jobs or workflows
-3. specialists produce results or artifacts
+3. specialists produce results and store durable artifacts
 4. a supervisor joins those results and decides what happens next
 5. a human can approve, reject, or edit the run before it continues
 
@@ -43,8 +43,8 @@ Queuety::workflow( 'brief_research' )
     ->idempotency_key( 'brief:42:research' )
     ->max_transitions( 20 )
     ->then( PlanResearchTasksStep::class )
-    ->spawn_agents( 'agent_tasks', $agent_run )
-    ->await_agents( mode: WaitMode::All, result_key: 'agent_results' )
+    ->spawn_agents( 'agent_tasks', $agent_run, group_key: 'researchers' )
+    ->await_agent_group( 'researchers', WaitMode::Quorum, 2, 'agent_results' )
     ->then( SynthesizeBriefStep::class )
     ->dispatch( [ 'brief_id' => 42 ] );
 ```
@@ -54,7 +54,7 @@ In that pattern:
 1. `PlanResearchTasksStep` writes an array to `$state['agent_tasks']`
 2. `spawn_agents()` dispatches one durable workflow per task
 3. Queuety stores those workflow IDs in `$state['agent_workflow_ids']`
-4. `await_agents()` parks the parent until the chosen join condition is satisfied
+4. `await_agent_group()` parks the parent until the chosen join condition is satisfied
 5. `SynthesizeBriefStep` receives the completed child states under `$state['agent_results']`
 
 This is the cleanest starting point for planner/executor systems because each agent run is inspectable and retryable on its own.
@@ -181,7 +181,7 @@ A good convention is:
 - `agent_workflow_ids` for the spawned top-level agent runs
 - `agent_results` for joined child workflow state
 - `review` or `decision` for approve/reject payloads
-- `artifacts` for generated URLs, document IDs, or other durable outputs
+- the artifact store for generated drafts, citations, or other durable outputs you do not want to inflate the main workflow state with
 
 The names are not required, but keeping them stable makes status inspection and event-log timelines much easier to read.
 
@@ -213,5 +213,6 @@ For most agent systems, start with those guardrails before you start tuning work
 - [Dynamic Fan-Out](/docs/workflows/fan-out)
 - [Async Handoffs](/docs/workflows/async-handoffs)
 - [Workflow Dependencies](/docs/workflows/dependencies)
+- [Artifacts](/docs/features/artifacts)
 - [Workflow Signals](/docs/workflows/signals)
 - [Workflow Guardrails](/docs/workflows/guardrails)

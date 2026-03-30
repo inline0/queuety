@@ -16,7 +16,7 @@ This is useful for agent-style orchestration:
 - a planner workflow discovers tasks at runtime
 - each task becomes its own durable workflow
 - the parent stores those workflow IDs in state
-- the parent can later wait for `all`, `any`, or a selected subset via `await_workflows()`
+- the parent can later wait for `all`, `any`, `quorum`, or a named spawned group
 
 ## The `->spawn_workflows()` method
 
@@ -34,8 +34,9 @@ Queuety::workflow( 'brief_research' )
         items_key: 'topics',
         workflow_builder: $agent_task,
         result_key: 'child_workflow_ids',
+        group_key: 'researchers',
     )
-    ->await_workflows( 'child_workflow_ids', WaitMode::All, 'child_results' )
+    ->await_workflow_group( 'researchers', WaitMode::All, result_key: 'child_results' )
     ->then( SynthesizeBriefStep::class )
     ->dispatch( [ 'brief_id' => 42 ] );
 ```
@@ -45,7 +46,7 @@ In that example:
 1. `PlanTopicsStep` writes an array of topic payloads to `$state['topics']`
 2. `spawn_workflows()` dispatches one `agent_task` workflow per topic
 3. the spawned workflow IDs are written to `$state['child_workflow_ids']`
-4. `await_workflows()` pauses until those workflows complete
+4. `await_workflow_group()` pauses until that spawned group satisfies the chosen join condition
 5. `SynthesizeBriefStep` receives the completed child states under `$state['child_results']`
 
 ## Child payloads
@@ -126,6 +127,8 @@ This gives you planner/executor orchestration without needing a full runtime-edi
 - `result_key` defaults to `agent_results`
 - `name` defaults to `await_agents`
 
+`await_agent_group()` is an alias for `await_workflow_group()` with defaults tuned for agent batches.
+
 ```php
 use Queuety\Enums\WaitMode;
 
@@ -135,8 +138,8 @@ $agent_run = Queuety::workflow( 'agent_run' )
 
 Queuety::workflow( 'brief_research' )
     ->then( PlanTopicsStep::class )
-    ->spawn_agents( 'agent_tasks', $agent_run )
-    ->await_agents( mode: WaitMode::All )
+    ->spawn_agents( 'agent_tasks', $agent_run, group_key: 'researchers' )
+    ->await_agent_group( 'researchers', WaitMode::Quorum, 2 )
     ->then( SynthesizeBriefStep::class )
     ->dispatch( [ 'brief_id' => 42 ] );
 ```

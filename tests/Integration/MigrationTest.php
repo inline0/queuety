@@ -34,6 +34,7 @@ class MigrationTest extends IntegrationTestCase {
 			'queuety_workflow_events',
 			'queuety_workflow_dependencies',
 			'queuety_workflow_dispatch_keys',
+			'queuety_artifacts',
 		);
 
 		foreach ( $tables as $table ) {
@@ -229,6 +230,26 @@ class MigrationTest extends IntegrationTestCase {
 		);
 	}
 
+	public function test_migrate_0160_on_fresh_install(): void {
+		Schema::migrate_0160( $this->conn );
+
+		$artifacts_table = $this->conn->table( 'queuety_artifacts' );
+		$this->assertTrue( Schema::table_exists( $this->conn, $artifacts_table ) );
+	}
+
+	public function test_migrate_0160_is_idempotent(): void {
+		Schema::migrate_0160( $this->conn );
+		Schema::migrate_0160( $this->conn );
+
+		$this->assertTrue(
+			Schema::index_exists(
+				$this->conn,
+				$this->conn->table( 'queuety_artifacts' ),
+				'idx_workflow_key'
+			)
+		);
+	}
+
 	private function workflow_events_enum_contains( string $value ): bool {
 		$table = $this->conn->table( 'queuety_workflow_events' );
 		$stmt  = $this->conn->pdo()->prepare(
@@ -263,6 +284,7 @@ class MigrationTest extends IntegrationTestCase {
 			'queuety_workflow_events',
 			'queuety_workflow_dependencies',
 			'queuety_workflow_dispatch_keys',
+			'queuety_artifacts',
 		);
 
 		foreach ( $tables as $table ) {

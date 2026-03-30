@@ -249,7 +249,7 @@ wp queuety workflow status <id>
 |---|---|
 | `<id>` | Workflow ID (required) |
 
-`status` prints the current step, optional step name, version/hash metadata, wait mode, and a `WaitInfo` JSON blob when the workflow is currently blocked on signals or dependencies.
+`status` prints the current step, optional step name, version/hash metadata, wait mode, artifact summary, and a `WaitInfo` JSON blob when the workflow is currently blocked on signals or dependencies.
 
 ### `wp queuety workflow list`
 
@@ -319,6 +319,33 @@ wp queuety workflow input <id> [--data=<json>] [--signal=<name>]
 | `<id>` | Workflow ID (required) |
 | `--data=<json>` | Optional JSON object payload |
 | `--signal=<name>` | Override the input signal name (default: `input`) |
+
+### `wp queuety workflow artifacts`
+
+List stored artifacts for a workflow.
+
+```bash
+wp queuety workflow artifacts <id> [--format=<format>] [--with-content]
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID (required) |
+| `--format=<format>` | Output format: `table` (default) or `json` |
+| `--with-content` | Include artifact content in the output |
+
+### `wp queuety workflow artifact`
+
+Show one stored artifact for a workflow.
+
+```bash
+wp queuety workflow artifact <id> <key>
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID (required) |
+| `<key>` | Artifact key (required) |
 
 ### `wp queuety workflow pause`
 

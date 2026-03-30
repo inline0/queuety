@@ -336,6 +336,7 @@ class Worker {
 		}
 
 		Heartbeat::init( $job->id, $this->conn );
+		ExecutionContext::enter( $job->id, $job->workflow_id, $job->step_index );
 
 		try {
 			if ( $job->is_workflow_step() && '__queuety_sub_workflow' === $job->handler ) {
@@ -765,6 +766,7 @@ class Worker {
 				);
 			}
 		} finally {
+			ExecutionContext::clear();
 			Heartbeat::clear();
 
 			if ( $pcntl_available ) {

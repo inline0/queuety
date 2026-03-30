@@ -15,7 +15,7 @@ class Schema {
 	/**
 	 * Current schema version for plugin-managed upgrades.
 	 */
-	public const CURRENT_VERSION = '0.15.0';
+	public const CURRENT_VERSION = '0.16.0';
 
 	/**
 	 * Create all Queuety tables.
@@ -37,6 +37,7 @@ class Schema {
 		$batches         = $conn->table( Config::table_batches() );
 		$chunks          = $conn->table( Config::table_chunks() );
 		$workflow_events = $conn->table( Config::table_workflow_events() );
+		$artifacts       = $conn->table( Config::table_artifacts() );
 
 		$pdo->exec(
 			"CREATE TABLE IF NOT EXISTS {$jobs} (
@@ -242,6 +243,23 @@ class Schema {
 				INDEX idx_created (created_at)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$artifacts} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				workflow_id BIGINT UNSIGNED NOT NULL,
+				artifact_key VARCHAR(191) NOT NULL,
+				kind VARCHAR(32) NOT NULL DEFAULT 'json',
+				content LONGTEXT NOT NULL,
+				metadata JSON DEFAULT NULL,
+				step_index TINYINT UNSIGNED DEFAULT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+				UNIQUE INDEX idx_workflow_key (workflow_id, artifact_key),
+				INDEX idx_workflow_step (workflow_id, step_index),
+				INDEX idx_workflow_kind (workflow_id, kind)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
 	}
 
 	/**
@@ -303,6 +321,11 @@ class Schema {
 
 		if ( version_compare( $version, '0.15.0', '<' ) ) {
 			self::migrate_0150( $conn );
+			$version = '0.15.0';
+		}
+
+		if ( version_compare( $version, '0.16.0', '<' ) ) {
+			self::migrate_0160( $conn );
 		}
 
 		return self::CURRENT_VERSION;
@@ -328,6 +351,11 @@ class Schema {
 		$batches         = $conn->table( Config::table_batches() );
 		$chunks          = $conn->table( Config::table_chunks() );
 		$workflow_events = $conn->table( Config::table_workflow_events() );
+		$artifacts       = $conn->table( Config::table_artifacts() );
+
+		if ( self::table_exists( $conn, $artifacts ) ) {
+			return '0.16.0';
+		}
 
 		if (
 			self::table_exists( $conn, $workflow_keys )
@@ -401,7 +429,9 @@ class Schema {
 		$batches         = $conn->table( Config::table_batches() );
 		$chunks          = $conn->table( Config::table_chunks() );
 		$workflow_events = $conn->table( Config::table_workflow_events() );
+		$artifacts       = $conn->table( Config::table_artifacts() );
 
+		$pdo->exec( "DROP TABLE IF EXISTS {$artifacts}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$workflow_events}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$chunks}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$batches}" );
@@ -671,6 +701,35 @@ class Schema {
 			"ALTER TABLE {$workflow_events} MODIFY COLUMN event
 			ENUM('step_started', 'step_completed', 'step_failed', 'state_snapshot', 'workflow_rewound', 'workflow_forked', 'workflow_deadline_exceeded', 'workflow_waiting', 'workflow_resumed', 'workflow_replayed')
 			NOT NULL"
+		);
+	}
+
+	/**
+	 * Migrate from v0.15.x to v0.16.0.
+	 *
+	 * Adds durable workflow artifacts for persisted agent outputs and review data.
+	 *
+	 * @param Connection $conn Database connection.
+	 */
+	public static function migrate_0160( Connection $conn ): void {
+		$pdo       = $conn->pdo();
+		$artifacts = $conn->table( Config::table_artifacts() );
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$artifacts} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				workflow_id BIGINT UNSIGNED NOT NULL,
+				artifact_key VARCHAR(191) NOT NULL,
+				kind VARCHAR(32) NOT NULL DEFAULT 'json',
+				content LONGTEXT NOT NULL,
+				metadata JSON DEFAULT NULL,
+				step_index TINYINT UNSIGNED DEFAULT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+				UNIQUE INDEX idx_workflow_key (workflow_id, artifact_key),
+				INDEX idx_workflow_step (workflow_id, step_index),
+				INDEX idx_workflow_kind (workflow_id, kind)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 	}
 

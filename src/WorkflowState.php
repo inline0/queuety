@@ -34,6 +34,8 @@ readonly class WorkflowState {
 	 * @param string|null    $current_step_name  Current step name, if available.
 	 * @param string|null    $wait_mode          Wait mode currently blocking the workflow, if any.
 	 * @param array|null     $wait_details       Additional wait details for inspection, if any.
+	 * @param int|null       $artifact_count     Number of stored artifacts, if available.
+	 * @param array|null     $artifact_keys      Stored artifact keys, if available.
 	 */
 	public function __construct(
 		public int $workflow_id,
@@ -53,5 +55,7 @@ readonly class WorkflowState {
 		public ?string $current_step_name = null,
 		public ?string $wait_mode = null,
 		public ?array $wait_details = null,
+		public ?int $artifact_count = null,
+		public ?array $artifact_keys = null,
 	) {}
 }

@@ -234,8 +234,9 @@ wp queuety work
 - **Durable timers** -- `sleep()` steps that survive process restarts and resume at the right time
 - **Signals and human gates** -- `wait_for_signal()`, `wait_for_signals()`, `await_approval()`, and `await_input()` pause workflows until external input arrives
 - **Workflow dependencies** -- `await_workflow()` and `await_workflows()` coordinate top-level workflows without forcing them into one workflow definition
-- **Async workflow handoffs** -- `spawn_workflows()` turns runtime-discovered items into independent top-level workflows that can be awaited later
+- **Async workflow handoffs** -- `spawn_workflows()` turns runtime-discovered items into independent top-level workflows that can be awaited later, including named spawned groups
 - **Dynamic fan-out** -- `fan_out()` expands runtime-discovered work with `All`, `FirstSuccess`, and `Quorum` join modes
+- **Durable artifacts** -- store named workflow outputs outside the main state bag and inspect them later through status, CLI, export, and replay
 - **Workflow guardrails** -- `version()`, a deterministic definition hash, `idempotency_key()`, `max_transitions()`, `max_fan_out_items()`, and `max_state_bytes()` make long-running agent workflows easier to inspect and safer to operate
 - **Step compensation** -- `compensate_with()` and `compensate_on_failure()` provide saga-style rollback hooks for completed steps
 - **Streaming steps** -- `StreamingStep` interface with `ChunkStore` for persisting streamed data chunk by chunk

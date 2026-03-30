@@ -88,6 +88,14 @@ class WorkflowCommand extends \WP_CLI_Command {
 			\WP_CLI::log( 'Budget:   ' . json_encode( $state->budget, JSON_UNESCAPED_SLASHES ) );
 		}
 
+		if ( null !== $state->artifact_count ) {
+			\WP_CLI::log( "Artifacts: {$state->artifact_count}" );
+		}
+
+		if ( ! empty( $state->artifact_keys ) ) {
+			\WP_CLI::log( 'ArtifactKeys: ' . implode( ', ', $state->artifact_keys ) );
+		}
+
 		if ( ! empty( $state->state ) ) {
 			\WP_CLI::log( 'State:' );
 			\WP_CLI::log( json_encode( $state->state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
@@ -181,6 +189,77 @@ class WorkflowCommand extends \WP_CLI_Command {
 
 		Queuety::submit_workflow_input( (int) $args[0], $data, (string) $signal );
 		\WP_CLI::success( "Input sent to workflow #{$args[0]}." );
+	}
+
+	/**
+	 * List stored artifacts for a workflow.
+	 *
+	 * <id>
+	 * : Workflow ID.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [--format=<format>]
+	 * : Output format. Default: 'table'.
+	 *
+	 * [--with-content]
+	 * : Include artifact content in the output.
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function artifacts( $args, $assoc_args ) {
+		$workflow_id      = (int) $args[0];
+		$format           = $assoc_args['format'] ?? 'table';
+		$include_content  = isset( $assoc_args['with-content'] );
+		$artifacts        = Queuety::workflow_artifacts( $workflow_id, $include_content );
+
+		if ( 'json' === $format ) {
+			\WP_CLI::log( json_encode( $artifacts, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
+			return;
+		}
+
+		$items = array_map(
+			static fn( array $artifact ): array => array(
+				'Key'       => $artifact['key'],
+				'Kind'      => $artifact['kind'],
+				'Step'      => $artifact['step_index'] ?? '-',
+				'UpdatedAt' => $artifact['updated_at'],
+				'Content'   => $include_content ? json_encode( $artifact['content'], JSON_UNESCAPED_SLASHES ) : '-',
+			),
+			$artifacts
+		);
+
+		\WP_CLI\Utils\format_items(
+			$format,
+			$items,
+			$include_content
+				? array( 'Key', 'Kind', 'Step', 'UpdatedAt', 'Content' )
+				: array( 'Key', 'Kind', 'Step', 'UpdatedAt' )
+		);
+	}
+
+	/**
+	 * Show one stored artifact for a workflow.
+	 *
+	 * <id>
+	 * : Workflow ID.
+	 *
+	 * <key>
+	 * : Artifact key.
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Associative arguments.
+	 */
+	public function artifact( $args, $assoc_args ) {
+		$artifact = Queuety::workflow_artifact( (int) $args[0], (string) $args[1] );
+
+		if ( null === $artifact ) {
+			\WP_CLI::error( "Artifact '{$args[1]}' not found for workflow #{$args[0]}." );
+			return;
+		}
+
+		\WP_CLI::log( json_encode( $artifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
 	}
 
 	/**

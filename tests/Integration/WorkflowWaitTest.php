@@ -133,6 +133,49 @@ class WorkflowWaitTest extends IntegrationTestCase {
 		);
 	}
 
+	public function test_await_workflows_quorum_resumes_after_required_dependencies_complete(): void {
+		$dependency_a = Queuety::workflow( 'dependency_a' )
+			->then( AccumulatingStep::class )
+			->dispatch();
+		$dependency_b = Queuety::workflow( 'dependency_b' )
+			->then( AccumulatingStep::class )
+			->dispatch();
+		$dependency_c = Queuety::workflow( 'dependency_c' )
+			->then( DataFetchStep::class )
+			->then( AccumulatingStep::class )
+			->dispatch( array( 'user_id' => 17 ) );
+
+		$parent_id = Queuety::workflow( 'parent_quorum' )
+			->with_priority( Priority::Urgent )
+			->await_workflows(
+				array( $dependency_a, $dependency_b, $dependency_c ),
+				WaitMode::Quorum,
+				'dependency_results',
+				'await_quorum',
+				2
+			)
+			->then( AccumulatingStep::class )
+			->dispatch();
+
+		$this->process_one();
+
+		$status = $this->workflow_mgr->status( $parent_id );
+		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
+		$this->assertSame( 'quorum', $status->wait_mode );
+		$this->assertSame( 2, $status->wait_details['quorum'] );
+
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $parent_id );
+		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
+		$this->assertCount( 1, $status->wait_details['matched'] );
+
+		$this->process_one();
+		$status = $this->workflow_mgr->status( $parent_id );
+		$this->assertSame( WorkflowStatus::Running, $status->status );
+		$this->assertSame( 1, $status->current_step );
+		$this->assertCount( 2, $status->state['dependency_results'] );
+	}
+
 	public function test_await_workflow_resolves_dependency_id_from_state(): void {
 		$dependency_id = Queuety::workflow( 'state_key_dependency' )
 			->then( AccumulatingStep::class )
