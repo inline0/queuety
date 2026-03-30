@@ -150,8 +150,11 @@ Queuety::workflow( 'brief_review_loop' )
     ->max_transitions( 10 )
     ->then( DraftBriefStep::class, 'draft' )
     ->await_decision( result_key: 'review' )
-    ->then( NormalizeReviewOutcomeStep::class )
-    ->repeat_until( 'draft', 'review_approved', true )
+    ->repeat_until(
+        target_step: 'draft',
+        condition_class: ReviewApprovedCondition::class,
+        max_iterations: 5,
+    )
     ->then( PublishBriefStep::class )
     ->dispatch( [ 'brief_id' => 42 ] );
 ```

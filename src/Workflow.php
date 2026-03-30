@@ -10,6 +10,7 @@ namespace Queuety;
 use Queuety\Contracts\Compensation;
 use Queuety\Contracts\Cache;
 use Queuety\Contracts\JoinReducer;
+use Queuety\Contracts\LoopCondition;
 use Queuety\Enums\JobStatus;
 use Queuety\Enums\JoinMode;
 use Queuety\Enums\LogEvent;
@@ -641,6 +642,48 @@ class Workflow {
 	}
 
 	/**
+	 * Resolve the persisted iteration count for a loop step.
+	 *
+	 * @param array $state      Workflow state.
+	 * @param int   $step_index Step index.
+	 * @return int
+	 */
+	private function loop_iteration_count( array $state, int $step_index ): int {
+		$loop_steps = $state['_loop_steps'] ?? array();
+		if ( ! is_array( $loop_steps ) ) {
+			return 0;
+		}
+
+		$entry = $loop_steps[ (string) $step_index ] ?? $loop_steps[ $step_index ] ?? null;
+		if ( ! is_array( $entry ) ) {
+			return 0;
+		}
+
+		return max( 0, (int) ( $entry['iterations'] ?? 0 ) );
+	}
+
+	/**
+	 * Build updated internal loop runtime state for a step.
+	 *
+	 * @param array $state       Workflow state.
+	 * @param int   $step_index  Step index.
+	 * @param int   $iterations  Persisted iteration count.
+	 * @return array
+	 */
+	private function loop_steps_state( array $state, int $step_index, int $iterations ): array {
+		$loop_steps = $state['_loop_steps'] ?? array();
+		if ( ! is_array( $loop_steps ) ) {
+			$loop_steps = array();
+		}
+
+		$loop_steps[ (string) $step_index ] = array(
+			'iterations' => max( 0, $iterations ),
+		);
+
+		return $loop_steps;
+	}
+
+	/**
 	 * Decide whether a loop step should jump back to its target.
 	 *
 	 * @param array $step_def Step definition.
@@ -649,11 +692,30 @@ class Workflow {
 	 * @throws \JsonException|\RuntimeException If the comparable values cannot be encoded or the loop mode is invalid.
 	 */
 	private function loop_should_continue( array $step_def, array $state ): bool {
-		$mode     = (string) ( $step_def['loop_mode'] ?? 'while' );
-		$state_key = trim( (string) ( $step_def['state_key'] ?? '' ) );
-		$expected = $step_def['expected'] ?? true;
-		$actual   = $state[ $state_key ] ?? null;
-		$matches  = $this->values_equal( $actual, $expected );
+		$mode            = (string) ( $step_def['loop_mode'] ?? 'while' );
+		$condition_class = trim( (string) ( $step_def['condition_class'] ?? '' ) );
+
+		if ( '' !== $condition_class ) {
+			if ( ! class_exists( $condition_class ) ) {
+				throw new \RuntimeException( "Loop condition class '{$condition_class}' not found." );
+			}
+
+			$condition = new $condition_class();
+			if ( ! $condition instanceof LoopCondition ) {
+				throw new \RuntimeException( "Loop condition '{$condition_class}' must implement Queuety\\Contracts\\LoopCondition." );
+			}
+
+			$matches = $condition->matches( $this->public_state( $state ) );
+		} else {
+			$state_key = trim( (string) ( $step_def['state_key'] ?? '' ) );
+			if ( '' === $state_key ) {
+				throw new \RuntimeException( 'Loop step is missing both a state key and a condition class.' );
+			}
+
+			$expected = $step_def['expected'] ?? true;
+			$actual   = $state[ $state_key ] ?? null;
+			$matches  = $this->values_equal( $actual, $expected );
+		}
 
 		return match ( $mode ) {
 			'while' => $matches,
@@ -1363,6 +1425,11 @@ class Workflow {
 		foreach ( $step_output as $key => $value ) {
 			if ( '_workflow_groups' === $key && is_array( $value ) ) {
 				$state['_workflow_groups'] = $value;
+				continue;
+			}
+
+			if ( '_loop_steps' === $key && is_array( $value ) ) {
+				$state['_loop_steps'] = $value;
 				continue;
 			}
 
@@ -2543,6 +2610,7 @@ class Workflow {
 	 * @param int   $step_index     Step index.
 	 * @param array $workflow_state Current workflow state.
 	 * @return array
+	 * @throws WorkflowConstraintViolationException If the loop exceeds its configured max_iterations.
 	 * @throws \RuntimeException If the loop definition is invalid.
 	 */
 	public function handle_loop_step( int $workflow_id, array $step_def, int $step_index, array $workflow_state ): array {
@@ -2558,14 +2626,41 @@ class Workflow {
 		}
 
 		if ( '' === $state_key ) {
-			throw new \RuntimeException( "Workflow {$workflow_id}: loop step {$step_index} is missing a state key." );
+			$condition_class = trim( (string) ( $step_def['condition_class'] ?? '' ) );
+			if ( '' === $condition_class ) {
+				throw new \RuntimeException( "Workflow {$workflow_id}: loop step {$step_index} is missing a state key." );
+			}
 		}
 
-		if ( ! $this->loop_should_continue( $step_def, $workflow_state ) ) {
-			return array();
+		$should_continue = $this->loop_should_continue( $step_def, $workflow_state );
+		if ( ! $should_continue ) {
+			return array(
+				'_loop_steps' => $this->loop_steps_state(
+					$workflow_state,
+					$step_index,
+					$this->loop_iteration_count( $workflow_state, $step_index )
+				),
+			);
 		}
 
-		return array( '_goto' => $target_step );
+		$next_iterations = $this->loop_iteration_count( $workflow_state, $step_index ) + 1;
+		$max_iterations  = $step_def['max_iterations'] ?? null;
+
+		if ( null !== $max_iterations && $next_iterations > (int) $max_iterations ) {
+			throw new WorkflowConstraintViolationException(
+				sprintf(
+					"Workflow %d: loop step '%s' exceeded max_iterations of %d.",
+					$workflow_id,
+					$step_def['name'] ?? (string) $step_index,
+					(int) $max_iterations
+				)
+			);
+		}
+
+		return array(
+			'_goto'       => $target_step,
+			'_loop_steps' => $this->loop_steps_state( $workflow_state, $step_index, $next_iterations ),
+		);
 	}
 
 	/**

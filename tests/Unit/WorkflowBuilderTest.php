@@ -165,6 +165,8 @@ class WorkflowBuilderTest extends TestCase {
 				'target_step'  => 'draft',
 				'state_key'    => 'approved',
 				'expected'     => true,
+				'condition_class' => null,
+				'max_iterations'  => null,
 				'compensation' => 'UndoLoopControl',
 			),
 			$steps[1]
@@ -182,6 +184,27 @@ class WorkflowBuilderTest extends TestCase {
 		$this->assertSame( '0', $steps[1]['target_step'] );
 		$this->assertSame( 'poll_again', $steps[1]['state_key'] );
 		$this->assertTrue( $steps[1]['expected'] );
+		$this->assertNull( $steps[1]['condition_class'] );
+		$this->assertNull( $steps[1]['max_iterations'] );
+	}
+
+	public function test_repeat_until_accepts_condition_class_and_max_iterations(): void {
+		$steps = $this->make_builder( 'loop' )
+			->then( 'FetchDraftStep', 'draft' )
+			->repeat_until(
+				target_step: 'draft',
+				condition_class: 'ReviewApprovedCondition',
+				name: 'await_review',
+				max_iterations: 5,
+			)
+			->build_steps();
+
+		$this->assertSame( 'loop', $steps[1]['type'] );
+		$this->assertSame( 'until', $steps[1]['loop_mode'] );
+		$this->assertSame( 'draft', $steps[1]['target_step'] );
+		$this->assertNull( $steps[1]['state_key'] );
+		$this->assertSame( 'ReviewApprovedCondition', $steps[1]['condition_class'] );
+		$this->assertSame( 5, $steps[1]['max_iterations'] );
 	}
 
 	public function test_repeat_until_requires_prior_named_step(): void {
@@ -191,6 +214,36 @@ class WorkflowBuilderTest extends TestCase {
 		$this->expectExceptionMessage( "Loop target 'draft' must reference an earlier named step." );
 
 		$builder->repeat_until( 'draft', 'approved' );
+	}
+
+	public function test_repeat_until_requires_state_key_or_condition_class(): void {
+		$builder = $this->make_builder( 'loop' )
+			->then( 'FetchDraftStep', 'draft' );
+
+		$this->expectException( \RuntimeException::class );
+		$this->expectExceptionMessage( 'Loop steps require either a state key or a condition class.' );
+
+		$builder->repeat_until( 'draft', null );
+	}
+
+	public function test_repeat_until_disallows_mixing_state_key_and_condition_class(): void {
+		$builder = $this->make_builder( 'loop' )
+			->then( 'FetchDraftStep', 'draft' );
+
+		$this->expectException( \RuntimeException::class );
+		$this->expectExceptionMessage( 'Loop steps cannot define both a state key and a condition class.' );
+
+		$builder->repeat_until( 'draft', 'approved', true, null, 'ReviewApprovedCondition' );
+	}
+
+	public function test_repeat_until_requires_positive_max_iterations(): void {
+		$builder = $this->make_builder( 'loop' )
+			->then( 'FetchDraftStep', 'draft' );
+
+		$this->expectException( \RuntimeException::class );
+		$this->expectExceptionMessage( 'Loop steps require max_iterations to be at least 1.' );
+
+		$builder->repeat_until( 'draft', 'approved', true, null, null, 0 );
 	}
 
 	public function test_special_steps_preserve_compensation_in_build_steps(): void {

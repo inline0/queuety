@@ -236,20 +236,27 @@ class WorkflowBuilder {
 	 *
 	 * The loop target must reference a step that already exists in the workflow definition.
 	 *
-	 * @param string      $target_step Step name to jump back to when the loop should continue.
-	 * @param string      $state_key   Public state key to inspect.
-	 * @param mixed       $expected    Value that keeps the loop running.
-	 * @param string|null $name        Optional step name.
+	 * Provide either a public state key plus expected value, or a LoopCondition
+	 * class name via $condition_class for richer matching.
+	 *
+	 * @param string      $target_step     Step name to jump back to when the loop should continue.
+	 * @param string|null $state_key       Public state key to inspect.
+	 * @param mixed       $expected        Value that keeps the loop running.
+	 * @param string|null $name            Optional step name.
+	 * @param string|null $condition_class Optional LoopCondition class name.
+	 * @param int|null    $max_iterations  Optional hard cap on how many times this loop may jump back.
 	 * @return self
-	 * @throws \RuntimeException If the target step or state key is empty, or if the target does not exist yet.
+	 * @throws \RuntimeException If the target step or loop condition is invalid.
 	 */
 	public function repeat_while(
 		string $target_step,
-		string $state_key,
+		?string $state_key = null,
 		mixed $expected = true,
 		?string $name = null,
+		?string $condition_class = null,
+		?int $max_iterations = null,
 	): self {
-		return $this->add_loop_step( 'while', $target_step, $state_key, $expected, $name );
+		return $this->add_loop_step( 'while', $target_step, $state_key, $expected, $name, $condition_class, $max_iterations );
 	}
 
 	/**
@@ -257,49 +264,77 @@ class WorkflowBuilder {
 	 *
 	 * The loop target must reference a step that already exists in the workflow definition.
 	 *
-	 * @param string      $target_step Step name to jump back to when the loop should continue.
-	 * @param string      $state_key   Public state key to inspect.
-	 * @param mixed       $expected    Value that stops the loop once matched.
-	 * @param string|null $name        Optional step name.
+	 * Provide either a public state key plus expected value, or a LoopCondition
+	 * class name via $condition_class for richer matching.
+	 *
+	 * @param string      $target_step     Step name to jump back to when the loop should continue.
+	 * @param string|null $state_key       Public state key to inspect.
+	 * @param mixed       $expected        Value that stops the loop once matched.
+	 * @param string|null $name            Optional step name.
+	 * @param string|null $condition_class Optional LoopCondition class name.
+	 * @param int|null    $max_iterations  Optional hard cap on how many times this loop may jump back.
 	 * @return self
-	 * @throws \RuntimeException If the target step or state key is empty, or if the target does not exist yet.
+	 * @throws \RuntimeException If the target step or loop condition is invalid.
 	 */
 	public function repeat_until(
 		string $target_step,
-		string $state_key,
+		?string $state_key = null,
 		mixed $expected = true,
 		?string $name = null,
+		?string $condition_class = null,
+		?int $max_iterations = null,
 	): self {
-		return $this->add_loop_step( 'until', $target_step, $state_key, $expected, $name );
+		return $this->add_loop_step( 'until', $target_step, $state_key, $expected, $name, $condition_class, $max_iterations );
 	}
 
 	/**
 	 * Add a serializable loop control step.
 	 *
-	 * @param string      $mode        Loop mode: while or until.
-	 * @param string      $target_step Step name to jump back to.
-	 * @param string      $state_key   Public state key to inspect.
-	 * @param mixed       $expected    Comparison value.
-	 * @param string|null $name        Optional step name.
+	 * @param string      $mode            Loop mode: while or until.
+	 * @param string      $target_step     Step name to jump back to.
+	 * @param string|null $state_key       Public state key to inspect.
+	 * @param mixed       $expected        Comparison value.
+	 * @param string|null $name            Optional step name.
+	 * @param string|null $condition_class Optional LoopCondition class name.
+	 * @param int|null    $max_iterations  Optional hard cap on how many times this loop may jump back.
 	 * @return self
 	 * @throws \RuntimeException If the loop target is invalid.
 	 */
 	private function add_loop_step(
 		string $mode,
 		string $target_step,
-		string $state_key,
+		?string $state_key,
 		mixed $expected,
 		?string $name = null,
+		?string $condition_class = null,
+		?int $max_iterations = null,
 	): self {
 		$target_step = trim( $target_step );
-		$state_key   = trim( $state_key );
+		$state_key   = null !== $state_key ? trim( $state_key ) : null;
+		$condition_class = null !== $condition_class ? trim( $condition_class ) : null;
 
 		if ( '' === $target_step ) {
 			throw new \RuntimeException( 'Loop steps require a non-empty target step name.' );
 		}
 
-		if ( '' === $state_key ) {
+		if ( null !== $state_key && '' === $state_key ) {
 			throw new \RuntimeException( 'Loop steps require a non-empty state key.' );
+		}
+
+		if ( null !== $condition_class && '' === $condition_class ) {
+			throw new \RuntimeException( 'Loop steps require a non-empty condition class.' );
+		}
+
+		if ( null === $state_key && null === $condition_class ) {
+			throw new \RuntimeException( 'Loop steps require either a state key or a condition class.' );
+		}
+
+		if ( null !== $state_key && null !== $condition_class ) {
+			throw new \RuntimeException( 'Loop steps cannot define both a state key and a condition class.' );
+		}
+
+		if ( null !== $max_iterations && $max_iterations < 1 ) {
+			throw new \RuntimeException( 'Loop steps require max_iterations to be at least 1.' );
 		}
 
 		if ( ! $this->has_prior_step_named( $target_step ) ) {
@@ -319,6 +354,8 @@ class WorkflowBuilder {
 			'target_step' => $target_step,
 			'state_key'   => $state_key,
 			'expected'    => $expected,
+			'condition_class' => $condition_class,
+			'max_iterations'  => $max_iterations,
 		);
 
 		return $this;
@@ -1139,6 +1176,8 @@ class WorkflowBuilder {
 					'target_step'  => $step['target_step'],
 					'state_key'    => $step['state_key'],
 					'expected'     => $step['expected'],
+					'condition_class' => $step['condition_class'] ?? null,
+					'max_iterations'  => $step['max_iterations'] ?? null,
 					'compensation' => $step['compensation'] ?? null,
 				);
 			} elseif ( 'spawn_workflows' === $step['type'] ) {

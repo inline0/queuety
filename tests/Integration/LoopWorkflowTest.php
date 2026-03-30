@@ -9,6 +9,8 @@ use Queuety\Logger;
 use Queuety\Queue;
 use Queuety\Queuety;
 use Queuety\Tests\Integration\Fixtures\AccumulatingStep;
+use Queuety\Tests\Integration\Fixtures\AlwaysRepeatCondition;
+use Queuety\Tests\Integration\Fixtures\CounterAtLeastCondition;
 use Queuety\Tests\Integration\Fixtures\DataFetchStep;
 use Queuety\Tests\Integration\Fixtures\LoopFlagStep;
 use Queuety\Tests\IntegrationTestCase;
@@ -123,5 +125,58 @@ class LoopWorkflowTest extends IntegrationTestCase {
 		$status = $this->workflow_mgr->status( $workflow_id );
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
 		$this->assertArrayHasKey( 'user_name', $status->state );
+	}
+
+	public function test_repeat_until_accepts_condition_class(): void {
+		$workflow_id = Queuety::workflow( 'repeat_until_condition' )
+			->then( AccumulatingStep::class, 'increment' )
+			->repeat_until(
+				target_step: 'increment',
+				condition_class: CounterAtLeastCondition::class,
+				name: 'wait_for_threshold',
+				max_iterations: 5,
+			)
+			->then( DataFetchStep::class, 'done' )
+			->dispatch(
+				array(
+					'user_id'   => 9,
+					'threshold' => 3,
+				)
+			);
+
+		$this->process_one();
+		$this->process_one();
+		$this->process_one();
+		$this->process_one();
+		$this->process_one();
+		$this->process_one();
+		$this->process_one();
+
+		$status = $this->workflow_mgr->status( $workflow_id );
+		$this->assertSame( WorkflowStatus::Completed, $status->status );
+		$this->assertSame( 3, $status->state['counter'] );
+	}
+
+	public function test_repeat_while_honors_loop_max_iterations(): void {
+		$workflow_id = Queuety::workflow( 'repeat_while_max_iterations' )
+			->then( AccumulatingStep::class, 'increment' )
+			->repeat_while(
+				target_step: 'increment',
+				condition_class: AlwaysRepeatCondition::class,
+				name: 'repeat_forever',
+				max_iterations: 2,
+			)
+			->then( DataFetchStep::class, 'done' )
+			->dispatch();
+
+		$this->process_one();
+		$this->process_one();
+		$this->process_one();
+		$this->process_one();
+		$this->process_one();
+		$this->process_one();
+
+		$status = $this->workflow_mgr->status( $workflow_id );
+		$this->assertSame( WorkflowStatus::Failed, $status->status );
 	}
 }
