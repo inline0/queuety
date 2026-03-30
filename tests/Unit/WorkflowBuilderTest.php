@@ -196,6 +196,7 @@ class WorkflowBuilderTest extends TestCase {
 				'result_key'      => 'gate_result',
 				'match_payload'   => array(),
 				'correlation_key' => null,
+				'human_wait'      => null,
 				'decision_map'    => null,
 				'compensation'    => null,
 			),
