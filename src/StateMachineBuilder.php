@@ -87,6 +87,7 @@ class StateMachineBuilder {
 	 *
 	 * @param string $state_name State name.
 	 * @return self
+	 * @throws \InvalidArgumentException When the state name is empty.
 	 */
 	public function initial( string $state_name ): self {
 		$state_name = trim( $state_name );
@@ -104,6 +105,7 @@ class StateMachineBuilder {
 	 * @param string                  $state_name      State name.
 	 * @param StateMachineStatus|null $terminal_status Optional terminal lifecycle status for this state.
 	 * @return self
+	 * @throws \InvalidArgumentException When the state name or terminal status is invalid.
 	 */
 	public function state( string $state_name, ?StateMachineStatus $terminal_status = null ): self {
 		$state_name = trim( $state_name );
@@ -142,7 +144,7 @@ class StateMachineBuilder {
 	 * @return self
 	 */
 	public function action( string $action_class ): self {
-		$state_name = $this->current_state_name();
+		$state_name                                  = $this->current_state_name();
 		$this->states[ $state_name ]['action_class'] = $action_class;
 		return $this;
 	}
@@ -155,6 +157,7 @@ class StateMachineBuilder {
 	 * @param string|null $guard_class Optional guard class implementing Contracts\StateGuard.
 	 * @param string|null $name        Optional transition name for docs and inspection.
 	 * @return self
+	 * @throws \InvalidArgumentException When the event name or target state name is empty.
 	 */
 	public function on( string $event, string $target, ?string $guard_class = null, ?string $name = null ): self {
 		$state_name = $this->current_state_name();
@@ -170,10 +173,10 @@ class StateMachineBuilder {
 		}
 
 		$this->states[ $state_name ]['transitions'][] = array(
-			'event'       => $event,
-			'target_state'=> $target,
-			'guard_class' => $guard_class,
-			'name'        => $name ?? $event,
+			'event'        => $event,
+			'target_state' => $target,
+			'guard_class'  => $guard_class,
+			'name'         => $name ?? $event,
 		);
 
 		return $this;
@@ -184,6 +187,7 @@ class StateMachineBuilder {
 	 *
 	 * @param string $queue Queue name.
 	 * @return self
+	 * @throws \InvalidArgumentException When the queue name is empty.
 	 */
 	public function on_queue( string $queue ): self {
 		$queue = trim( $queue );
@@ -211,6 +215,7 @@ class StateMachineBuilder {
 	 *
 	 * @param int $max_attempts Retry limit.
 	 * @return self
+	 * @throws \InvalidArgumentException When the retry limit is less than 1.
 	 */
 	public function max_attempts( int $max_attempts ): self {
 		if ( $max_attempts < 1 ) {
@@ -226,6 +231,7 @@ class StateMachineBuilder {
 	 *
 	 * @param string $version Definition version.
 	 * @return self
+	 * @throws \InvalidArgumentException When the version is empty.
 	 */
 	public function version( string $version ): self {
 		$version = trim( $version );
@@ -242,6 +248,7 @@ class StateMachineBuilder {
 	 *
 	 * @param string $key Dispatch key.
 	 * @return self
+	 * @throws \InvalidArgumentException When the dispatch key is empty.
 	 */
 	public function idempotency_key( string $key ): self {
 		$key = trim( $key );
@@ -266,6 +273,7 @@ class StateMachineBuilder {
 	 * Build the serializable machine definition bundle.
 	 *
 	 * @return array<string, mixed>
+	 * @throws \RuntimeException When the definition is incomplete or inconsistent.
 	 */
 	public function build_runtime_definition(): array {
 		if ( empty( $this->states ) ) {
@@ -295,7 +303,7 @@ class StateMachineBuilder {
 			}
 		}
 
-		$definition = array(
+		$definition                    = array(
 			'name'               => $this->name,
 			'initial_state'      => $initial_state,
 			'states'             => $this->states,
@@ -328,6 +336,7 @@ class StateMachineBuilder {
 	 * Get the current builder state name.
 	 *
 	 * @return string
+	 * @throws \RuntimeException When no state is currently being configured.
 	 */
 	private function current_state_name(): string {
 		if ( null === $this->current_state ) {

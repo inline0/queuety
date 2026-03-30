@@ -37,13 +37,16 @@ class StateMachine {
 	 * @param array                $initial_state Initial public state.
 	 * @param array<string, mixed> $options       Dispatch options.
 	 * @return int
+	 * @throws \InvalidArgumentException When the idempotency key is invalid.
+	 * @throws \PDOException When the machine row cannot be persisted.
+	 * @throws \Throwable When transactional persistence fails unexpectedly.
 	 */
 	public function dispatch_definition( array $definition, array $initial_state = array(), array $options = array() ): int {
 		$initial_state_name = trim( (string) ( $definition['initial_state'] ?? '' ) );
 		$states             = $definition['states'] ?? array();
 
 		if ( '' === $initial_state_name || ! is_array( $states ) || ! isset( $states[ $initial_state_name ] ) ) {
-			throw new \RuntimeException( 'State machine definition must contain a valid initial_state.' );
+			throw new \InvalidArgumentException( 'State machine definition must contain a valid initial_state.' );
 		}
 
 		$idempotency_key = $this->normalize_dispatch_key(
@@ -164,10 +167,10 @@ class StateMachine {
 			return null;
 		}
 
-		$definition       = $row['definition'] ? ( json_decode( (string) $row['definition'], true ) ?: array() ) : array();
-		$current_state    = (string) $row['current_state'];
+		$definition        = $row['definition'] ? ( json_decode( (string) $row['definition'], true ) ?: array() ) : array();
+		$current_state     = (string) $row['current_state'];
 		$current_state_def = is_array( $definition['states'][ $current_state ] ?? null ) ? $definition['states'][ $current_state ] : array();
-		$available_events = array_values(
+		$available_events  = array_values(
 			array_unique(
 				array_map(
 					static fn( array $transition ): string => (string) $transition['event'],
@@ -205,7 +208,7 @@ class StateMachine {
 		$params = array();
 
 		if ( null !== $status ) {
-			$sql .= ' WHERE status = :status';
+			$sql             .= ' WHERE status = :status';
 			$params['status'] = $status;
 		}
 
@@ -234,6 +237,8 @@ class StateMachine {
 	 * @param int    $machine_id Machine ID.
 	 * @param string $event_name Event name.
 	 * @param array  $payload    Event payload.
+	 * @throws \InvalidArgumentException When the event name is empty.
+	 * @throws \RuntimeException When the machine is not waiting or the event is not allowed.
 	 */
 	public function send_event( int $machine_id, string $event_name, array $payload = array() ): void {
 		$event_name = trim( $event_name );
@@ -307,9 +312,6 @@ class StateMachine {
 			if ( is_string( $result ) ) {
 				$result = array( '_event' => $result );
 			}
-			if ( ! is_array( $result ) ) {
-				throw new \RuntimeException( 'State actions must return an array or an event name string.' );
-			}
 
 			$state              = $context['state'];
 			$transition_payload = array();
@@ -375,6 +377,7 @@ class StateMachine {
 	 * @param int    $machine_id     Machine ID.
 	 * @param string $state_name     Action state name.
 	 * @param string $error_message  Failure message.
+	 * @throws \Throwable When the failure state cannot be persisted.
 	 */
 	public function fail_action( int $machine_id, string $state_name, string $error_message ): void {
 		$context = $this->lock_machine( $machine_id );
@@ -430,6 +433,7 @@ class StateMachine {
 	 *
 	 * @param int $machine_id Machine ID.
 	 * @return array{pdo: \PDO, row: array, definition: array, state: array, state_def: array, current_state: string, status: StateMachineStatus}
+	 * @throws \RuntimeException When the machine row or current state definition is missing.
 	 */
 	private function lock_machine( int $machine_id ): array {
 		$table = $this->conn->table( Config::table_state_machines() );
@@ -472,6 +476,7 @@ class StateMachine {
 	 * @param array  $state         Updated public state.
 	 * @param string $event_name    Event name.
 	 * @param array  $event_payload Event payload.
+	 * @throws \RuntimeException When the event is not allowed or the target state is missing.
 	 */
 	private function apply_transition_from_locked_context( array $context, array $state, string $event_name, array $event_payload ): void {
 		$transition = $this->resolve_transition(
@@ -641,6 +646,7 @@ class StateMachine {
 	 *
 	 * @param string $action_class State action class.
 	 * @return StateAction
+	 * @throws \RuntimeException When the action class cannot be loaded or does not implement the contract.
 	 */
 	private function instantiate_action( string $action_class ): StateAction {
 		$action_class = trim( $action_class );
@@ -661,6 +667,7 @@ class StateMachine {
 	 *
 	 * @param string $guard_class Guard class.
 	 * @return StateGuard
+	 * @throws \RuntimeException When the guard class cannot be loaded or does not implement the contract.
 	 */
 	private function instantiate_guard( string $guard_class ): StateGuard {
 		$guard_class = trim( $guard_class );
@@ -679,9 +686,9 @@ class StateMachine {
 	/**
 	 * Update one machine row from already locked transaction scope.
 	 *
-	 * @param \PDO                  $pdo      Active transaction PDO handle.
-	 * @param int                   $machine_id Machine ID.
-	 * @param array<string, mixed>  $changes  Column => value map.
+	 * @param \PDO                 $pdo        Active transaction PDO handle.
+	 * @param int                  $machine_id Machine ID.
+	 * @param array<string, mixed> $changes    Column => value map.
 	 */
 	private function update_machine_row( \PDO $pdo, int $machine_id, array $changes ): void {
 		$table       = $this->conn->table( Config::table_state_machines() );
@@ -689,7 +696,7 @@ class StateMachine {
 		$params      = array( 'id' => $machine_id );
 
 		foreach ( $changes as $column => $value ) {
-			$assignments[]    = "{$column} = :{$column}";
+			$assignments[]     = "{$column} = :{$column}";
 			$params[ $column ] = $value;
 		}
 
@@ -743,6 +750,7 @@ class StateMachine {
 	 *
 	 * @param mixed $key Candidate key.
 	 * @return string|null
+	 * @throws \InvalidArgumentException When the key is not a non-empty string.
 	 */
 	private function normalize_dispatch_key( mixed $key ): ?string {
 		if ( null === $key ) {
@@ -787,7 +795,7 @@ class StateMachine {
 	 * @return bool
 	 */
 	private function is_duplicate_key_error( \PDOException $e ): bool {
-		$sql_state = (string) $e->getCode();
+		$sql_state  = (string) $e->getCode();
 		$error_info = $e->errorInfo; // phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase -- PDO exposes this property with a fixed name.
 		$driver     = $error_info[1] ?? null;
 
