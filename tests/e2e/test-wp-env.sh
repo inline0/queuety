@@ -139,7 +139,7 @@ echo ""
 # Install dependencies if needed.
 if [ ! -d "$PROJECT_DIR/node_modules/@wordpress/env" ]; then
     echo "Installing @wordpress/env..."
-    cd "$PROJECT_DIR" && npm install --no-audit --no-fund 2>/dev/null
+    bash "$PROJECT_DIR/tests/e2e/install-node-deps.sh" >/dev/null
 fi
 
 # Start wp-env.

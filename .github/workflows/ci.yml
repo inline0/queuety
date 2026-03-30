@@ -119,14 +119,16 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.4"
           extensions: mysqli, pdo_mysql
           tools: composer
       - run: composer install --no-interaction
-      - run: npm install --no-audit --no-fund
+      - run: bash tests/e2e/install-node-deps.sh
       - run: bash tests/e2e/test-wp-env.sh
