@@ -277,8 +277,8 @@ class Worker {
 		$max_attempts     = $job->max_attempts;
 		$backoff_strategy = null;
 		$custom_backoff   = null;
-		$pcntl_available = function_exists( 'pcntl_alarm' ) && function_exists( 'pcntl_signal' );
-		$job_instance    = null;
+		$pcntl_available  = function_exists( 'pcntl_alarm' ) && function_exists( 'pcntl_signal' );
+		$job_instance     = null;
 
 		if ( $this->registry->is_job_class( $job->handler ) ) {
 			$job_props = $this->read_job_properties( $job->handler );
@@ -327,12 +327,12 @@ class Worker {
 		}
 
 		if ( $pcntl_available ) {
-			$alarm_callback   = static function () use ( $timeout_seconds ): void {
+			$alarm_callback = static function () use ( $timeout_seconds ): void {
 				throw new TimeoutException( $timeout_seconds );
 			};
-				pcntl_signal( SIGALRM, $alarm_callback );
-				pcntl_alarm( $timeout_seconds );
-			}
+			pcntl_signal( SIGALRM, $alarm_callback );
+			pcntl_alarm( $timeout_seconds );
+		}
 
 		Heartbeat::init( $job->id, $this->conn );
 		ExecutionContext::enter( $job->id, $job->workflow_id, $job->step_index );

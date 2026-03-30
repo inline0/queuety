@@ -1026,7 +1026,7 @@ class Queuety {
 	public static function fake(): QueueFake {
 		self::$queue_fake         = new QueueFake();
 		self::$fake_queue         = new FakeQueue( self::$queue_fake );
-		self::$fake_batch_manager = new FakeBatchManager( self::$queue_fake );
+		self::$fake_batch_manager = new FakeBatchManager();
 		return self::$queue_fake;
 	}
 

@@ -12,3 +12,6 @@ parameters:
     ignoreErrors:
         -
             identifier: trait.unused
+        -
+            identifier: constructor.unusedParameter
+            path: src/Worker.php

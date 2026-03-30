@@ -206,9 +206,7 @@ class Scheduler {
 								)
 							);
 							continue;
-						}
-
-						else {
+						} else {
 							$update = $pdo->prepare(
 								"UPDATE {$table}
 								SET next_run = :next_run

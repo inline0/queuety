@@ -99,8 +99,12 @@ class QueueFake {
 					"The expected [{$class}] job was pushed but no matching callback was found."
 				);
 			}
+
+			\PHPUnit\Framework\Assert::assertNotEmpty( $matching );
+			return;
 		}
 
+		\PHPUnit\Framework\Assert::assertNotEmpty( $jobs );
 	}
 
 	/**
@@ -135,6 +139,7 @@ class QueueFake {
 			);
 		}
 
+		\PHPUnit\Framework\Assert::assertEmpty( $jobs );
 	}
 
 	/**
@@ -155,6 +160,7 @@ class QueueFake {
 			);
 		}
 
+		\PHPUnit\Framework\Assert::assertSame( 0, $total );
 	}
 
 	/**
@@ -175,8 +181,12 @@ class QueueFake {
 					'A batch was dispatched but no matching callback was found.'
 				);
 			}
+
+			\PHPUnit\Framework\Assert::assertNotEmpty( $matching );
+			return;
 		}
 
+		\PHPUnit\Framework\Assert::assertNotEmpty( $this->batches );
 	}
 
 	/**
