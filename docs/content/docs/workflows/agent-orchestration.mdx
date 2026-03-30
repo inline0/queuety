@@ -26,6 +26,8 @@ Think about agent orchestration in layers:
 
 The important distinction is that the agent decides **what work to do**, but Queuety still decides **how that work is persisted, retried, resumed, and joined**.
 
+When the orchestration target is a long-lived session rather than a bounded run, pair this with [State Machines](/docs/state-machines).
+
 ## Pattern 1: Planner/executor with independent agent runs
 
 Use `spawn_agents()` when a planner step discovers tasks at runtime and each task should become its own top-level workflow.

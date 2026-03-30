@@ -42,6 +42,7 @@ class Worker {
 	 * @param BatchManager|null     $batch_manager     Optional batch manager.
 	 * @param ChunkStore|null       $chunk_store       Optional chunk store for streaming steps.
 	 * @param WorkflowEventLog|null $event_log         Optional workflow event log.
+	 * @param StateMachine|null     $state_machines    Optional state machine manager.
 	 */
 	public function __construct(
 		private readonly Connection $conn,
@@ -56,6 +57,7 @@ class Worker {
 		private readonly ?BatchManager $batch_manager = null,
 		private readonly ?ChunkStore $chunk_store = null,
 		private readonly ?WorkflowEventLog $event_log = null,
+		private readonly ?StateMachine $state_machines = null,
 	) {}
 
 	/**
@@ -338,7 +340,36 @@ class Worker {
 		ExecutionContext::enter( $job->id, $job->workflow_id, $job->step_index );
 
 		try {
-			if ( $job->is_workflow_step() && '__queuety_sub_workflow' === $job->handler ) {
+			if ( $this->is_state_machine_action_job( $job ) ) {
+				$meta = $this->state_machine_action_meta( $job );
+
+				if ( null === $meta || null === $this->state_machines ) {
+					throw new \RuntimeException( 'State machine action payload is missing required metadata.' );
+				}
+
+				$this->state_machines->handle_action_job(
+					machine_id: $meta['machine_id'],
+					state_name: $meta['state_name'],
+					event_name: $meta['event_name'],
+					event_payload: $meta['event_payload'],
+				);
+
+				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
+
+				$this->queue->complete( $job->id );
+
+				$this->logger->log(
+					LogEvent::Completed,
+					array(
+						'job_id'         => $job->id,
+						'handler'        => $job->handler,
+						'queue'          => $job->queue,
+						'attempt'        => $job->attempts,
+						'duration_ms'    => $duration_ms,
+						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
+					)
+				);
+			} elseif ( $job->is_workflow_step() && '__queuety_sub_workflow' === $job->handler ) {
 				$state = $this->workflow->get_state( $job->workflow_id ) ?? array();
 
 				$this->workflow->handle_sub_workflow_step(
@@ -742,6 +773,15 @@ class Worker {
 							)
 						);
 					}
+				} elseif ( $this->is_state_machine_action_job( $job ) ) {
+					$meta = $this->state_machine_action_meta( $job );
+					if ( null !== $meta && null !== $this->state_machines ) {
+						$this->state_machines->fail_action(
+							$meta['machine_id'],
+							$meta['state_name'],
+							$e->getMessage(),
+						);
+					}
 				}
 
 				$this->record_batch_failure( $job );
@@ -860,6 +900,15 @@ class Worker {
 						);
 					} else {
 						$this->workflow->fail( $job->workflow_id, $job->id, 'Stale: worker died without completing.' );
+					}
+				} elseif ( $this->is_state_machine_action_job( $job ) ) {
+					$meta = $this->state_machine_action_meta( $job );
+					if ( null !== $meta && null !== $this->state_machines ) {
+						$this->state_machines->fail_action(
+							$meta['machine_id'],
+							$meta['state_name'],
+							'Stale: worker died without completing.',
+						);
 					}
 				}
 			} else {
@@ -1128,6 +1177,51 @@ class Worker {
 		$step  = $steps[ $job->step_index ] ?? null;
 
 		return is_array( $step ) && 'fan_out' === ( $step['type'] ?? '' );
+	}
+
+	/**
+	 * Whether the job is an internal state machine action job.
+	 *
+	 * @param Job $job Job record.
+	 * @return bool
+	 */
+	private function is_state_machine_action_job( Job $job ): bool {
+		return '__queuety_state_machine_action' === $job->handler;
+	}
+
+	/**
+	 * Extract state machine metadata from an internal action job payload.
+	 *
+	 * @param Job $job Job record.
+	 * @return array{machine_id: int, state_name: string, event_name: string|null, event_payload: array}|null
+	 */
+	private function state_machine_action_meta( Job $job ): ?array {
+		if ( ! $this->is_state_machine_action_job( $job ) ) {
+			return null;
+		}
+
+		$machine_id = $job->payload['machine_id'] ?? null;
+		$state_name = $job->payload['state_name'] ?? null;
+		if ( ! is_numeric( $machine_id ) || ! is_string( $state_name ) || '' === trim( $state_name ) ) {
+			return null;
+		}
+
+		$event_name = $job->payload['event_name'] ?? null;
+		if ( ! is_string( $event_name ) || '' === trim( $event_name ) ) {
+			$event_name = null;
+		}
+
+		$event_payload = $job->payload['event_payload'] ?? array();
+		if ( ! is_array( $event_payload ) ) {
+			$event_payload = array();
+		}
+
+		return array(
+			'machine_id'    => (int) $machine_id,
+			'state_name'    => trim( $state_name ),
+			'event_name'    => $event_name,
+			'event_payload' => $event_payload,
+		);
 	}
 
 	/**

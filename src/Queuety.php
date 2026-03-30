@@ -139,6 +139,20 @@ class Queuety {
 	private static ?ArtifactStore $artifact_store = null;
 
 	/**
+	 * State machine event log instance.
+	 *
+	 * @var StateMachineEventLog|null
+	 */
+	private static ?StateMachineEventLog $state_machine_event_log = null;
+
+	/**
+	 * State machine manager instance.
+	 *
+	 * @var StateMachine|null
+	 */
+	private static ?StateMachine $state_machine = null;
+
+	/**
 	 * Cache backend instance.
 	 *
 	 * @var Cache|null
@@ -178,20 +192,22 @@ class Queuety {
 			self::$cache = CacheFactory::create();
 		}
 
-		self::$queue              = new Queue( $conn, self::$cache );
-		self::$logger             = new Logger( $conn );
-		self::$workflow_event_log = new WorkflowEventLog( $conn );
-		self::$artifact_store     = new ArtifactStore( $conn );
-		self::$workflow           = new Workflow( $conn, self::$queue, self::$logger, self::$cache, self::$workflow_event_log, self::$artifact_store );
-		self::$registry           = new HandlerRegistry();
-		self::$rate_limiter       = new RateLimiter( $conn, self::$cache );
-		self::$scheduler          = new Scheduler( $conn, self::$queue );
-		self::$workflow_registry  = new WorkflowRegistry();
-		self::$metrics            = new Metrics( $conn );
-		self::$webhook_notifier   = new WebhookNotifier( $conn );
-		self::$batch_manager      = new BatchManager( $conn );
-		self::$chunk_store        = new ChunkStore( $conn );
-		self::$worker             = new Worker(
+		self::$queue                   = new Queue( $conn, self::$cache );
+		self::$logger                  = new Logger( $conn );
+		self::$workflow_event_log      = new WorkflowEventLog( $conn );
+		self::$artifact_store          = new ArtifactStore( $conn );
+		self::$state_machine_event_log = new StateMachineEventLog( $conn );
+		self::$workflow                = new Workflow( $conn, self::$queue, self::$logger, self::$cache, self::$workflow_event_log, self::$artifact_store );
+		self::$state_machine           = new StateMachine( $conn, self::$queue, self::$state_machine_event_log );
+		self::$registry                = new HandlerRegistry();
+		self::$rate_limiter            = new RateLimiter( $conn, self::$cache );
+		self::$scheduler               = new Scheduler( $conn, self::$queue );
+		self::$workflow_registry       = new WorkflowRegistry();
+		self::$metrics                 = new Metrics( $conn );
+		self::$webhook_notifier        = new WebhookNotifier( $conn );
+		self::$batch_manager           = new BatchManager( $conn );
+		self::$chunk_store             = new ChunkStore( $conn );
+		self::$worker                  = new Worker(
 			$conn,
 			self::$queue,
 			self::$logger,
@@ -204,6 +220,7 @@ class Queuety {
 			self::$batch_manager,
 			self::$chunk_store,
 			self::$workflow_event_log,
+			self::$state_machine,
 		);
 	}
 
@@ -971,6 +988,16 @@ class Queuety {
 	}
 
 	/**
+	 * Get the state machine manager instance.
+	 *
+	 * @return StateMachine
+	 */
+	public static function machines(): StateMachine {
+		self::ensure_initialized();
+		return self::$state_machine;
+	}
+
+	/**
 	 * Get the handler registry.
 	 *
 	 * @return HandlerRegistry
@@ -1152,6 +1179,76 @@ class Queuety {
 	public static function workflow_templates(): WorkflowRegistry {
 		self::ensure_initialized();
 		return self::$workflow_registry;
+	}
+
+	/**
+	 * Start building a durable state machine.
+	 *
+	 * @param string $name Machine definition name.
+	 * @return StateMachineBuilder
+	 */
+	public static function machine( string $name ): StateMachineBuilder {
+		self::ensure_initialized();
+		return new StateMachineBuilder( $name, self::$state_machine );
+	}
+
+	/**
+	 * Dispatch one state machine definition bundle directly.
+	 *
+	 * @param array $definition    Machine definition bundle.
+	 * @param array $initial_state Initial public state.
+	 * @param array $options       Per-dispatch options like idempotency_key.
+	 * @return int
+	 */
+	public static function dispatch_state_machine_definition( array $definition, array $initial_state = array(), array $options = array() ): int {
+		self::ensure_initialized();
+		return self::$state_machine->dispatch_definition( $definition, $initial_state, $options );
+	}
+
+	/**
+	 * Get persisted machine status.
+	 *
+	 * @param int $machine_id Machine ID.
+	 * @return StateMachineState|null
+	 */
+	public static function machine_status( int $machine_id ): ?StateMachineState {
+		self::ensure_initialized();
+		return self::$state_machine->get_status( $machine_id );
+	}
+
+	/**
+	 * Send one external event into a machine.
+	 *
+	 * @param int    $machine_id Machine ID.
+	 * @param string $event_name Event name.
+	 * @param array  $payload    Event payload.
+	 */
+	public static function machine_event( int $machine_id, string $event_name, array $payload = array() ): void {
+		self::ensure_initialized();
+		self::$state_machine->send_event( $machine_id, $event_name, $payload );
+	}
+
+	/**
+	 * List persisted machine rows.
+	 *
+	 * @param int         $limit  Maximum rows.
+	 * @param string|null $status Optional status filter.
+	 * @return array<int, array<string, mixed>>
+	 */
+	public static function list_machines( int $limit = 50, ?string $status = null ): array {
+		self::ensure_initialized();
+		return self::$state_machine->list( $limit, $status );
+	}
+
+	/**
+	 * Get the full event timeline for one machine.
+	 *
+	 * @param int $machine_id Machine ID.
+	 * @return array<int, array<string, mixed>>
+	 */
+	public static function machine_timeline( int $machine_id ): array {
+		self::ensure_initialized();
+		return self::$state_machine->timeline( $machine_id );
 	}
 
 	/**
@@ -1521,25 +1618,27 @@ class Queuety {
 	 * Reset the singleton state (for testing).
 	 */
 	public static function reset(): void {
-		self::$conn               = null;
-		self::$queue              = null;
-		self::$logger             = null;
-		self::$workflow           = null;
-		self::$worker             = null;
-		self::$registry           = null;
-		self::$rate_limiter       = null;
-		self::$scheduler          = null;
-		self::$workflow_registry  = null;
-		self::$metrics            = null;
-		self::$webhook_notifier   = null;
-		self::$batch_manager      = null;
-		self::$chunk_store        = null;
-		self::$workflow_event_log = null;
-		self::$artifact_store     = null;
-		self::$cache              = null;
-		self::$queue_fake         = null;
-		self::$fake_queue         = null;
-		self::$fake_batch_manager = null;
+		self::$conn                    = null;
+		self::$queue                   = null;
+		self::$logger                  = null;
+		self::$workflow                = null;
+		self::$worker                  = null;
+		self::$registry                = null;
+		self::$rate_limiter            = null;
+		self::$scheduler               = null;
+		self::$workflow_registry       = null;
+		self::$metrics                 = null;
+		self::$webhook_notifier        = null;
+		self::$batch_manager           = null;
+		self::$chunk_store             = null;
+		self::$workflow_event_log      = null;
+		self::$artifact_store          = null;
+		self::$state_machine_event_log = null;
+		self::$state_machine           = null;
+		self::$cache                   = null;
+		self::$queue_fake              = null;
+		self::$fake_queue              = null;
+		self::$fake_batch_manager      = null;
 		ActionWorkflowBridge::reset();
 		ExecutionContext::clear();
 	}

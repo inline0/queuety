@@ -19,14 +19,15 @@
 
 ## What is Queuety?
 
-Queuety is a WordPress plugin that provides a fast job queue and durable workflow engine. Workers claim jobs directly from MySQL via PDO and process them inside a long-running WP-CLI process.
+Queuety is a WordPress plugin that provides a fast job queue, durable workflow engine, and durable state machine runtime. Workers claim jobs directly from MySQL via PDO and process them inside a long-running WP-CLI process.
 
 **The problem:** WordPress has no real background job system. `wp_cron` only fires on page visits. Action Scheduler boots the entire WordPress stack for every batch. An LLM API call that takes 60 seconds gets killed by PHP's 30-second timeout. There's no way to run multi-step processes that survive crashes and resume where they left off.
 
-**Queuety solves this** with two primitives:
+**Queuety solves this** with three primitives:
 
 1. **Jobs** for fire-and-forget background work
 2. **Workflows** for durable multi-step processes with persistent state
+3. **State machines** for long-lived, event-driven lifecycle state
 
 ## Quick Start
 
@@ -157,6 +158,29 @@ Queuety::workflow( 'brief_review_loop' )
     )
     ->then( PublishBriefStep::class )
     ->dispatch( [ 'brief_id' => 42 ] );
+```
+
+Model an event-driven agent session with explicit lifecycle state:
+
+```php
+use Queuety\Enums\StateMachineStatus;
+
+$machine_id = Queuety::machine( 'agent_session' )
+    ->state( 'awaiting_user' )
+    ->on( 'user_message', 'planning' )
+    ->state( 'planning' )
+    ->action( PlanSessionAction::class )
+    ->on( 'planned', 'awaiting_review' )
+    ->state( 'awaiting_review' )
+    ->on( 'approve', 'completed', ReviewApprovedGuard::class )
+    ->state( 'completed', StateMachineStatus::Completed )
+    ->dispatch( [ 'thread_id' => 42 ] );
+
+Queuety::machine_event(
+    $machine_id,
+    'user_message',
+    [ 'message' => 'Find competitors for this product' ]
+);
 ```
 
 Trigger workflows directly from WordPress actions:

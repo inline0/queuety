@@ -35,6 +35,8 @@ class MigrationTest extends IntegrationTestCase {
 			'queuety_workflow_dependencies',
 			'queuety_workflow_dispatch_keys',
 			'queuety_artifacts',
+			'queuety_state_machines',
+			'queuety_state_machine_events',
 		);
 
 		foreach ( $tables as $table ) {
@@ -227,6 +229,43 @@ class MigrationTest extends IntegrationTestCase {
 
 		$this->assertTrue(
 			$this->workflow_events_enum_contains( 'workflow_replayed' )
+		);
+	}
+
+	public function test_migrate_0170_on_fresh_install(): void {
+		Schema::migrate_0170( $this->conn );
+
+		$this->assertTrue(
+			Schema::table_exists(
+				$this->conn,
+				$this->conn->table( 'queuety_state_machines' )
+			)
+		);
+		$this->assertTrue(
+			Schema::table_exists(
+				$this->conn,
+				$this->conn->table( 'queuety_state_machine_events' )
+			)
+		);
+	}
+
+	public function test_migrate_0170_is_idempotent(): void {
+		Schema::migrate_0170( $this->conn );
+		Schema::migrate_0170( $this->conn );
+
+		$this->assertTrue(
+			Schema::index_exists(
+				$this->conn,
+				$this->conn->table( 'queuety_state_machines' ),
+				'idx_status_state'
+			)
+		);
+		$this->assertTrue(
+			Schema::index_exists(
+				$this->conn,
+				$this->conn->table( 'queuety_state_machine_events' ),
+				'idx_machine_event'
+			)
 		);
 	}
 

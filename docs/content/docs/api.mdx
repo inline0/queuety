@@ -1,11 +1,11 @@
 ---
 title: API
-description: The Queuety\Queuety class provides the complete PHP API for job and workflow management.
+description: The Queuety\Queuety class provides the complete PHP API for jobs, workflows, and state machines.
 ---
 
 # PHP API
 
-Everything in Queuety is accessible through the `Queuety\Queuety` static class. It is the single entry point for dispatching jobs, building workflows, managing queues, and accessing internal subsystems.
+Everything in Queuety is accessible through the `Queuety\Queuety` static class. It is the single entry point for dispatching jobs, building workflows, driving state machines, managing queues, and accessing internal subsystems.
 
 ```php
 use Queuety\Queuety;
@@ -512,6 +512,111 @@ Delete one artifact for a workflow.
 Queuety::delete_workflow_artifact( $workflow_id, 'draft' );
 ```
 
+## State Machines
+
+### `Queuety::machine( $name )`
+
+Start building a state machine. Returns a `StateMachineBuilder`.
+
+```php
+use Queuety\Enums\StateMachineStatus;
+
+$machine_id = Queuety::machine( 'agent_session' )
+    ->state( 'awaiting_user' )
+    ->on( 'user_message', 'planning' )
+    ->state( 'planning' )
+    ->action( PlanSessionAction::class )
+    ->on( 'planned', 'completed' )
+    ->state( 'completed', StateMachineStatus::Completed )
+    ->dispatch( [ 'thread_id' => 42 ] );
+```
+
+### `StateMachineBuilder` methods
+
+| Method | Description |
+|---|---|
+| `initial( string $state_name )` | Set the initial state explicitly. |
+| `state( string $state_name, ?StateMachineStatus $terminal_status = null )` | Start configuring one state. |
+| `action( string $action_class )` | Register a queued entry action for the current state. |
+| `on( string $event, string $target, ?string $guard_class = null, ?string $name = null )` | Register one event transition from the current state. |
+| `on_queue( string $queue )` | Set the queue used for queued state actions. |
+| `with_priority( Priority $priority )` | Set the priority for queued state actions. |
+| `max_attempts( int $max_attempts )` | Set the retry limit for queued state actions. |
+| `version( string $version )` | Tag the machine definition with an application-level version. |
+| `idempotency_key( string $key )` | Make dispatch durable for a caller-supplied key. Dispatching again with the same key returns the original machine ID. |
+| `dispatch( array $initial_state = [] )` | Dispatch the machine and return the machine ID. |
+
+### `Queuety::dispatch_state_machine_definition( $definition, $initial_state = [], $options = [] )`
+
+Dispatch a serialized state machine definition bundle. Most application code should prefer `machine()->dispatch()`. This lower-level method exists so adapters can start a machine without depending on the builder directly.
+
+```php
+$machine_id = Queuety::dispatch_state_machine_definition(
+    $definition,
+    [ 'thread_id' => 42 ],
+    [ 'idempotency_key' => 'thread:42' ],
+);
+```
+
+### `Queuety::machine_status( $machine_id )`
+
+Get the current machine status. Returns a `StateMachineState` object or `null`.
+
+```php
+$status = Queuety::machine_status( $machine_id );
+
+echo $status->name;               // 'agent_session'
+echo $status->status->value;      // 'waiting_event'
+echo $status->current_state;      // 'awaiting_review'
+print_r( $status->state );        // public machine state
+print_r( $status->available_events ); // valid incoming events in the current state
+```
+
+`StateMachineState` also exposes:
+
+- `definition_version`
+- `definition_hash`
+- `idempotency_key`
+- `error_message`
+- `current_action`
+- `terminal_status`
+
+### `Queuety::machine_event( $machine_id, $event_name, $payload = [] )`
+
+Send one external event into a waiting machine.
+
+```php
+Queuety::machine_event(
+    $machine_id,
+    'approve',
+    [
+        'approved' => true,
+        'reviewer' => 'editor@example.com',
+    ]
+);
+```
+
+The payload is available to transition guards and is merged into the public machine state when the event is accepted.
+
+### `Queuety::list_machines( $limit = 50, $status = null )`
+
+List persisted machine rows for inspection.
+
+```php
+$machines = Queuety::list_machines();
+$waiting  = Queuety::list_machines( status: 'waiting_event' );
+```
+
+### `Queuety::machine_timeline( $machine_id )`
+
+Get the durable event timeline for one machine.
+
+```php
+$timeline = Queuety::machine_timeline( $machine_id );
+```
+
+See [State Machines](/docs/state-machines) for the lifecycle model and usage patterns.
+
 ## Workflow templates
 
 ### `Queuety::define_workflow( $name )`
@@ -792,6 +897,7 @@ These methods return internal instances for advanced use cases.
 | `Queuety::queue()` | `Queue` | Queue operations (claim, release, bury) |
 | `Queuety::worker()` | `Worker` | Worker process control |
 | `Queuety::workflow_manager()` | `Workflow` | Workflow orchestration |
+| `Queuety::machines()` | `StateMachine` | State machine lifecycle management |
 | `Queuety::connection()` | `Connection` | PDO database connection |
 | `Queuety::batch_manager()` | `BatchManager` | Batch lifecycle management (cancel, prune) |
 | `Queuety::chunk_store()` | `ChunkStore` | Chunk persistence for streaming steps |
@@ -903,6 +1009,32 @@ namespace Queuety\Contracts;
 
 interface LoopCondition {
     public function matches( array $state ): bool;
+}
+```
+
+### `Contracts\StateAction`
+
+Interface for queued state-entry actions.
+
+```php
+namespace Queuety\Contracts;
+
+interface StateAction {
+    public function handle( array $state, ?string $event = null, array $event_payload = [] ): array|string;
+}
+```
+
+Return public state updates. Include `_event` and optionally `_event_payload` when the action should transition immediately.
+
+### `Contracts\StateGuard`
+
+Interface for state-machine transition guards.
+
+```php
+namespace Queuety\Contracts;
+
+interface StateGuard {
+    public function allows( array $state, array $event_payload, string $event ): bool;
 }
 ```
 
@@ -1134,6 +1266,19 @@ enum WorkflowStatus: string {
     case WaitingSignal  = 'waiting_signal';
     case WaitingWorkflow = 'waiting_workflow';
     case Cancelled      = 'cancelled';
+}
+```
+
+### `StateMachineStatus`
+
+```php
+enum StateMachineStatus: string {
+    case Running = 'running';
+    case WaitingEvent = 'waiting_event';
+    case Completed = 'completed';
+    case Failed = 'failed';
+    case Paused = 'paused';
+    case Cancelled = 'cancelled';
 }
 ```
 

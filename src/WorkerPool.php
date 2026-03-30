@@ -86,7 +86,12 @@ class WorkerPool {
 			$child_count = count( $this->children );
 			pcntl_signal_dispatch();
 
-			while ( ( $pid = pcntl_waitpid( -1, $status, WNOHANG ) ) > 0 ) {
+			while ( true ) {
+				$pid = pcntl_waitpid( -1, $status, WNOHANG );
+				if ( $pid <= 0 ) {
+					break;
+				}
+
 				$this->handle_child_exit( $pid, $status, $queue );
 			}
 
@@ -132,8 +137,8 @@ class WorkerPool {
 	 */
 	private function run_child_worker( string $queue ): void {
 		// Forked PDO handles are unsafe to reuse across processes.
-		$conn              = new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix );
-		$cache             = null;
+		$conn  = new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix );
+		$cache = null;
 
 		if ( null === Queuety::queue_fake() ) {
 			try {
@@ -146,19 +151,22 @@ class WorkerPool {
 		$queue_op          = new Queue( $conn, $cache );
 		$logger            = new Logger( $conn );
 		$event_log         = new WorkflowEventLog( $conn );
-		$workflow          = new Workflow( $conn, $queue_op, $logger, $cache, $event_log );
+		$artifact_store    = new ArtifactStore( $conn );
+		$machine_event_log = new StateMachineEventLog( $conn );
+		$workflow          = new Workflow( $conn, $queue_op, $logger, $cache, $event_log, $artifact_store );
+		$state_machines    = new StateMachine( $conn, $queue_op, $machine_event_log );
 		try {
 			$registry = Queuety::registry();
 		} catch ( \RuntimeException ) {
 			$registry = new HandlerRegistry();
 		}
 
-		$rate_limiter      = new RateLimiter( $conn, $cache );
-		$scheduler         = new Scheduler( $conn, $queue_op );
-		$webhook_notifier  = new WebhookNotifier( $conn );
-		$batch_manager     = new BatchManager( $conn );
-		$chunk_store       = new ChunkStore( $conn );
-		$worker            = new Worker(
+		$rate_limiter     = new RateLimiter( $conn, $cache );
+		$scheduler        = new Scheduler( $conn, $queue_op );
+		$webhook_notifier = new WebhookNotifier( $conn );
+		$batch_manager    = new BatchManager( $conn );
+		$chunk_store      = new ChunkStore( $conn );
+		$worker           = new Worker(
 			$conn,
 			$queue_op,
 			$logger,
@@ -171,6 +179,7 @@ class WorkerPool {
 			$batch_manager,
 			$chunk_store,
 			$event_log,
+			$state_machines,
 		);
 
 		pcntl_signal(

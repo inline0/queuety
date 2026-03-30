@@ -216,6 +216,24 @@ class Config {
 	}
 
 	/**
+	 * Get the state machines table name.
+	 *
+	 * @return string
+	 */
+	public static function table_state_machines(): string {
+		return defined( 'QUEUETY_TABLE_STATE_MACHINES' ) ? QUEUETY_TABLE_STATE_MACHINES : 'queuety_state_machines';
+	}
+
+	/**
+	 * Get the state machine events table name.
+	 *
+	 * @return string
+	 */
+	public static function table_state_machine_events(): string {
+		return defined( 'QUEUETY_TABLE_STATE_MACHINE_EVENTS' ) ? QUEUETY_TABLE_STATE_MACHINE_EVENTS : 'queuety_state_machine_events';
+	}
+
+	/**
 	 * Get the default cache TTL in seconds.
 	 *
 	 * @return int

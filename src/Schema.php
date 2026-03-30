@@ -15,7 +15,7 @@ class Schema {
 	/**
 	 * Current schema version for plugin-managed upgrades.
 	 */
-	public const CURRENT_VERSION = '0.16.0';
+	public const CURRENT_VERSION = '0.17.0';
 
 	/**
 	 * Create all Queuety tables.
@@ -23,21 +23,23 @@ class Schema {
 	 * @param Connection $conn Database connection.
 	 */
 	public static function install( Connection $conn ): void {
-		$pdo             = $conn->pdo();
-		$jobs            = $conn->table( Config::table_jobs() );
-		$wf              = $conn->table( Config::table_workflows() );
-		$logs            = $conn->table( Config::table_logs() );
-		$schedules       = $conn->table( Config::table_schedules() );
-		$queue_states    = $conn->table( Config::table_queue_states() );
-		$webhooks        = $conn->table( Config::table_webhooks() );
-		$signals         = $conn->table( Config::table_signals() );
-		$workflow_waits  = $conn->table( Config::table_workflow_dependencies() );
-		$workflow_keys   = $conn->table( Config::table_workflow_dispatch_keys() );
-		$locks           = $conn->table( Config::table_locks() );
-		$batches         = $conn->table( Config::table_batches() );
-		$chunks          = $conn->table( Config::table_chunks() );
-		$workflow_events = $conn->table( Config::table_workflow_events() );
-		$artifacts       = $conn->table( Config::table_artifacts() );
+		$pdo                  = $conn->pdo();
+		$jobs                 = $conn->table( Config::table_jobs() );
+		$wf                   = $conn->table( Config::table_workflows() );
+		$logs                 = $conn->table( Config::table_logs() );
+		$schedules            = $conn->table( Config::table_schedules() );
+		$queue_states         = $conn->table( Config::table_queue_states() );
+		$webhooks             = $conn->table( Config::table_webhooks() );
+		$signals              = $conn->table( Config::table_signals() );
+		$workflow_waits       = $conn->table( Config::table_workflow_dependencies() );
+		$workflow_keys        = $conn->table( Config::table_workflow_dispatch_keys() );
+		$locks                = $conn->table( Config::table_locks() );
+		$batches              = $conn->table( Config::table_batches() );
+		$chunks               = $conn->table( Config::table_chunks() );
+		$workflow_events      = $conn->table( Config::table_workflow_events() );
+		$artifacts            = $conn->table( Config::table_artifacts() );
+		$state_machines       = $conn->table( Config::table_state_machines() );
+		$state_machine_events = $conn->table( Config::table_state_machine_events() );
 
 		$pdo->exec(
 			"CREATE TABLE IF NOT EXISTS {$jobs} (
@@ -260,6 +262,45 @@ class Schema {
 				INDEX idx_workflow_kind (workflow_id, kind)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$state_machines} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				name VARCHAR(255) NOT NULL,
+				status ENUM('running', 'waiting_event', 'completed', 'failed', 'paused', 'cancelled') NOT NULL DEFAULT 'running',
+				current_state VARCHAR(191) NOT NULL,
+				state LONGTEXT NOT NULL,
+				definition LONGTEXT NOT NULL,
+				definition_hash VARCHAR(64) DEFAULT NULL,
+				definition_version VARCHAR(64) DEFAULT NULL,
+				idempotency_key VARCHAR(191) DEFAULT NULL,
+				started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+				completed_at DATETIME DEFAULT NULL,
+				failed_at DATETIME DEFAULT NULL,
+				error_message TEXT DEFAULT NULL,
+				UNIQUE INDEX idx_dispatch_key (idempotency_key),
+				INDEX idx_status_state (status, current_state),
+				INDEX idx_name_status (name, status)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$state_machine_events} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				machine_id BIGINT UNSIGNED NOT NULL,
+				state_name VARCHAR(191) NOT NULL,
+				event ENUM('machine_started', 'machine_waiting', 'event_received', 'transitioned', 'action_started', 'action_completed', 'action_failed', 'machine_completed', 'machine_failed', 'machine_paused', 'machine_resumed', 'machine_cancelled') NOT NULL,
+				event_name VARCHAR(191) DEFAULT NULL,
+				state_snapshot LONGTEXT DEFAULT NULL,
+				payload LONGTEXT DEFAULT NULL,
+				error_message TEXT DEFAULT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				INDEX idx_machine (machine_id, id),
+				INDEX idx_machine_event (machine_id, event),
+				INDEX idx_created (created_at)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
 	}
 
 	/**
@@ -326,6 +367,12 @@ class Schema {
 
 		if ( version_compare( $version, '0.16.0', '<' ) ) {
 			self::migrate_0160( $conn );
+			$version = '0.16.0';
+		}
+
+		if ( version_compare( $version, '0.17.0', '<' ) ) {
+			self::migrate_0170( $conn );
+			$version = '0.17.0';
 		}
 
 		return self::CURRENT_VERSION;
@@ -352,6 +399,11 @@ class Schema {
 		$chunks          = $conn->table( Config::table_chunks() );
 		$workflow_events = $conn->table( Config::table_workflow_events() );
 		$artifacts       = $conn->table( Config::table_artifacts() );
+		$state_machines  = $conn->table( Config::table_state_machines() );
+
+		if ( self::table_exists( $conn, $state_machines ) ) {
+			return '0.17.0';
+		}
 
 		if ( self::table_exists( $conn, $artifacts ) ) {
 			return '0.16.0';
@@ -415,22 +467,26 @@ class Schema {
 	 * @param Connection $conn Database connection.
 	 */
 	public static function uninstall( Connection $conn ): void {
-		$pdo             = $conn->pdo();
-		$jobs            = $conn->table( Config::table_jobs() );
-		$wf              = $conn->table( Config::table_workflows() );
-		$logs            = $conn->table( Config::table_logs() );
-		$schedules       = $conn->table( Config::table_schedules() );
-		$queue_states    = $conn->table( Config::table_queue_states() );
-		$webhooks        = $conn->table( Config::table_webhooks() );
-		$signals         = $conn->table( Config::table_signals() );
-		$workflow_waits  = $conn->table( Config::table_workflow_dependencies() );
-		$workflow_keys   = $conn->table( Config::table_workflow_dispatch_keys() );
-		$locks           = $conn->table( Config::table_locks() );
-		$batches         = $conn->table( Config::table_batches() );
-		$chunks          = $conn->table( Config::table_chunks() );
-		$workflow_events = $conn->table( Config::table_workflow_events() );
-		$artifacts       = $conn->table( Config::table_artifacts() );
+		$pdo                  = $conn->pdo();
+		$jobs                 = $conn->table( Config::table_jobs() );
+		$wf                   = $conn->table( Config::table_workflows() );
+		$logs                 = $conn->table( Config::table_logs() );
+		$schedules            = $conn->table( Config::table_schedules() );
+		$queue_states         = $conn->table( Config::table_queue_states() );
+		$webhooks             = $conn->table( Config::table_webhooks() );
+		$signals              = $conn->table( Config::table_signals() );
+		$workflow_waits       = $conn->table( Config::table_workflow_dependencies() );
+		$workflow_keys        = $conn->table( Config::table_workflow_dispatch_keys() );
+		$locks                = $conn->table( Config::table_locks() );
+		$batches              = $conn->table( Config::table_batches() );
+		$chunks               = $conn->table( Config::table_chunks() );
+		$workflow_events      = $conn->table( Config::table_workflow_events() );
+		$artifacts            = $conn->table( Config::table_artifacts() );
+		$state_machines       = $conn->table( Config::table_state_machines() );
+		$state_machine_events = $conn->table( Config::table_state_machine_events() );
 
+		$pdo->exec( "DROP TABLE IF EXISTS {$state_machine_events}" );
+		$pdo->exec( "DROP TABLE IF EXISTS {$state_machines}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$artifacts}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$workflow_events}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$chunks}" );
@@ -729,6 +785,58 @@ class Schema {
 				UNIQUE INDEX idx_workflow_key (workflow_id, artifact_key),
 				INDEX idx_workflow_step (workflow_id, step_index),
 				INDEX idx_workflow_kind (workflow_id, kind)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
+	}
+
+	/**
+	 * Migrate from v0.16.x to v0.17.0.
+	 *
+	 * Adds durable state machines and their event timeline tables.
+	 *
+	 * @param Connection $conn Database connection.
+	 */
+	public static function migrate_0170( Connection $conn ): void {
+		$pdo                  = $conn->pdo();
+		$state_machines       = $conn->table( Config::table_state_machines() );
+		$state_machine_events = $conn->table( Config::table_state_machine_events() );
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$state_machines} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				name VARCHAR(255) NOT NULL,
+				status ENUM('running', 'waiting_event', 'completed', 'failed', 'paused', 'cancelled') NOT NULL DEFAULT 'running',
+				current_state VARCHAR(191) NOT NULL,
+				state LONGTEXT NOT NULL,
+				definition LONGTEXT NOT NULL,
+				definition_hash VARCHAR(64) DEFAULT NULL,
+				definition_version VARCHAR(64) DEFAULT NULL,
+				idempotency_key VARCHAR(191) DEFAULT NULL,
+				started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+				completed_at DATETIME DEFAULT NULL,
+				failed_at DATETIME DEFAULT NULL,
+				error_message TEXT DEFAULT NULL,
+				UNIQUE INDEX idx_dispatch_key (idempotency_key),
+				INDEX idx_status_state (status, current_state),
+				INDEX idx_name_status (name, status)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+		);
+
+		$pdo->exec(
+			"CREATE TABLE IF NOT EXISTS {$state_machine_events} (
+				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				machine_id BIGINT UNSIGNED NOT NULL,
+				state_name VARCHAR(191) NOT NULL,
+				event ENUM('machine_started', 'machine_waiting', 'event_received', 'transitioned', 'action_started', 'action_completed', 'action_failed', 'machine_completed', 'machine_failed', 'machine_paused', 'machine_resumed', 'machine_cancelled') NOT NULL,
+				event_name VARCHAR(191) DEFAULT NULL,
+				state_snapshot LONGTEXT DEFAULT NULL,
+				payload LONGTEXT DEFAULT NULL,
+				error_message TEXT DEFAULT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				INDEX idx_machine (machine_id, id),
+				INDEX idx_machine_event (machine_id, event),
+				INDEX idx_created (created_at)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 	}

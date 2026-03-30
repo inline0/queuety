@@ -1,0 +1,171 @@
+---
+title: State Machines
+description: Model long-lived, event-driven lifecycle state with durable state machines.
+---
+
+# State Machines
+
+State machines model lifecycle. Workflows model execution.
+
+That distinction matters when the thing you are building is not just a sequence of steps, but a long-lived entity that reacts to events over time:
+
+- an agent session
+- a chat thread
+- a review lifecycle
+- a ticket or case
+- an approval flow with several valid branches
+
+Use a workflow when the main question is, "what work runs next?"
+
+Use a state machine when the main question is, "what state is this entity in, and what events are valid here?"
+
+## Quick example
+
+```php
+use Queuety\Enums\StateMachineStatus;
+use Queuety\Queuety;
+
+$machine_id = Queuety::machine( 'agent_session' )
+    ->version( 'agent-session.v1' )
+    ->state( 'awaiting_user' )
+    ->on( 'user_message', 'planning' )
+    ->state( 'planning' )
+    ->action( PlanSessionAction::class )
+    ->on( 'planned', 'awaiting_review' )
+    ->state( 'awaiting_review' )
+    ->on( 'approve', 'completed', ReviewApprovedGuard::class )
+    ->on( 'reject', 'awaiting_user' )
+    ->state( 'completed', StateMachineStatus::Completed )
+    ->dispatch( [ 'thread_id' => 42 ] );
+
+Queuety::machine_event(
+    $machine_id,
+    'user_message',
+    [ 'message' => 'Find competitors for this product' ]
+);
+
+Queuety::machine_event(
+    $machine_id,
+    'approve',
+    [ 'approved' => true, 'reviewer' => 'editor@example.com' ]
+);
+```
+
+In that definition:
+
+- `awaiting_user` is a waiting state with no queued work
+- `planning` enters a queued action
+- the action emits `planned`
+- the machine transitions into `awaiting_review`
+- an external `approve` event completes the session
+
+## How a machine runs
+
+Each machine instance persists:
+
+- the current state name
+- the public state payload
+- the definition version and hash
+- the valid incoming events for the current state
+- a durable event timeline
+
+When a state has an `action()`, Queuety queues an internal state-entry job. That job can:
+
+- return public state updates and wait for the next external event
+- emit an event immediately with `_event`
+- include `_event_payload` when the next transition needs structured data
+
+When a state has no `action()` and no terminal status, the machine waits for external events sent with `Queuety::machine_event()`.
+
+## Workflow vs state machine
+
+Use a workflow when:
+
+- the run has a clear start and finish
+- the main structure is step-oriented
+- you need fan-out, waits, compensation, artifacts, or async handoffs
+
+Use a state machine when:
+
+- the entity may live for a long time
+- valid transitions depend on the current state
+- events may arrive in different orders
+- you need explicit lifecycle inspection like `awaiting_user`, `planning`, or `awaiting_review`
+
+The two primitives work well together:
+
+- a state action can dispatch a workflow
+- a workflow can emit an event back into a machine
+- a machine can govern a session while workflows perform the heavy work
+
+## Builder methods
+
+`StateMachineBuilder` exposes these core methods:
+
+- `initial( string $state_name )`
+- `state( string $state_name, ?StateMachineStatus $terminal_status = null )`
+- `action( string $action_class )`
+- `on( string $event, string $target, ?string $guard_class = null, ?string $name = null )`
+- `on_queue( string $queue )`
+- `with_priority( Priority $priority )`
+- `max_attempts( int $max_attempts )`
+- `version( string $version )`
+- `idempotency_key( string $key )`
+- `dispatch( array $initial_state = [] )`
+
+## Contracts
+
+State-entry actions implement `Queuety\Contracts\StateAction`:
+
+```php
+namespace Queuety\Contracts;
+
+interface StateAction {
+    public function handle( array $state, ?string $event = null, array $event_payload = [] ): array|string;
+}
+```
+
+Transition guards implement `Queuety\Contracts\StateGuard`:
+
+```php
+namespace Queuety\Contracts;
+
+interface StateGuard {
+    public function allows( array $state, array $event_payload, string $event ): bool;
+}
+```
+
+## Inspection APIs
+
+Use the facade to inspect running machines:
+
+```php
+$status   = Queuety::machine_status( $machine_id );
+$machines = Queuety::list_machines();
+$events   = Queuety::machine_timeline( $machine_id );
+```
+
+Those APIs expose the current state name, lifecycle status, public state, available events, definition metadata, and the full transition timeline.
+
+## Agent sessions
+
+State machines are especially useful for agent systems that behave more like sessions than pipelines.
+
+Typical states look like:
+
+- `awaiting_user`
+- `planning`
+- `running_agents`
+- `awaiting_review`
+- `completed`
+
+That shape is often clearer than forcing one very long workflow definition to represent a conversation that reacts to outside events over hours or days.
+
+## See also
+
+- [Agent Orchestration](/docs/workflows/agent-orchestration)
+- [Workflow Signals](/docs/workflows/signals)
+- [Workflow Dependencies](/docs/workflows/dependencies)
+- [Loops](/docs/workflows/loops)
+- [Artifacts](/docs/features/artifacts)
+- [PHP API](/docs/api)
