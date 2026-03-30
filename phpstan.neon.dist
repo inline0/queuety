@@ -1,0 +1,10 @@
+parameters:
+    level: 5
+    paths:
+        - src
+        - cli
+    tmpDir: .phpstan
+    scanFiles:
+        - phpstan/stubs/wordpress.php
+        - phpstan/stubs/wp-cli.php
+

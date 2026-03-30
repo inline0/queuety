@@ -1,5 +1,6 @@
 /vendor/
 /node_modules/
 /.phpunit.cache/
+/.phpstan/
 composer.lock
 package-lock.json

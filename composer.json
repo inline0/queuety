@@ -27,10 +27,12 @@
         "test": "phpunit",
         "test:unit": "phpunit --testsuite unit",
         "test:integration": "phpunit --testsuite integration",
+        "stan": "phpstan analyse --configuration=phpstan.neon.dist",
         "cs": "phpcs --warning-severity=0",
         "cs:fix": "phpcbf"
     },
     "require-dev": {
+        "phpstan/phpstan": "^2.1",
         "phpunit/phpunit": "^13.0",
         "squizlabs/php_codesniffer": "^3.7",
         "wp-coding-standards/wpcs": "^3.0",
