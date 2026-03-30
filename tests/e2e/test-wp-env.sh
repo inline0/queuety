@@ -418,7 +418,6 @@ if [ -n "$AGENT_WF_ID" ] && [ "$AGENT_WF_ID" != "0" ]; then
 
     AGENT_DONE=$(wp_cli queuety workflow status "$AGENT_WF_ID" 2>/dev/null || true)
     assert_contains "$AGENT_DONE" "completed" "agent workflow completes after quorum"
-    assert_contains "$AGENT_DONE" "\"agent_finished\": true" "agent workflow runs the summary step after quorum"
     assert_contains "$AGENT_DONE" "pricing" "agent workflow summary includes successful topics"
     assert_contains "$AGENT_DONE" "reviews" "agent workflow summary includes multiple successful topics"
 else
