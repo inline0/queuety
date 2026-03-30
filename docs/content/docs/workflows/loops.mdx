@@ -14,6 +14,8 @@ Use:
 
 Both methods target an earlier named step, so the loop stays serializable, replayable, and guarded by the same workflow runtime as every other step.
 
+The loop condition is evaluated from the persisted public workflow state after the preceding step completes, so every iteration stays durable across worker restarts.
+
 ## `repeat_until()`
 
 ```php
