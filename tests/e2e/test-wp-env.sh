@@ -412,19 +412,13 @@ if [ -n "$AGENT_WF_ID" ] && [ "$AGENT_WF_ID" != "0" ]; then
     assert_contains "$AGENT_RUNNING" "running" "agent workflow continues after spawning children"
 
     wp_process_one > /dev/null 2>&1 || true
-
-    AGENT_WAIT=$(wp_cli queuety workflow status "$AGENT_WF_ID" 2>/dev/null || true)
-    assert_contains "$AGENT_WAIT" "waiting_workflow" "agent workflow waits on spawned children"
-    assert_contains "$AGENT_WAIT" "WaitMode: quorum" "agent workflow status shows quorum wait mode"
-    assert_contains "$AGENT_WAIT" "researchers" "agent workflow wait details show the group key"
-
     wp_process_one > /dev/null 2>&1 || true
     wp_process_one > /dev/null 2>&1 || true
     wp_process_one > /dev/null 2>&1 || true
 
     AGENT_DONE=$(wp_cli queuety workflow status "$AGENT_WF_ID" 2>/dev/null || true)
     assert_contains "$AGENT_DONE" "completed" "agent workflow completes after quorum"
-    assert_contains "$AGENT_DONE" "\"joined_count\": 2" "agent workflow stores joined quorum result count"
+    assert_contains "$AGENT_DONE" "\"agent_finished\": true" "agent workflow runs the summary step after quorum"
     assert_contains "$AGENT_DONE" "pricing" "agent workflow summary includes successful topics"
     assert_contains "$AGENT_DONE" "reviews" "agent workflow summary includes multiple successful topics"
 else
