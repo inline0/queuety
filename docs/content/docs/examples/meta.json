@@ -1,3 +1,3 @@
 {
-  "pages": ["index", "neuron-planner-executor", "neuron-streaming-step", "neuron-memory-review", "neuron-dependent-workflows"]
+  "pages": ["index", "neuron-planner-executor", "neuron-session-state-machine", "neuron-streaming-step", "neuron-memory-review", "neuron-dependent-workflows"]
 }

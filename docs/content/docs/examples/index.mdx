@@ -9,7 +9,7 @@ This section focuses on complete patterns rather than isolated primitives.
 
 The first examples here use [Neuron](https://docs.neuron-ai.dev/overview/getting-started) as the agent runtime, while Queuety stays responsible for orchestration:
 
-- Queuety owns workflow durability, retries, fan-out, cross-workflow waits, and human gates
+- Queuety owns workflow durability, state-machine lifecycle, retries, fan-out, cross-workflow waits, and human gates
 - Neuron owns model/provider selection, agent execution, streaming, and chat memory
 
 That split is deliberate. Neuron has its own workflow concepts, but these examples intentionally keep Queuety as the orchestration engine and use Neuron only for agent execution concerns.
@@ -27,8 +27,9 @@ The examples below assume you are comfortable creating Neuron `Agent` classes an
 ## Neuron examples
 
 - [Neuron Planner / Executor](/docs/examples/neuron-planner-executor)
+- [Neuron Session State Machine](/docs/examples/neuron-session-state-machine)
 - [Neuron Streaming Step](/docs/examples/neuron-streaming-step)
-- [Neuron Memory + Review Loop](/docs/examples/neuron-memory-review)
+- [Neuron Memory + Review State Machine](/docs/examples/neuron-memory-review)
 - [Neuron Dependent Workflows](/docs/examples/neuron-dependent-workflows)
 
 ## How to read these examples
@@ -36,13 +37,15 @@ The examples below assume you are comfortable creating Neuron `Agent` classes an
 Each example answers a slightly different question:
 
 - how to swap Neuron providers while Queuety coordinates the run
+- how to keep a long-lived agent or chat session in explicit lifecycle states
 - how to wrap Neuron streaming in a durable `StreamingStep`
-- how to keep Neuron conversation memory across review loops
+- how to keep Neuron conversation memory across human review rounds
 - how to make one top-level workflow wait for another before continuing
 
 If you want the primitive-level explanation behind the examples, also see:
 
 - [Agent Orchestration](/docs/workflows/agent-orchestration)
+- [State Machines](/docs/state-machines)
 - [Async Handoffs](/docs/workflows/async-handoffs)
 - [Workflow Signals](/docs/workflows/signals)
 - [Workflow Dependencies](/docs/workflows/dependencies)

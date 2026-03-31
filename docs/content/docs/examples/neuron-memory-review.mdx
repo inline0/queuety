@@ -1,11 +1,11 @@
 ---
-title: Neuron Memory + Review Loop
-description: Combine Neuron SQL chat history with Queuety human review steps.
+title: Neuron Memory + Review State Machine
+description: Keep Neuron chat memory across human review rounds with a Queuety state machine.
 ---
 
-# Neuron Memory + Review Loop
+# Neuron Memory + Review State Machine
 
-This pattern is useful when an agent should keep conversational context across a review loop, but the overall lifecycle should still be orchestrated by Queuety.
+This pattern is useful when an agent should keep conversational context across repeated human review rounds, but the overall lifecycle should still be orchestrated by Queuety.
 
 The split is:
 
@@ -16,7 +16,7 @@ The split is:
 
 If a reviewer rejects a draft and asks for revisions, the next agent call should not have to reconstruct the whole context from scratch.
 
-Neuron's `SQLChatHistory` is a good fit for that because the agent can keep working inside the same conversation thread while Queuety pauses, resumes, and routes the workflow.
+Neuron's `SQLChatHistory` is a good fit for that because the agent can keep working inside the same conversation thread while Queuety routes reviewer decisions and revision rounds.
 
 ## The Neuron agent with SQL-backed history
 
@@ -70,98 +70,97 @@ final class EditorAgent extends Agent
 ## Draft once, revise with the same memory thread
 
 ```php
-namespace App\Workflow\Steps;
+namespace App\StateMachines\Actions;
 
 use App\Neuron\EditorAgent;
 use NeuronAI\Chat\Messages\UserMessage;
-use Queuety\Step;
+use Queuety\Contracts\StateAction;
 
-final class DraftBriefStep implements Step
+final class DraftBriefAction implements StateAction
 {
     public function __construct(private readonly \PDO $pdo) {}
 
-    public function handle(array $state): array
+    public function handle(array $state, ?string $event = null, array $event_payload = []): array|string
     {
         $threadId = $state['neuron_thread_id'] ?? sprintf(
             'brief:%d:editor',
             $state['brief_id'],
         );
 
-        $agent = new EditorAgent($threadId, $this->pdo);
+        $prompt = "Write the first draft for brief {$state['brief_id']}.";
 
+        if ('reject' === $event) {
+            $prompt = sprintf(
+                'Revise the draft using these review notes: %s',
+                $event_payload['reason'] ?? 'Tighten the draft and address reviewer concerns.',
+            );
+        }
+
+        $agent = new EditorAgent($threadId, $this->pdo);
         $message = $agent->chat(
-            new UserMessage("Write the first draft for brief {$state['brief_id']}.")
+            new UserMessage($prompt)
         )->getMessage();
 
         return [
             'neuron_thread_id' => $threadId,
             'draft_markdown' => $message->getContent(),
+            'review_round' => (int) ($state['review_round'] ?? 0) + 1,
+            '_event' => 'draft_ready',
         ];
-    }
-
-    public function config(): array
-    {
-        return [];
-    }
-}
-
-final class ReviseBriefStep implements Step
-{
-    public function __construct(private readonly \PDO $pdo) {}
-
-    public function handle(array $state): array
-    {
-        $agent = new EditorAgent($state['neuron_thread_id'], $this->pdo);
-
-        $message = $agent->chat(
-            new UserMessage(sprintf(
-                "Revise the draft using these review notes: %s",
-                $state['review']['data']['reason'] ?? 'No notes provided.',
-            ))
-        )->getMessage();
-
-        return [
-            'draft_markdown' => $message->getContent(),
-        ];
-    }
-
-    public function config(): array
-    {
-        return [];
     }
 }
 ```
 
-## The Queuety workflow
+## The Queuety state machine
 
 ```php
+use Queuety\Enums\StateMachineStatus;
 use Queuety\Queuety;
-use App\Workflows\ReviewApprovedCondition;
 
-Queuety::workflow('brief_review_loop')
-    ->max_transitions(10)
-    ->then(DraftBriefStep::class, 'draft')
-    ->await_decision(result_key: 'review')
-    ->repeat_until(
-        target_step: 'draft',
-        condition_class: ReviewApprovedCondition::class,
-        max_iterations: 5,
-    )
-    ->then(PublishBriefStep::class)
+$machine_id = Queuety::machine('brief_review_session')
+    ->version('brief-review-session.v1')
+    ->state('drafting')
+    ->action(DraftBriefAction::class)
+    ->on('draft_ready', 'awaiting_review')
+    ->state('awaiting_review')
+    ->on('approve', 'completed')
+    ->on('reject', 'drafting')
+    ->state('completed', StateMachineStatus::Completed)
     ->dispatch([
         'brief_id' => 42,
     ]);
+
+Queuety::machine_event(
+    $machine_id,
+    'reject',
+    [ 'reason' => 'Tighten the introduction and add pricing context.' ]
+);
+
+Queuety::machine_event(
+    $machine_id,
+    'approve',
+    [ 'reviewer' => 'editor@example.com' ]
+);
 ```
 
-`ReviewApprovedCondition` can read `$state['review']['outcome']` directly, and `repeat_until()` keeps the workflow on the drafting loop until the condition matches.
+The first pass enters `drafting`, runs the queued action, and transitions into `awaiting_review`.
 
-The important part is that `DraftBriefStep` can keep using the same Neuron `thread_id` on each pass, so the agent keeps its prior conversation context while Queuety keeps the durable workflow state and review gates.
+If the reviewer rejects the draft, the machine moves back into `drafting`. Because the `reject` event payload is passed into `DraftBriefAction`, the next draft can use the reviewer notes without losing the original Neuron thread history.
 
-## Why this is cleaner than storing everything only in workflow state
+## Why this is cleaner than a workflow loop
 
-Workflow state is excellent for orchestration facts:
+The earlier workflow-loop shape worked, but the actual problem here is lifecycle-oriented:
 
-- review outcome
+- a draft is waiting for human review
+- a reviewer can approve or reject it
+- rejection returns the session to drafting
+- approval finishes the session
+
+That maps more directly to a state machine than to a linear workflow with a back-edge.
+
+Workflow state is still excellent for orchestration facts:
+
+- review round count
 - artifact IDs
 - workflow IDs
 - routing decisions
@@ -174,7 +173,18 @@ Neuron memory is better for conversational context:
 
 Using both gives each system the job it is best at.
 
+## When to keep this as a workflow instead
+
+Prefer a workflow when the review path is tightly bounded and execution-oriented, for example:
+
+- generate one draft
+- wait for one approval
+- publish
+
+Prefer a state machine when the session may revisit the same states several times and outside events drive the lifecycle.
+
 ## Related docs
 
+- [State Machines](/docs/state-machines)
 - [Workflow Signals](/docs/workflows/signals)
 - [Agent Orchestration](/docs/workflows/agent-orchestration)

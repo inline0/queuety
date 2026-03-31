@@ -161,7 +161,10 @@ You could do that, but you would lose the orchestration advantages:
 
 This pattern keeps the agent code simple while letting Queuety own the durable orchestration.
 
+If the planner belongs to a longer-lived agent session, keep this workflow pattern for the execution layer and let a [state machine](/docs/state-machines) own the outer lifecycle.
+
 ## Related docs
 
 - [Async Handoffs](/docs/workflows/async-handoffs)
 - [Agent Orchestration](/docs/workflows/agent-orchestration)
+- [State Machines](/docs/state-machines)

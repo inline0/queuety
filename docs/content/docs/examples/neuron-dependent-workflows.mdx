@@ -110,6 +110,10 @@ Prefer one workflow when:
 - the stages are tightly coupled
 - they share one lifecycle and one state bag
 
+## Where a state machine fits
+
+If this writing flow belongs to a longer-lived editorial session, let a [state machine](/docs/state-machines) own the outer lifecycle and use these workflows for the bounded execution stages. That keeps lifecycle states like `awaiting_brief`, `researching`, `awaiting_review`, and `completed` explicit while preserving workflow durability inside each phase.
+
 ## One important distinction
 
 This pattern means:
@@ -127,3 +131,4 @@ If you want the second behavior, have a parent workflow wait for `Y` and only th
 - [Workflow Dependencies](/docs/workflows/dependencies)
 - [Async Handoffs](/docs/workflows/async-handoffs)
 - [Agent Orchestration](/docs/workflows/agent-orchestration)
+- [State Machines](/docs/state-machines)
