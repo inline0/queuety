@@ -468,7 +468,10 @@ class CliCommandAdapters {
 	public static function workflow_list( array $args, array $assoc_args ): array {
 		return self::php_plan(
 			Queuety::class . '::list_workflows',
-			array( self::optional_assoc( $assoc_args, 'status' ) )
+			array(
+				self::optional_assoc( $assoc_args, 'status' ),
+				self::int_assoc( $assoc_args, 'limit', 50 ),
+			)
 		);
 	}
 
@@ -484,7 +487,11 @@ class CliCommandAdapters {
 	public static function workflow_timeline( array $args, array $assoc_args ): array {
 		return self::php_plan(
 			Queuety::class . '::workflow_timeline',
-			array( (int) self::required_positional( $args, 0, 'id' ) )
+			array(
+				(int) self::required_positional( $args, 0, 'id' ),
+				self::int_assoc( $assoc_args, 'limit', 100 ),
+				self::int_assoc( $assoc_args, 'offset', 0 ),
+			)
 		);
 	}
 

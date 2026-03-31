@@ -201,31 +201,43 @@ class Queue {
 
 		$pdo->beginTransaction();
 		try {
-			$stmt = $pdo->prepare(
-				"SELECT * FROM {$table}
-				WHERE status = :status
-					AND queue = :queue
-					AND available_at <= NOW()
-					AND (
-						workflow_id IS NULL
-						OR workflow_id IN (
-							SELECT id FROM {$wf_tbl}
-							WHERE status IN (:workflow_running, :workflow_paused)
+				$stmt = $pdo->prepare(
+					"SELECT job.*
+					FROM {$table} AS job FORCE INDEX (idx_queue_claim)
+					WHERE job.status = :status
+						AND job.queue = :queue
+						AND job.available_at <= NOW()
+						AND (
+							job.workflow_id IS NULL
+							OR EXISTS (
+								SELECT 1
+								FROM {$wf_tbl} AS wf
+								WHERE wf.id = job.workflow_id
+									AND wf.status IN (:workflow_running, :workflow_paused)
+							)
 						)
+						AND (
+							job.depends_on IS NULL
+							OR EXISTS (
+								SELECT 1
+								FROM {$table} AS dep
+								WHERE dep.id = job.depends_on
+									AND dep.status = :dependency_completed
+							)
+						)
+					ORDER BY job.priority DESC, job.id ASC
+					LIMIT 1
+					FOR UPDATE SKIP LOCKED"
+				);
+				$stmt->execute(
+					array(
+						'status'               => JobStatus::Pending->value,
+						'queue'                => $queue,
+						'workflow_running'     => 'running',
+						'workflow_paused'      => 'paused',
+						'dependency_completed' => JobStatus::Completed->value,
 					)
-					AND (depends_on IS NULL OR depends_on IN (SELECT id FROM {$table} AS dep WHERE dep.status = 'completed'))
-				ORDER BY priority DESC, id ASC
-				LIMIT 1
-				FOR UPDATE SKIP LOCKED"
-			);
-			$stmt->execute(
-				array(
-					'status'           => JobStatus::Pending->value,
-					'queue'            => $queue,
-					'workflow_running' => 'running',
-					'workflow_paused'  => 'paused',
-				)
-			);
+				);
 
 			$row = $stmt->fetch();
 			if ( ! $row ) {
@@ -423,7 +435,12 @@ class Queue {
 			'buried'     => 0,
 		);
 
-		while ( $row = $stmt->fetch() ) {
+		while ( true ) {
+			$row = $stmt->fetch();
+			if ( false === $row ) {
+				break;
+			}
+
 			$result[ $row['status'] ] = (int) $row['cnt'];
 		}
 

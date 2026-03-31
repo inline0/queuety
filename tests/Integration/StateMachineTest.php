@@ -113,7 +113,27 @@ class StateMachineTest extends IntegrationTestCase {
 				'machine_completed',
 			),
 			$events
+			);
+	}
+
+	public function test_machine_timeline_supports_limit_and_offset(): void {
+		$machine_id = Queuety::machine( 'chat_session' )
+			->state( 'awaiting_user' )
+			->on( 'user_message', 'completed' )
+			->state( 'completed', StateMachineStatus::Completed )
+			->dispatch( array( 'thread_id' => 7 ) );
+
+		Queuety::machine_event(
+			$machine_id,
+			'user_message',
+			array(
+				'message' => 'hello',
+				'author'  => 'dennis',
+			)
 		);
+
+		$events = array_column( Queuety::machine_timeline( $machine_id, 2, 1 ), 'event' );
+		$this->assertSame( array( 'machine_waiting', 'event_received' ), $events );
 	}
 
 	public function test_machine_entry_action_transitions_to_waiting_state_and_guarded_event_completes_it(): void {

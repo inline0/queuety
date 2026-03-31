@@ -275,6 +275,18 @@ class WorkflowCommandTest extends TestCase {
 		$this->assertSame( 'running', $call['items'][0]['Status'] );
 	}
 
+	public function test_list_honors_limit(): void {
+		$this->skip_without_db();
+
+		$this->create_test_workflow( 'running' );
+		$this->create_test_workflow( 'failed' );
+
+		$this->cmd->list_( array(), array( 'limit' => 1 ) );
+
+		$call = $this->last_format_call();
+		$this->assertCount( 1, $call['items'] );
+	}
+
 	// -- timeline() shows events ---------------------------------------------
 
 	public function test_timeline_shows_events(): void {
@@ -302,6 +314,22 @@ class WorkflowCommandTest extends TestCase {
 		$this->cmd->timeline( array( $wf_id ), array() );
 
 		$this->assertSame( array( "No events found for workflow #{$wf_id}." ), \WP_CLI::$log_messages );
+	}
+
+	public function test_timeline_honors_limit_and_offset(): void {
+		$this->skip_without_db();
+
+		$wf_id = $this->create_test_workflow();
+		$event_log = Queuety::workflow_events();
+		$event_log->record_step_started( $wf_id, 0, 'StepA' );
+		$event_log->record_step_completed( $wf_id, 0, 'StepA', array(), array(), 100 );
+		$event_log->record_step_started( $wf_id, 1, 'StepB' );
+
+		$this->cmd->timeline( array( $wf_id ), array( 'limit' => 1, 'offset' => 1 ) );
+
+		$call = $this->last_format_call();
+		$this->assertCount( 1, $call['items'] );
+		$this->assertSame( 'step_completed', $call['items'][0]['Event'] );
 	}
 
 	public function test_approve_reject_and_input_commands_store_signals(): void {

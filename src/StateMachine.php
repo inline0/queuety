@@ -158,7 +158,10 @@ class StateMachine {
 	public function get_status( int $machine_id ): ?StateMachineState {
 		$table = $this->conn->table( Config::table_state_machines() );
 		$stmt  = $this->conn->pdo()->prepare(
-			"SELECT * FROM {$table} WHERE id = :id LIMIT 1"
+			"SELECT id, name, status, current_state, state, definition, definition_hash, definition_version, idempotency_key, error_message
+			FROM {$table}
+			WHERE id = :id
+			LIMIT 1"
 		);
 		$stmt->execute( array( 'id' => $machine_id ) );
 		$row = $stmt->fetch();
@@ -224,11 +227,13 @@ class StateMachine {
 	/**
 	 * Return the timeline for one machine.
 	 *
-	 * @param int $machine_id Machine ID.
+	 * @param int      $machine_id Machine ID.
+	 * @param int|null $limit      Maximum rows to return.
+	 * @param int      $offset     Timeline offset.
 	 * @return array<int, array<string, mixed>>
 	 */
-	public function timeline( int $machine_id ): array {
-		return null === $this->event_log ? array() : $this->event_log->get_timeline( $machine_id );
+	public function timeline( int $machine_id, ?int $limit = 100, int $offset = 0 ): array {
+		return null === $this->event_log ? array() : $this->event_log->get_timeline( $machine_id, $limit, $offset );
 	}
 
 	/**

@@ -202,6 +202,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * [--format=<format>]
 	 * : Output format. Default: 'table'.
 	 *
+	 * [--limit=<limit>]
+	 * : Maximum workflows to return. Default: 50.
+	 *
 	 * [--with-content]
 	 * : Include artifact content in the output.
 	 *
@@ -326,13 +329,14 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 */
 	public function list_( $args, $assoc_args ) {
 		$format        = $assoc_args['format'] ?? 'table';
+		$limit         = isset( $assoc_args['limit'] ) ? max( 1, (int) $assoc_args['limit'] ) : 50;
 		$status_filter = null;
 
 		if ( isset( $assoc_args['status'] ) ) {
 			$status_filter = \Queuety\Enums\WorkflowStatus::tryFrom( $assoc_args['status'] );
 		}
 
-		$workflows = Queuety::list_workflows( $status_filter?->value );
+		$workflows = Queuety::list_workflows( $status_filter?->value, $limit );
 
 		$items = array_map(
 			fn( $wf ) => array(
@@ -368,13 +372,21 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * [--format=<format>]
 	 * : Output format. Default: 'table'.
 	 *
+	 * [--limit=<limit>]
+	 * : Maximum events to return. Default: 100.
+	 *
+	 * [--offset=<offset>]
+	 * : Number of earlier events to skip. Default: 0.
+	 *
 	 * @param array $args       Positional arguments.
 	 * @param array $assoc_args Associative arguments.
 	 */
 	public function timeline( $args, $assoc_args ) {
 		$workflow_id = (int) $args[0];
 		$format      = $assoc_args['format'] ?? 'table';
-		$events      = Queuety::workflow_timeline( $workflow_id );
+		$limit       = isset( $assoc_args['limit'] ) ? max( 1, (int) $assoc_args['limit'] ) : 100;
+		$offset      = isset( $assoc_args['offset'] ) ? max( 0, (int) $assoc_args['offset'] ) : 0;
+		$events      = Queuety::workflow_timeline( $workflow_id, $limit, $offset );
 
 		if ( empty( $events ) ) {
 			\WP_CLI::log( "No events found for workflow #{$workflow_id}." );

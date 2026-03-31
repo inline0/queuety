@@ -101,7 +101,7 @@ class Metrics {
 			'since' => $since,
 		);
 
-		$sql = "SELECT duration_ms FROM {$table}
+		$sql = "SELECT COUNT(*) AS cnt FROM {$table}
 			WHERE event = :event AND created_at >= :since AND duration_ms IS NOT NULL";
 
 		if ( null !== $handler ) {
@@ -109,21 +109,31 @@ class Metrics {
 			$params['handler'] = $handler;
 		}
 
-		$sql .= ' ORDER BY duration_ms ASC';
-
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( $params );
-		$durations = array_column( $stmt->fetchAll(), 'duration_ms' );
-
-		if ( empty( $durations ) ) {
+		$row   = $stmt->fetch();
+		$count = (int) ( $row['cnt'] ?? 0 );
+		if ( 0 === $count ) {
 			return 0.0;
 		}
 
-		$durations = array_map( 'floatval', $durations );
-		$index     = (int) ceil( 0.95 * count( $durations ) ) - 1;
-		$index     = max( 0, min( $index, count( $durations ) - 1 ) );
+		$index = (int) ceil( 0.95 * $count ) - 1;
+		$index = max( 0, min( $index, $count - 1 ) );
 
-		return $durations[ $index ];
+		$sql = "SELECT duration_ms FROM {$table}
+			WHERE event = :event AND created_at >= :since AND duration_ms IS NOT NULL";
+
+		if ( null !== $handler ) {
+			$sql .= ' AND handler = :handler';
+		}
+
+		$sql .= " ORDER BY duration_ms ASC LIMIT 1 OFFSET {$index}";
+
+		$stmt = $this->conn->pdo()->prepare( $sql );
+		$stmt->execute( $params );
+		$row = $stmt->fetch();
+
+		return null !== ( $row['duration_ms'] ?? null ) ? (float) $row['duration_ms'] : 0.0;
 	}
 
 	/**
@@ -153,7 +163,12 @@ class Metrics {
 
 		$completed = 0;
 		$failed    = 0;
-		while ( $row = $stmt->fetch() ) {
+		while ( true ) {
+			$row = $stmt->fetch();
+			if ( false === $row ) {
+				break;
+			}
+
 			if ( 'completed' === $row['event'] ) {
 				$completed = (int) $row['cnt'];
 			} elseif ( 'failed' === $row['event'] || 'buried' === $row['event'] ) {
@@ -191,7 +206,12 @@ class Metrics {
 		$stmt->execute( array( 'since' => $since ) );
 
 		$handlers = array();
-		while ( $row = $stmt->fetch() ) {
+		while ( true ) {
+			$row = $stmt->fetch();
+			if ( false === $row ) {
+				break;
+			}
+
 			$h = $row['handler'];
 			if ( ! isset( $handlers[ $h ] ) ) {
 				$handlers[ $h ] = array(

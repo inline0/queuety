@@ -233,17 +233,25 @@ class WorkflowEventLog {
 	/**
 	 * Get the full timeline of events for a workflow.
 	 *
-	 * @param int $workflow_id The workflow ID.
+	 * @param int      $workflow_id The workflow ID.
+	 * @param int|null $limit       Maximum rows to return.
+	 * @param int      $offset      Timeline offset.
 	 * @return array Array of event rows, ordered by id.
 	 */
-	public function get_timeline( int $workflow_id ): array {
-		$table = $this->conn->table( Config::table_workflow_events() );
-
-		$stmt = $this->conn->pdo()->prepare(
-			"SELECT * FROM {$table}
+	public function get_timeline( int $workflow_id, ?int $limit = 100, int $offset = 0 ): array {
+		$table  = $this->conn->table( Config::table_workflow_events() );
+		$limit  = null === $limit ? null : max( 1, $limit );
+		$offset = max( 0, $offset );
+		$sql    = "SELECT id, workflow_id, step_index, handler, event, state_snapshot, step_output, duration_ms, error_message, created_at
+			FROM {$table}
 			WHERE workflow_id = :workflow_id
-			ORDER BY id ASC"
-		);
+			ORDER BY id ASC";
+
+		if ( null !== $limit ) {
+			$sql .= " LIMIT {$limit} OFFSET {$offset}";
+		}
+
+		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
 
 		$rows = $stmt->fetchAll();

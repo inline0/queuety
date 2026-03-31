@@ -224,6 +224,19 @@ class WorkflowEventLogTest extends TestCase {
 		$this->assertSame( 'step_started', $timeline[2]['event'] );
 	}
 
+	public function test_get_timeline_supports_limit_and_offset(): void {
+		$this->skip_without_db();
+
+		$wf_id = $this->create_workflow();
+		$this->event_log->record_step_started( $wf_id, 0, 'StepA' );
+		$this->event_log->record_step_completed( $wf_id, 0, 'StepA', array(), array(), 100 );
+		$this->event_log->record_step_started( $wf_id, 1, 'StepB' );
+
+		$timeline = $this->event_log->get_timeline( $wf_id, 1, 1 );
+		$this->assertCount( 1, $timeline );
+		$this->assertSame( 'step_completed', $timeline[0]['event'] );
+	}
+
 	// -- get_state_at_step ---------------------------------------------------
 
 	public function test_get_state_at_step(): void {

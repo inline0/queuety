@@ -29,10 +29,11 @@ The `step_completed` event includes two key pieces of data:
 
 ### PHP API
 
-Get the full ordered list of events for a workflow:
+Get the ordered list of events for a workflow:
 
 ```php
 $events = Queuety::workflow_timeline( $workflow_id );
+$next   = Queuety::workflow_timeline( $workflow_id, 100, 100 );
 
 foreach ( $events as $event ) {
     echo $event['step_index'] . ' ' . $event['event'] . ' ' . $event['handler'] . "\n";
@@ -70,10 +71,16 @@ Returns `null` if the step has not completed or no snapshot was recorded.
 
 ### CLI
 
-View the full timeline as a table:
+View the timeline as a table:
 
 ```bash
 wp queuety workflow timeline 42
+```
+
+Limit the output when a run has a longer history:
+
+```bash
+wp queuety workflow timeline 42 --limit=100 --offset=100
 ```
 
 Output:
@@ -140,8 +147,9 @@ For advanced use cases, access the `WorkflowEventLog` instance:
 ```php
 $log = Queuety::workflow_events();
 
-// Get the full timeline
+// Get the timeline, optionally in pages
 $events = $log->get_timeline( $workflow_id );
+$next   = $log->get_timeline( $workflow_id, 100, 100 );
 
 // Get state at a specific step
 $snapshot = $log->get_state_at_step( $workflow_id, $step_index );

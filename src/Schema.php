@@ -15,7 +15,7 @@ class Schema {
 	/**
 	 * Current schema version for plugin-managed upgrades.
 	 */
-	public const CURRENT_VERSION = '0.17.0';
+	public const CURRENT_VERSION = '0.18.0';
 
 	/**
 	 * Create all Queuety tables.
@@ -63,12 +63,15 @@ class Schema {
 				batch_id BIGINT UNSIGNED DEFAULT NULL,
 				heartbeat_data JSON DEFAULT NULL,
 				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				INDEX idx_queue_status_available (queue, status, available_at, priority),
-				INDEX idx_status (status),
-				INDEX idx_reserved (status, reserved_at),
-				INDEX idx_workflow (workflow_id, step_index),
-				INDEX idx_unique (handler, payload_hash, status),
-				INDEX idx_depends (depends_on),
+					INDEX idx_queue_status_available (queue, status, available_at, priority),
+					INDEX idx_queue_claim (queue, status, priority, id, available_at),
+					INDEX idx_status (status),
+					INDEX idx_status_completed (status, completed_at),
+					INDEX idx_reserved (status, reserved_at),
+					INDEX idx_handler_status (handler, status),
+					INDEX idx_workflow (workflow_id, step_index),
+					INDEX idx_unique (handler, payload_hash, status),
+					INDEX idx_depends (depends_on),
 				INDEX idx_batch (batch_id)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
@@ -88,9 +91,10 @@ class Schema {
 				failed_at DATETIME DEFAULT NULL,
 				error_message TEXT DEFAULT NULL,
 				deadline_at DATETIME DEFAULT NULL,
-				INDEX idx_status (status),
-				INDEX idx_parent (parent_workflow_id),
-				INDEX idx_deadline (status, deadline_at)
+					INDEX idx_status (status),
+					INDEX idx_status_completed (status, completed_at),
+					INDEX idx_parent (parent_workflow_id),
+					INDEX idx_deadline (status, deadline_at)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 
@@ -211,8 +215,9 @@ class Schema {
 				options LONGTEXT NOT NULL,
 				cancelled_at DATETIME DEFAULT NULL,
 				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				finished_at DATETIME DEFAULT NULL
-			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+					finished_at DATETIME DEFAULT NULL,
+					INDEX idx_finished (finished_at)
+				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 
 		$pdo->exec(
@@ -241,9 +246,10 @@ class Schema {
 				duration_ms INT UNSIGNED DEFAULT NULL,
 				error_message TEXT DEFAULT NULL,
 				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				INDEX idx_workflow (workflow_id, step_index),
-				INDEX idx_created (created_at)
-			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+					INDEX idx_workflow (workflow_id, step_index),
+					INDEX idx_timeline (workflow_id, id),
+					INDEX idx_created (created_at)
+				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 
 		$pdo->exec(
@@ -375,6 +381,11 @@ class Schema {
 			$version = '0.17.0';
 		}
 
+		if ( version_compare( $version, '0.18.0', '<' ) ) {
+			self::migrate_0180( $conn );
+			$version = '0.18.0';
+		}
+
 		return self::CURRENT_VERSION;
 	}
 
@@ -389,17 +400,26 @@ class Schema {
 			return '0.5.0';
 		}
 
-		$jobs            = $conn->table( Config::table_jobs() );
-		$wf              = $conn->table( Config::table_workflows() );
-		$schedules       = $conn->table( Config::table_schedules() );
-		$signals         = $conn->table( Config::table_signals() );
-		$workflow_waits  = $conn->table( Config::table_workflow_dependencies() );
-		$workflow_keys   = $conn->table( Config::table_workflow_dispatch_keys() );
-		$batches         = $conn->table( Config::table_batches() );
-		$chunks          = $conn->table( Config::table_chunks() );
-		$workflow_events = $conn->table( Config::table_workflow_events() );
-		$artifacts       = $conn->table( Config::table_artifacts() );
-		$state_machines  = $conn->table( Config::table_state_machines() );
+		$jobs               = $conn->table( Config::table_jobs() );
+		$wf                 = $conn->table( Config::table_workflows() );
+		$schedules          = $conn->table( Config::table_schedules() );
+		$signals            = $conn->table( Config::table_signals() );
+		$workflow_waits     = $conn->table( Config::table_workflow_dependencies() );
+		$workflow_keys      = $conn->table( Config::table_workflow_dispatch_keys() );
+		$batches            = $conn->table( Config::table_batches() );
+		$chunks             = $conn->table( Config::table_chunks() );
+		$workflow_events    = $conn->table( Config::table_workflow_events() );
+			$artifacts      = $conn->table( Config::table_artifacts() );
+			$state_machines = $conn->table( Config::table_state_machines() );
+
+		if (
+			self::table_exists( $conn, $state_machines ) &&
+			self::index_exists( $conn, $jobs, 'idx_queue_claim' ) &&
+			self::index_exists( $conn, $wf, 'idx_status_completed' ) &&
+			self::index_exists( $conn, $batches, 'idx_finished' )
+		) {
+			return '0.18.0';
+		}
 
 		if ( self::table_exists( $conn, $state_machines ) ) {
 			return '0.17.0';
@@ -837,8 +857,29 @@ class Schema {
 				INDEX idx_machine (machine_id, id),
 				INDEX idx_machine_event (machine_id, event),
 				INDEX idx_created (created_at)
-			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
+	}
+
+	/**
+	 * Migrate from v0.17.x to v0.18.0.
+	 *
+	 * Adds indexes for queue claiming, operator queries, and retention cleanup.
+	 *
+	 * @param Connection $conn Database connection.
+	 */
+	public static function migrate_0180( Connection $conn ): void {
+		$jobs            = $conn->table( Config::table_jobs() );
+		$wf              = $conn->table( Config::table_workflows() );
+		$batches         = $conn->table( Config::table_batches() );
+		$workflow_events = $conn->table( Config::table_workflow_events() );
+
+		self::add_index_if_missing( $conn, $jobs, 'idx_queue_claim', 'INDEX idx_queue_claim (queue, status, priority, id, available_at)' );
+		self::add_index_if_missing( $conn, $jobs, 'idx_status_completed', 'INDEX idx_status_completed (status, completed_at)' );
+		self::add_index_if_missing( $conn, $jobs, 'idx_handler_status', 'INDEX idx_handler_status (handler, status)' );
+		self::add_index_if_missing( $conn, $wf, 'idx_status_completed', 'INDEX idx_status_completed (status, completed_at)' );
+		self::add_index_if_missing( $conn, $batches, 'idx_finished', 'INDEX idx_finished (finished_at)' );
+		self::add_index_if_missing( $conn, $workflow_events, 'idx_timeline', 'INDEX idx_timeline (workflow_id, id)' );
 	}
 
 	/**

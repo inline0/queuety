@@ -607,12 +607,13 @@ $machines = Queuety::list_machines();
 $waiting  = Queuety::list_machines( status: 'waiting_event' );
 ```
 
-### `Queuety::machine_timeline( $machine_id )`
+### `Queuety::machine_timeline( $machine_id, $limit = 100, $offset = 0 )`
 
 Get the durable event timeline for one machine.
 
 ```php
 $timeline = Queuety::machine_timeline( $machine_id );
+$page_two = Queuety::machine_timeline( $machine_id, 100, 100 );
 ```
 
 See [State Machines](/docs/state-machines) for the lifecycle model and usage patterns.
@@ -868,12 +869,13 @@ Get the `WorkflowEventLog` instance.
 $log = Queuety::workflow_events();
 ```
 
-### `Queuety::workflow_timeline( $workflow_id )`
+### `Queuety::workflow_timeline( $workflow_id, $limit = 100, $offset = 0 )`
 
 Get the full timeline of events for a workflow. Returns an array of event rows ordered by ID.
 
 ```php
 $events = Queuety::workflow_timeline( $workflow_id );
+$next   = Queuety::workflow_timeline( $workflow_id, 100, 100 );
 ```
 
 Each event row contains: `id`, `workflow_id`, `step_index`, `handler`, `event`, `state_snapshot`, `step_output`, `error_message`, `duration_ms`, `created_at`.
@@ -1087,7 +1089,7 @@ Records workflow step transitions with full state snapshots. Access via `Queuety
 | `record_step_started( int $workflow_id, int $step_index, string $handler )` | `void` | Record a step_started event |
 | `record_step_completed( int $workflow_id, int $step_index, string $handler, array $state_snapshot, array $step_output, int $duration_ms )` | `void` | Record a step_completed event with full state snapshot |
 | `record_step_failed( int $workflow_id, int $step_index, string $handler, string $error, int $duration_ms )` | `void` | Record a step_failed event |
-| `get_timeline( int $workflow_id )` | `array` | Get all events for a workflow, ordered by ID |
+| `get_timeline( int $workflow_id, ?int $limit = 100, int $offset = 0 )` | `array` | Get workflow events in order, with optional paging |
 | `get_state_at_step( int $workflow_id, int $step_index )` | `array\|null` | Get the state snapshot after a specific step completed |
 | `prune( int $older_than_days )` | `int` | Delete events older than the given number of days. Returns rows deleted. |
 

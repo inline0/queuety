@@ -76,6 +76,13 @@ class MigrationTest extends IntegrationTestCase {
 				'deadline_at'
 			)
 		);
+		$this->assertTrue(
+			Schema::index_exists(
+				$this->conn,
+				$this->conn->table( 'queuety_jobs' ),
+				'idx_queue_claim'
+			)
+		);
 	}
 
 	// -- migrate_060 on fresh install does not error -------------------------
@@ -265,6 +272,45 @@ class MigrationTest extends IntegrationTestCase {
 				$this->conn,
 				$this->conn->table( 'queuety_state_machine_events' ),
 				'idx_machine_event'
+			)
+		);
+	}
+
+	public function test_migrate_0180_on_fresh_install(): void {
+		Schema::migrate_0180( $this->conn );
+
+		$this->assertTrue(
+			Schema::index_exists(
+				$this->conn,
+				$this->conn->table( 'queuety_jobs' ),
+				'idx_queue_claim'
+			)
+		);
+		$this->assertTrue(
+			Schema::index_exists(
+				$this->conn,
+				$this->conn->table( 'queuety_workflows' ),
+				'idx_status_completed'
+			)
+		);
+		$this->assertTrue(
+			Schema::index_exists(
+				$this->conn,
+				$this->conn->table( 'queuety_batches' ),
+				'idx_finished'
+			)
+		);
+	}
+
+	public function test_migrate_0180_is_idempotent(): void {
+		Schema::migrate_0180( $this->conn );
+		Schema::migrate_0180( $this->conn );
+
+		$this->assertTrue(
+			Schema::index_exists(
+				$this->conn,
+				$this->conn->table( 'queuety_workflow_events' ),
+				'idx_timeline'
 			)
 		);
 	}

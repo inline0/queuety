@@ -739,9 +739,10 @@ class Queuety {
 	 * List workflows with an optional status filter.
 	 *
 	 * @param string|null $status Workflow status filter.
+	 * @param int         $limit  Maximum rows to return.
 	 * @return WorkflowState[]
 	 */
-	public static function list_workflows( ?string $status = null ): array {
+	public static function list_workflows( ?string $status = null, int $limit = 50 ): array {
 		self::ensure_initialized();
 
 		$status_filter = null;
@@ -749,7 +750,7 @@ class Queuety {
 			$status_filter = WorkflowStatus::tryFrom( $status );
 		}
 
-		return self::$workflow->list( $status_filter );
+		return self::$workflow->list( $status_filter, $limit );
 	}
 
 	/**
@@ -1243,12 +1244,14 @@ class Queuety {
 	/**
 	 * Get the full event timeline for one machine.
 	 *
-	 * @param int $machine_id Machine ID.
+	 * @param int      $machine_id Machine ID.
+	 * @param int|null $limit      Maximum events to return.
+	 * @param int      $offset     Timeline offset.
 	 * @return array<int, array<string, mixed>>
 	 */
-	public static function machine_timeline( int $machine_id ): array {
+	public static function machine_timeline( int $machine_id, ?int $limit = 100, int $offset = 0 ): array {
 		self::ensure_initialized();
-		return self::$state_machine->timeline( $machine_id );
+		return self::$state_machine->timeline( $machine_id, $limit, $offset );
 	}
 
 	/**
@@ -1570,12 +1573,14 @@ class Queuety {
 	/**
 	 * Get the full timeline of events for a workflow.
 	 *
-	 * @param int $workflow_id Workflow ID.
+	 * @param int      $workflow_id Workflow ID.
+	 * @param int|null $limit       Maximum events to return.
+	 * @param int      $offset      Timeline offset.
 	 * @return array Array of event rows, ordered by id.
 	 */
-	public static function workflow_timeline( int $workflow_id ): array {
+	public static function workflow_timeline( int $workflow_id, ?int $limit = 100, int $offset = 0 ): array {
 		self::ensure_initialized();
-		return self::$workflow_event_log->get_timeline( $workflow_id );
+		return self::$workflow_event_log->get_timeline( $workflow_id, $limit, $offset );
 	}
 
 	/**

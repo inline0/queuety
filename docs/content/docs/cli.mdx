@@ -261,12 +261,13 @@ wp queuety workflow status <id>
 List workflows.
 
 ```bash
-wp queuety workflow list [--status=<status>] [--format=<format>]
+wp queuety workflow list [--status=<status>] [--limit=<limit>] [--format=<format>]
 ```
 
 | Option | Description |
 |---|---|
 | `--status=<status>` | Filter by status: `running`, `completed`, `failed`, `paused`, `waiting_signal`, `waiting_workflow`, `cancelled` |
+| `--limit=<limit>` | Maximum workflows to return (default: `50`) |
 | `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml` |
 
 The default table includes `StepName` and `WaitMode` so blocked workflows are easier to scan.
@@ -397,12 +398,14 @@ wp queuety workflow cancel 42
 Show the event timeline for a workflow. Displays all step events (started, completed, failed) with timestamps, handlers, and durations.
 
 ```bash
-wp queuety workflow timeline <id> [--format=<format>]
+wp queuety workflow timeline <id> [--limit=<limit>] [--offset=<offset>] [--format=<format>]
 ```
 
 | Option | Description |
 |---|---|
 | `<id>` | Workflow ID (required) |
+| `--limit=<limit>` | Maximum events to return (default: `100`) |
+| `--offset=<offset>` | Number of earlier events to skip (default: `0`) |
 | `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml` |
 
 ```bash

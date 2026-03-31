@@ -262,7 +262,7 @@ class Workflow {
 	 * @return bool
 	 */
 	private function is_duplicate_key_error( \PDOException $e ): bool {
-		$sql_state = (string) $e->getCode();
+		$sql_state  = (string) $e->getCode();
 		$error_info = $e->errorInfo; // phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase -- PDO exposes this property with a fixed name.
 		$driver     = $error_info[1] ?? null;
 
@@ -313,8 +313,8 @@ class Workflow {
 			return null;
 		}
 
-		$counters = $state['_workflow_counters'] ?? array();
-		$summary  = $limits;
+		$counters                      = $state['_workflow_counters'] ?? array();
+		$summary                       = $limits;
 		$summary['transitions']        = (int) ( $counters['transitions'] ?? 0 );
 		$summary['public_state_bytes'] = $this->public_state_size_bytes( $state );
 
@@ -331,7 +331,7 @@ class Workflow {
 			return;
 		}
 
-		$state['_workflow_counters'] ??= array();
+		$state['_workflow_counters']              ??= array();
 		$state['_workflow_counters']['transitions'] = (int) ( $state['_workflow_counters']['transitions'] ?? 0 ) + 1;
 	}
 
@@ -785,16 +785,16 @@ class Workflow {
 	 * @return array
 	 */
 	private function signal_step_output( array $step_def, array $matched_payloads ): array {
-		$result_key    = $this->wait_result_key_for_step( $step_def );
-		$signal_names  = $this->signal_names_for_step( $step_def );
-		$decision_map  = is_array( $step_def['decision_map'] ?? null ) ? $step_def['decision_map'] : array();
+		$result_key   = $this->wait_result_key_for_step( $step_def );
+		$signal_names = $this->signal_names_for_step( $step_def );
+		$decision_map = is_array( $step_def['decision_map'] ?? null ) ? $step_def['decision_map'] : array();
 
 		$matched_payloads = array_intersect_key( $matched_payloads, array_flip( $signal_names ) );
 
 		if ( ! empty( $decision_map ) ) {
-			$selected_signal = array_key_first( $matched_payloads );
+			$selected_signal  = array_key_first( $matched_payloads );
 			$selected_payload = null !== $selected_signal ? ( $matched_payloads[ $selected_signal ] ?? array() ) : array();
-			$outcome = null !== $selected_signal ? ( $decision_map[ $selected_signal ] ?? $selected_signal ) : null;
+			$outcome          = null !== $selected_signal ? ( $decision_map[ $selected_signal ] ?? $selected_signal ) : null;
 
 			$decision = array(
 				'outcome' => $outcome,
@@ -860,7 +860,7 @@ class Workflow {
 		$signal_names = $this->signal_names_for_step( $step_def );
 		if ( empty( $signal_names ) ) {
 			return array(
-				'matched_payloads' => array(),
+				'matched_payloads'  => array(),
 				'first_signal_name' => null,
 				'first_signal_data' => null,
 			);
@@ -885,7 +885,7 @@ class Workflow {
 		);
 		$stmt->execute( $params );
 
-		$matched_payloads = array();
+		$matched_payloads  = array();
 		$first_signal_name = null;
 		$first_signal_data = null;
 
@@ -908,7 +908,7 @@ class Workflow {
 		}
 
 		return array(
-			'matched_payloads' => $matched_payloads,
+			'matched_payloads'  => $matched_payloads,
 			'first_signal_name' => $first_signal_name,
 			'first_signal_data' => $first_signal_data,
 		);
@@ -928,8 +928,8 @@ class Workflow {
 			return null;
 		}
 
-		$mode          = $this->wait_mode_for_step( $step_def );
-		$progress      = $this->resolve_signal_wait_progress( $workflow_id, $step_def, $state );
+		$mode           = $this->wait_mode_for_step( $step_def );
+		$progress       = $this->resolve_signal_wait_progress( $workflow_id, $step_def, $state );
 		$first_payloads = $progress['matched_payloads'];
 
 		if ( WaitMode::Any === $mode ) {
@@ -1158,12 +1158,12 @@ class Workflow {
 		$matched_signals   = array_keys( $progress['matched_payloads'] );
 		$remaining_signals = array_values( array_diff( $signal_names, $matched_signals ) );
 		$details           = array(
-			'step_name'    => $step_def['name'] ?? null,
-			'result_key'   => $this->wait_result_key_for_step( $step_def ),
-			'human_wait'   => $step_def['human_wait'] ?? null,
+			'step_name'     => $step_def['name'] ?? null,
+			'result_key'    => $this->wait_result_key_for_step( $step_def ),
+			'human_wait'    => $step_def['human_wait'] ?? null,
 			'match_payload' => $this->signal_match_payload_for_step( $step_def ),
-			'matched'      => $matched_signals,
-			'remaining'    => $remaining_signals,
+			'matched'       => $matched_signals,
+			'remaining'     => $remaining_signals,
 		);
 
 		$correlation_key = $this->signal_correlation_key_for_step( $step_def );
@@ -2061,9 +2061,9 @@ class Workflow {
 				return;
 			}
 
-			$state        = json_decode( $wf_row['state'], true ) ?: array();
-			$current_step = (int) $wf_row['current_step'];
-			$status       = WorkflowStatus::from( $wf_row['status'] );
+			$state            = json_decode( $wf_row['state'], true ) ?: array();
+			$current_step     = (int) $wf_row['current_step'];
+			$status           = WorkflowStatus::from( $wf_row['status'] );
 			$matched_payloads = $this->resolve_signal_wait_payloads( $workflow_id, $step_def, $state );
 
 			if (
@@ -2537,9 +2537,9 @@ class Workflow {
 					$this->wait_mode_for_step( $step_def ),
 					$this->wait_result_key_for_step( $step_def ),
 					array(
-						'step_name'  => $step_def['name'] ?? null,
-						'group_key'  => $this->workflow_wait_group_key_for_step( $step_def ),
-						'quorum'     => $this->workflow_wait_quorum_for_step( $step_def ),
+						'step_name' => $step_def['name'] ?? null,
+						'group_key' => $this->workflow_wait_group_key_for_step( $step_def ),
+						'quorum'    => $this->workflow_wait_quorum_for_step( $step_def ),
 					),
 				);
 
@@ -3511,15 +3511,15 @@ class Workflow {
 		$pdo    = $this->conn->pdo();
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
 
-		$state_bundle  = $this->materialize_defined_workflow_state( $definition, $initial_state, $spawned_by_workflow, $spawned_by_step, $dispatch_options );
-		$state         = $state_bundle['state'];
-		$deadline_at   = $state_bundle['deadline_at'];
-		$steps         = $state['_steps'] ?? array();
-		$queue_name    = $state['_queue'] ?? 'default';
-		$priority      = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
-		$max_attempts  = $state['_max_attempts'] ?? 3;
+		$state_bundle    = $this->materialize_defined_workflow_state( $definition, $initial_state, $spawned_by_workflow, $spawned_by_step, $dispatch_options );
+		$state           = $state_bundle['state'];
+		$deadline_at     = $state_bundle['deadline_at'];
+		$steps           = $state['_steps'] ?? array();
+		$queue_name      = $state['_queue'] ?? 'default';
+		$priority        = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
+		$max_attempts    = $state['_max_attempts'] ?? 3;
 		$idempotency_key = $this->idempotency_key_from_state( $state );
-		$workflow_name = is_string( $definition['name'] ?? null ) && '' !== trim( $definition['name'] )
+		$workflow_name   = is_string( $definition['name'] ?? null ) && '' !== trim( $definition['name'] )
 			? trim( $definition['name'] )
 			: 'workflow';
 
@@ -3785,9 +3785,9 @@ class Workflow {
 		$output = array( $result_key => $spawned_ids );
 
 		if ( '' !== $group_key ) {
-			$groups               = $workflow_state['_workflow_groups'] ?? array();
-			$groups               = is_array( $groups ) ? $groups : array();
-			$groups[ $group_key ] = $spawned_ids;
+			$groups                     = $workflow_state['_workflow_groups'] ?? array();
+			$groups                     = is_array( $groups ) ? $groups : array();
+			$groups[ $group_key ]       = $spawned_ids;
 			$output['_workflow_groups'] = $groups;
 		}
 
@@ -3943,18 +3943,22 @@ class Workflow {
 	/**
 	 * Get the current status of a workflow.
 	 *
-	 * @param array $row Workflow row.
+	 * @param array      $row Workflow row.
+	 * @param array|null $artifact_meta Preloaded artifact summary, if available.
+	 * @param bool       $include_wait_details Whether to resolve detailed wait inspection data.
 	 * @return WorkflowState
 	 */
-	private function build_workflow_state_from_row( array $row ): WorkflowState {
+	private function build_workflow_state_from_row( array $row, ?array $artifact_meta = null, bool $include_wait_details = true ): WorkflowState {
 		$state         = json_decode( $row['state'], true ) ?: array();
 		$current_step  = (int) $row['current_step'];
 		$wait          = $this->wait_context_from_state( $state );
 		$public_state  = $this->public_state( $state );
 		$waiting_for   = $wait['waiting_for'] ?? ( $wait['signal_names'] ?? null );
 		$wait_mode     = isset( $wait['wait_mode'] ) && is_string( $wait['wait_mode'] ) ? $wait['wait_mode'] : null;
-		$wait_details  = $this->wait_details_from_state( (int) $row['id'], $state, $current_step, $wait );
-		$artifact_meta = null !== $this->artifacts ? $this->artifacts->summary( (int) $row['id'] ) : null;
+		$wait_details  = $include_wait_details
+			? $this->wait_details_from_state( (int) $row['id'], $state, $current_step, $wait )
+			: null;
+		$artifact_meta = $artifact_meta ?? ( null !== $this->artifacts ? $this->artifacts->summary( (int) $row['id'] ) : null );
 
 		return new WorkflowState(
 			workflow_id: (int) $row['id'],
@@ -3996,7 +4000,11 @@ class Workflow {
 		}
 
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
-		$stmt   = $this->conn->pdo()->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id" );
+		$stmt   = $this->conn->pdo()->prepare(
+			"SELECT id, name, status, state, current_step, total_steps, parent_workflow_id, parent_step_index
+			FROM {$wf_tbl}
+			WHERE id = :id"
+		);
 		$stmt->execute( array( 'id' => $workflow_id ) );
 		$row = $stmt->fetch();
 
@@ -4179,11 +4187,12 @@ class Workflow {
 	 * List workflows, optionally filtered by status.
 	 *
 	 * @param WorkflowStatus|null $status Optional status filter.
+	 * @param int                 $limit  Maximum rows to return.
 	 * @return WorkflowState[]
 	 */
-	public function list( ?WorkflowStatus $status = null ): array {
+	public function list( ?WorkflowStatus $status = null, int $limit = 50 ): array {
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
-		$sql    = "SELECT * FROM {$wf_tbl}";
+		$sql    = "SELECT id, name, status, state, current_step, total_steps, parent_workflow_id, parent_step_index FROM {$wf_tbl}";
 		$params = array();
 
 		if ( null !== $status ) {
@@ -4191,16 +4200,43 @@ class Workflow {
 			$params['status'] = $status->value;
 		}
 
-		$sql .= ' ORDER BY id DESC';
-		$stmt = $this->conn->pdo()->prepare( $sql );
+		$limit = max( 1, $limit );
+		$sql  .= " ORDER BY id DESC LIMIT {$limit}";
+		$stmt  = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( $params );
+		$rows = $stmt->fetchAll();
 
-		$results = array();
-		foreach ( $stmt->fetchAll() as $row ) {
-			$results[] = $this->build_workflow_state_from_row( $row );
+		$artifact_summaries = $this->workflow_artifact_summaries( array_column( $rows, 'id' ) );
+		$results            = array();
+		foreach ( $rows as $row ) {
+			$workflow_id = (int) $row['id'];
+			$results[]   = $this->build_workflow_state_from_row(
+				$row,
+				$artifact_summaries[ $workflow_id ] ?? null,
+				false
+			);
 		}
 
 		return $results;
+	}
+
+	/**
+	 * Batch-load artifact summaries for workflow rows used by list views.
+	 *
+	 * @param array<int, mixed> $workflow_ids Workflow IDs.
+	 * @return array<int, array{count:int,keys:string[]}>
+	 */
+	private function workflow_artifact_summaries( array $workflow_ids ): array {
+		if ( null === $this->artifacts ) {
+			return array();
+		}
+
+		return $this->artifacts->summaries(
+			array_map(
+				'intval',
+				$workflow_ids
+			)
+		);
 	}
 
 	/**

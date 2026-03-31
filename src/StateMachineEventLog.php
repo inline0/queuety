@@ -65,17 +65,25 @@ class StateMachineEventLog {
 	/**
 	 * Return the full timeline for one machine.
 	 *
-	 * @param int $machine_id Machine ID.
+	 * @param int      $machine_id Machine ID.
+	 * @param int|null $limit      Maximum rows to return.
+	 * @param int      $offset     Timeline offset.
 	 * @return array<int, array<string, mixed>>
 	 */
-	public function get_timeline( int $machine_id ): array {
-		$table = $this->conn->table( Config::table_state_machine_events() );
-		$stmt  = $this->conn->pdo()->prepare(
-			"SELECT id, machine_id, state_name, event, event_name, state_snapshot, payload, error_message, created_at
+	public function get_timeline( int $machine_id, ?int $limit = 100, int $offset = 0 ): array {
+		$table  = $this->conn->table( Config::table_state_machine_events() );
+		$limit  = null === $limit ? null : max( 1, $limit );
+		$offset = max( 0, $offset );
+		$sql    = "SELECT id, machine_id, state_name, event, event_name, state_snapshot, payload, error_message, created_at
 			FROM {$table}
 			WHERE machine_id = :machine_id
-			ORDER BY id ASC"
-		);
+			ORDER BY id ASC";
+
+		if ( null !== $limit ) {
+			$sql .= " LIMIT {$limit} OFFSET {$offset}";
+		}
+
+		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( array( 'machine_id' => $machine_id ) );
 		$rows = $stmt->fetchAll();
 

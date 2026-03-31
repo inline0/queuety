@@ -155,17 +155,62 @@ class ArtifactStore {
 	 * @return array{count:int,keys:string[]}
 	 */
 	public function summary( int $workflow_id ): array {
-		$artifacts = $this->list( $workflow_id, false );
-
-		return array(
-			'count' => count( $artifacts ),
-			'keys'  => array_values(
-				array_map(
-					static fn( array $artifact ): string => (string) $artifact['key'],
-					$artifacts
-				)
-			),
+		return $this->summaries( array( $workflow_id ) )[ $workflow_id ] ?? array(
+			'count' => 0,
+			'keys'  => array(),
 		);
+	}
+
+	/**
+	 * Summarize artifacts for multiple workflows in one query.
+	 *
+	 * @param int[] $workflow_ids Workflow IDs.
+	 * @return array<int, array{count:int,keys:string[]}>
+	 */
+	public function summaries( array $workflow_ids ): array {
+		$workflow_ids = array_values(
+			array_unique(
+				array_filter(
+					array_map( 'intval', $workflow_ids ),
+					static fn( int $workflow_id ): bool => $workflow_id > 0
+				)
+			)
+		);
+
+		if ( empty( $workflow_ids ) ) {
+			return array();
+		}
+
+		$table        = $this->conn->table( Config::table_artifacts() );
+		$placeholders = array();
+		$params       = array();
+
+		foreach ( $workflow_ids as $index => $workflow_id ) {
+			$key            = 'workflow_' . $index;
+			$placeholders[] = ':' . $key;
+			$params[ $key ] = $workflow_id;
+		}
+
+		$stmt = $this->conn->pdo()->prepare(
+			"SELECT workflow_id,
+				COUNT(*) AS artifact_count,
+				GROUP_CONCAT(artifact_key ORDER BY artifact_key ASC SEPARATOR '\n') AS artifact_keys
+			FROM {$table}
+			WHERE workflow_id IN (" . implode( ', ', $placeholders ) . ')
+			GROUP BY workflow_id'
+		);
+		$stmt->execute( $params );
+
+		$summaries = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			$workflow_id               = (int) $row['workflow_id'];
+			$summaries[ $workflow_id ] = array(
+				'count' => (int) $row['artifact_count'],
+				'keys'  => $this->decode_summary_keys( $row['artifact_keys'] ?? null ),
+			);
+		}
+
+		return $summaries;
 	}
 
 	/**
@@ -209,5 +254,24 @@ class ArtifactStore {
 		}
 
 		return $result;
+	}
+
+	/**
+	 * Decode the compact key list used by summary queries.
+	 *
+	 * @param mixed $value Raw GROUP_CONCAT value.
+	 * @return string[]
+	 */
+	private function decode_summary_keys( mixed $value ): array {
+		if ( ! is_string( $value ) || '' === $value ) {
+			return array();
+		}
+
+		return array_values(
+			array_filter(
+				explode( "\n", $value ),
+				static fn( string $key ): bool => '' !== $key
+			)
+		);
 	}
 }
