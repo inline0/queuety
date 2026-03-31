@@ -58,7 +58,15 @@ class CliCommandMapTest extends TestCase {
 		$this->assertSame( 'wp queuety workflow list', $plan['wp_cli_command'] );
 		$this->assertSame( 'php', $plan['transport'] );
 		$this->assertSame( \Queuety\Queuety::class . '::list_workflows', $plan['callable'] );
-		$this->assertSame( array( null ), $plan['arguments'] );
+		$this->assertSame( array( null, 50 ), $plan['arguments'] );
+	}
+
+	public function test_resolve_workflow_timeline_defaults_limit_and_offset(): void {
+		$plan = Queuety::resolve_cli_command( array( 'workflow', 'timeline' ), array( '42' ) );
+
+		$this->assertSame( 'workflow.timeline', $plan['operation'] );
+		$this->assertSame( \Queuety\Queuety::class . '::workflow_timeline', $plan['callable'] );
+		$this->assertSame( array( 42, 100, 0 ), $plan['arguments'] );
 	}
 
 	public function test_resolve_work_with_workers_uses_pool_target(): void {
