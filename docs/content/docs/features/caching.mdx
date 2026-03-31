@@ -26,26 +26,19 @@ All cache backends implement `Queuety\Contracts\Cache`:
 
 `Queuety\Cache\MemoryCache` is an array-backed, per-process cache. Items are stored in a PHP array and lost when the process exits. This is the default backend when APCu is not available.
 
-- No extensions required
-- Suitable for single-worker deployments
-- Each worker process has its own isolated cache
+It requires no extensions, works well for single-worker deployments, and keeps each worker process isolated from the others.
 
 ### ApcuCache
 
 `Queuety\Cache\ApcuCache` uses the APCu extension for shared memory across all PHP processes on the same server. All keys are automatically prefixed with `queuety:` to avoid collisions with other applications.
 
-- Requires the `php-apcu` extension
-- Cache is shared across all workers on the same server
-- The `add()` method is truly atomic via `apcu_add()`
+This backend requires the `php-apcu` extension, shares cache entries across workers on the same server, and makes `add()` truly atomic via `apcu_add()`.
 
 ## Auto-detection
 
 `Queuety\Cache\CacheFactory` picks the best available backend automatically:
 
-1. If `apcu_store()` exists and `apcu_enabled()` returns `true`, use `ApcuCache`
-2. Otherwise, fall back to `MemoryCache`
-
-This happens inside `Queuety::init()`. You do not need to configure anything for the default behavior.
+If `apcu_store()` exists and `apcu_enabled()` returns `true`, Queuety uses `ApcuCache`. Otherwise it falls back to `MemoryCache`. This happens inside `Queuety::init()`, so the default behavior needs no extra configuration.
 
 ## What gets cached
 

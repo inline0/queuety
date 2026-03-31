@@ -48,14 +48,7 @@ The worker tries to claim a job from each queue in the listed order. It checks `
 
 ### How priority ordering works
 
-On each iteration of the worker loop:
-
-1. Try to claim from the first queue in the list
-2. If that queue is empty (or paused), try the next queue
-3. Repeat until a job is claimed or all queues are exhausted
-4. If no job is found in any queue, sleep and retry
-
-This is a strict priority model. A steady stream of `critical` jobs will starve `default` and `low`. If you need guaranteed throughput on lower-priority queues, use dedicated workers instead (see below).
+On each iteration, the worker tries to claim from the first queue in the list. If that queue is empty or paused, it moves on to the next queue, and it keeps going until it either finds a job or exhausts the list. If no job is found anywhere, the worker sleeps and retries. This is a strict priority model, which means a steady stream of `critical` jobs will starve `default` and `low`. If lower-priority queues need guaranteed throughput, use dedicated workers instead.
 
 ### Using multi-queue in PHP
 
@@ -131,8 +124,7 @@ wp queuety work --queue=default --workers=4
 ```
 
 Requirements:
-- The `pcntl` PHP extension must be installed
-- Each child uses its own database connection, so ensure your MySQL `max_connections` can accommodate the pool
+The `pcntl` PHP extension must be installed, and each child uses its own database connection, so your MySQL `max_connections` setting needs to accommodate the pool.
 
 ## Stale job recovery
 
@@ -208,7 +200,4 @@ sudo systemctl start queuety-worker
 
 ### Deployment tips
 
-- Run separate workers for separate queues to isolate workloads
-- Use `--workers=N` for CPU-bound handlers, individual workers for I/O-bound handlers
-- Set `QUEUETY_WORKER_MAX_JOBS` to force periodic restarts and free memory
-- Monitor the `buried` count and set up alerts using [webhooks](/docs/features/webhooks) or [metrics](/docs/features/metrics)
+Run separate workers for separate queues when you need stronger isolation. Use `--workers=N` when the workload is CPU-bound, and prefer individually supervised workers when the workload is mostly I/O. Set `QUEUETY_WORKER_MAX_JOBS` if you want periodic restarts to free memory, and keep an eye on the `buried` count through [webhooks](/docs/features/webhooks) or [metrics](/docs/features/metrics).

@@ -7,29 +7,13 @@ description: Govern a long-lived Neuron agent session with a Queuety state machi
 
 This pattern is useful when the thing you are building behaves more like a session than a one-off run.
 
-The split is:
+Queuety state machines own the session lifecycle, Queuety workflows do the background work that benefits from retries, fan-out, and joins, and Neuron handles the actual agent calls and conversation memory.
 
-- Queuety state machines own the session lifecycle
-- Queuety workflows do background work that benefits from retries, fan-out, and joins
-- Neuron handles the actual agent calls and conversation memory
-
-This is a good fit for:
-
-- support copilots
-- internal research assistants
-- editorial agents that may pause for human review
-- chat threads that move between planning, waiting, and response phases
+That split is a good fit for support copilots, internal research assistants, editorial agents that may pause for human review, and chat threads that move between planning, waiting, and response phases.
 
 ## Lifecycle shape
 
-In this example, one support session moves through these states:
-
-- `awaiting_user`
-- `planning`
-- `waiting_on_research`
-- `responding`
-
-The machine keeps the lifecycle explicit, while a background workflow gathers research and signals the session when it is done.
+In this example, one support session moves through `awaiting_user`, `planning`, `waiting_on_research`, and `responding`. The machine keeps that lifecycle explicit, while a background workflow gathers research and signals the session when it is done.
 
 ## The state machine
 
@@ -184,18 +168,7 @@ After the response is generated, the machine transitions back to `awaiting_user`
 
 ## Why this is cleaner than one large workflow
 
-The heavy lifting is still workflow-shaped:
-
-- planning tasks
-- spawning specialist agent runs
-- waiting for them
-- synthesizing results
-
-The long-lived support conversation is state-machine-shaped:
-
-- waiting for the next user turn
-- tracking whether research is running
-- deciding what events are valid in each lifecycle phase
+The heavy lifting is still workflow-shaped because the research side needs planning, specialist runs, joins, and synthesis. The long-lived support conversation is state-machine-shaped because the session must keep track of whether it is waiting for a user turn, waiting on research, or allowed to emit a response.
 
 That split keeps the runtime readable and keeps the session model explicit.
 

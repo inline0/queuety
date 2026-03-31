@@ -5,19 +5,9 @@ description: Model long-lived, event-driven lifecycle state with durable state m
 
 # State Machines
 
-State machines model lifecycle. Workflows model execution.
+State machines and workflows solve different problems.
 
-That distinction matters when the thing you are building is not just a sequence of steps, but a long-lived entity that reacts to events over time:
-
-- an agent session
-- a chat thread
-- a review lifecycle
-- a ticket or case
-- an approval flow with several valid branches
-
-Use a workflow when the main question is, "what work runs next?"
-
-Use a state machine when the main question is, "what state is this entity in, and what events are valid here?"
+A workflow answers, "what work runs next?" A state machine answers, "what state is this thing in, and what events are valid from here?" That difference matters when the thing you are building is not just a sequence of steps, but a long-lived entity that reacts to outside input over time, like an agent session, a chat thread, a review lifecycle, a ticket, or an approval flow.
 
 ## Quick example
 
@@ -51,67 +41,27 @@ Queuety::machine_event(
 );
 ```
 
-In that definition:
-
-- `awaiting_user` is a waiting state with no queued work
-- `planning` enters a queued action
-- the action emits `planned`
-- the machine transitions into `awaiting_review`
-- an external `approve` event completes the session
+This machine starts in `awaiting_user`, moves into `planning` when a user message arrives, lets the queued action emit `planned`, and then waits in `awaiting_review` until an external approval completes the session. The important point is not the code syntax by itself. It is that the lifecycle is explicit, inspectable, and event-driven.
 
 ## How a machine runs
 
-Each machine instance persists:
+When a machine instance is dispatched, Queuety persists the current state name, the public state payload, the definition version and hash, the valid incoming events for the current state, and a durable event timeline.
 
-- the current state name
-- the public state payload
-- the definition version and hash
-- the valid incoming events for the current state
-- a durable event timeline
+If the entered state has an `action()`, Queuety enqueues a state-entry job. That action can simply update public state and leave the machine waiting for the next event, or it can emit `_event` and optionally `_event_payload` to drive the next transition immediately. If the state has no action and no terminal status, the machine just waits for external events sent with `Queuety::machine_event()`.
 
-When a state has an `action()`, Queuety queues an internal state-entry job. That job can:
+## Choosing between workflows and state machines
 
-- return public state updates and wait for the next external event
-- emit an event immediately with `_event`
-- include `_event_payload` when the next transition needs structured data
+Use a workflow when the run is fundamentally step-oriented. Fetch data, fan out work, wait, synthesize, finish. That model is a good fit when there is a clear start and finish and the main question is what work should execute next.
 
-When a state has no `action()` and no terminal status, the machine waits for external events sent with `Queuety::machine_event()`.
+Use a state machine when valid behavior depends on the current lifecycle phase. That is the better fit when events may arrive in different orders, when the entity may live for a long time, or when you need explicit lifecycle inspection with states like `awaiting_user`, `planning`, `running_agents`, `awaiting_review`, and `completed`.
 
-## Workflow vs state machine
+## How the two fit together
 
-Use a workflow when:
+The two primitives work best together rather than competing with each other. A state action can dispatch a workflow when a transition needs heavier execution, and a workflow can emit an event back into a machine when that work is done. In practice, that lets the state machine govern the lifecycle while workflows perform the expensive or highly structured execution.
 
-- the run has a clear start and finish
-- the main structure is step-oriented
-- you need fan-out, waits, compensation, artifacts, or async handoffs
+## Builder shape
 
-Use a state machine when:
-
-- the entity may live for a long time
-- valid transitions depend on the current state
-- events may arrive in different orders
-- you need explicit lifecycle inspection like `awaiting_user`, `planning`, or `awaiting_review`
-
-The two primitives work well together:
-
-- a state action can dispatch a workflow
-- a workflow can emit an event back into a machine
-- a machine can govern a session while workflows perform the heavy work
-
-## Builder methods
-
-`StateMachineBuilder` exposes these core methods:
-
-- `initial( string $state_name )`
-- `state( string $state_name, ?StateMachineStatus $terminal_status = null )`
-- `action( string $action_class )`
-- `on( string $event, string $target, ?string $guard_class = null, ?string $name = null )`
-- `on_queue( string $queue )`
-- `with_priority( Priority $priority )`
-- `max_attempts( int $max_attempts )`
-- `version( string $version )`
-- `idempotency_key( string $key )`
-- `dispatch( array $initial_state = [] )`
+`StateMachineBuilder` stays deliberately small. `initial()` and `state()` define the lifecycle graph. `action()` attaches queued work to one state. `on()` declares which events can move the machine into the next state. `on_queue()`, `with_priority()`, and `max_attempts()` control how state actions are executed, while `version()` and `idempotency_key()` attach durable dispatch metadata. `dispatch()` creates the machine instance.
 
 ## Contracts
 
@@ -149,17 +99,7 @@ Those APIs expose the current state name, lifecycle status, public state, availa
 
 ## Agent sessions
 
-State machines are especially useful for agent systems that behave more like sessions than pipelines.
-
-Typical states look like:
-
-- `awaiting_user`
-- `planning`
-- `running_agents`
-- `awaiting_review`
-- `completed`
-
-That shape is often clearer than forcing one very long workflow definition to represent a conversation that reacts to outside events over hours or days.
+State machines are especially useful for agent systems that behave more like sessions than pipelines. A session that moves through `awaiting_user`, `planning`, `running_agents`, `awaiting_review`, and `completed` is usually easier to reason about as an explicit lifecycle than as one very long workflow definition with many waits and back-edges.
 
 ## See also
 

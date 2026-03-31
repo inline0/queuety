@@ -43,21 +43,11 @@ After step 3 (StepD): state has keys from StepB + StepC + StepD + initial payloa
 
 ## What is preserved
 
-The following data is never pruned:
-
-- **Reserved keys** that start with `_` (such as `_steps`, `_queue`, `_priority`, `_max_attempts`, `_on_cancel`, `_prune_state_after`, `_step_outputs`)
-- **Initial payload keys** passed to `dispatch()` are not tracked as step outputs, so they are never pruned
-- **The N most recent step outputs** as configured by the threshold
+Queuety never prunes reserved keys that start with `_`, such as `_steps`, `_queue`, `_priority`, `_max_attempts`, `_on_cancel`, `_prune_state_after`, and `_step_outputs`. Initial payload keys passed to `dispatch()` are also preserved because they are not tracked as step outputs in the first place. Beyond that, Queuety keeps the N most recent step outputs according to the threshold you configured.
 
 ## When to use it
 
-State pruning is helpful for workflows with many steps where each step produces data that subsequent steps do not need. Common examples:
-
-- Pipelines with 10+ steps where each step only needs the output of the previous 1-2 steps
-- ETL workflows that produce intermediate data structures
-- Recursive or looping workflows that accumulate repetitive output
-
-If your workflow has only a few steps or later steps need data from early steps, you do not need state pruning.
+State pruning is helpful for workflows with many steps where each step produces data that later steps do not actually need. Typical examples are long pipelines where each step only needs the previous one or two outputs, ETL workflows that generate bulky intermediate structures, and recursive or looping workflows that would otherwise accumulate repetitive state. If your workflow has only a few steps, or if late steps still depend on early outputs, you probably do not need pruning at all.
 
 ## Default behavior
 

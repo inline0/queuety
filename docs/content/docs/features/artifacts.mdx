@@ -7,26 +7,13 @@ description: Persist durable workflow outputs outside the main workflow state ba
 
 Artifacts let you store durable workflow outputs without inflating the main workflow state payload.
 
-Use them for things like:
-
-- draft documents
-- extracted JSON plans
-- citations or source manifests
-- generated file paths or URLs
-- prompt/response snapshots you want to inspect later
-
-This is especially useful for agent workflows, where the final state should stay small and inspectable even though each run may generate large intermediate outputs.
+They are a good fit for draft documents, extracted JSON plans, citations, source manifests, generated file paths, or prompt and response snapshots that you want to inspect later. This is especially useful for agent workflows, where the final state should stay small and readable even though each run may generate large intermediate outputs.
 
 ## Why artifacts instead of workflow state
 
 Workflow state is ideal for the small public data the next step needs immediately.
 
-Artifacts are better when the output is:
-
-- larger than normal state values
-- mostly for later inspection
-- useful across review/export/debug surfaces
-- better modeled as named outputs than as one giant state array
+Artifacts are better when the output is larger than normal state values, mostly for later inspection, useful across review or export surfaces, or simply better modeled as a named output than as one large state blob.
 
 ## Store an artifact for the current workflow step
 
@@ -86,15 +73,7 @@ $artifact = Queuety::workflow_artifact( $workflow_id, 'draft' );
 $artifacts = Queuety::workflow_artifacts( $workflow_id );
 ```
 
-Each artifact includes:
-
-- `key`
-- `kind`
-- `content`
-- `metadata`
-- `step_index`
-- `created_at`
-- `updated_at`
+Each artifact record includes its `key`, `kind`, `content`, `metadata`, `step_index`, `created_at`, and `updated_at` fields.
 
 ## Workflow status integration
 

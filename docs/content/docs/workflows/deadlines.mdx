@@ -59,26 +59,11 @@ The deadline handler is optional. If you only want the workflow to fail without 
 
 ## How deadline checking works
 
-The worker checks for expired deadlines every 60 seconds as part of its processing loop. On each check:
-
-1. All workflows with `status = 'running'` and `deadline_at <= NOW()` are selected
-2. For each expired workflow, the `on_deadline` handler is called (if defined)
-3. The workflow status is set to `failed` with the error message "Deadline exceeded"
-4. A `workflow_deadline_exceeded` log event is recorded
-
-The deadline is stored as a `deadline_at` timestamp on the workflow row, calculated at dispatch time as the current time plus the configured duration.
+The worker checks for expired deadlines every 60 seconds as part of its processing loop. When it finds a workflow whose `status` is still `running` and whose `deadline_at` is in the past, it calls the `on_deadline` handler if one is registered, marks the workflow as failed with the error message `Deadline exceeded`, and records a `workflow_deadline_exceeded` log event. The deadline itself is stored as a `deadline_at` timestamp on the workflow row and is calculated at dispatch time from the configured duration.
 
 ## What happens on expiry
 
-When a workflow exceeds its deadline:
-
-- **Status** changes to `failed`
-- **Error message** is set to "Deadline exceeded"
-- **Deadline handler** is called synchronously if registered
-- **A log entry** with event `workflow_deadline_exceeded` is recorded
-- **Running jobs** are not interrupted mid-execution, but the workflow will not advance to the next step
-
-If the deadline handler itself throws an exception, the exception is silently caught. The workflow is still marked as failed regardless.
+When a workflow exceeds its deadline, its status changes to `failed`, the error message is set to `Deadline exceeded`, the deadline handler runs synchronously if one is registered, and a `workflow_deadline_exceeded` log entry is recorded. Running jobs are not interrupted in the middle of execution, but the workflow will not advance beyond the expired step boundary. If the deadline handler itself throws an exception, the exception is silently caught and the workflow still ends up failed.
 
 ## WorkflowBuilder methods
 

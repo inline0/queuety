@@ -7,10 +7,7 @@ description: Keep Neuron chat memory across human review rounds with a Queuety s
 
 This pattern is useful when an agent should keep conversational context across repeated human review rounds, but the overall lifecycle should still be orchestrated by Queuety.
 
-The split is:
-
-- Queuety owns the review state machine
-- Neuron owns the agent memory for the drafting thread
+Queuety owns the review state machine, while Neuron owns the agent memory for the drafting thread.
 
 ## Why Neuron memory helps here
 
@@ -149,27 +146,9 @@ If the reviewer rejects the draft, the machine moves back into `drafting`. Becau
 
 ## Why this is cleaner than a workflow loop
 
-This problem is lifecycle-oriented:
+This problem is lifecycle-oriented. A draft waits for human review, a reviewer can approve or reject it, rejection returns the session to drafting, and approval finishes the session. That maps more directly to a state machine than to a linear workflow with a back-edge.
 
-- a draft is waiting for human review
-- a reviewer can approve or reject it
-- rejection returns the session to drafting
-- approval finishes the session
-
-That maps more directly to a state machine than to a linear workflow with a back-edge.
-
-Workflow state is still excellent for orchestration facts:
-
-- review round count
-- artifact IDs
-- workflow IDs
-- routing decisions
-
-Neuron memory is better for conversational context:
-
-- prior prompts
-- iterative revisions
-- model responses that should remain part of the drafting thread
+Workflow state is still excellent for orchestration facts such as review round count, artifact IDs, workflow IDs, and routing decisions. Neuron memory is better for conversational context like prior prompts, iterative revisions, and model responses that should remain part of the drafting thread.
 
 Using both gives each system the job it is best at.
 
@@ -177,9 +156,7 @@ Using both gives each system the job it is best at.
 
 Prefer a workflow when the review path is tightly bounded and execution-oriented, for example:
 
-- generate one draft
-- wait for one approval
-- publish
+Generate one draft, wait for one approval, and publish.
 
 Prefer a state machine when the session may revisit the same states several times and outside events drive the lifecycle.
 

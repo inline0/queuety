@@ -5,20 +5,11 @@ description: Wrap a Neuron streaming agent in a durable Queuety StreamingStep.
 
 # Neuron Streaming Step
 
-This example shows a clean split:
-
-- Neuron streams the agent response chunk by chunk
-- Queuety persists each chunk durably through `StreamingStep`
-
-That means the UI can receive a live draft, while the workflow still survives worker crashes or retries.
+This example shows a clean split. Neuron streams the agent response chunk by chunk, while Queuety persists each chunk durably through `StreamingStep`. That means the UI can receive a live draft while the workflow still survives worker crashes or retries.
 
 ## When this pattern is useful
 
-Use it when:
-
-- a draft or response is long enough that you want to stream it live
-- you do not want to lose partial output if the worker dies
-- the final artifact should still land in workflow state after the stream completes
+Use it when a draft or response is long enough that you want to stream it live, when you do not want to lose partial output if the worker dies, and when the final artifact should still land in workflow state after the stream completes.
 
 ## The Neuron agent
 
@@ -120,14 +111,7 @@ Queuety::workflow('memo_drafting')
 
 ## Why use Queuety instead of Neuron stream adapters alone
 
-Neuron's stream adapters are useful for frontend protocols and transports.
-
-Queuety adds something different:
-
-- every yielded chunk is persisted
-- retries can resume with the previously saved chunks
-- the completed draft is merged back into workflow state
-- the stream becomes one durable step in a larger orchestration
+Neuron's stream adapters are useful for frontend protocols and transports. Queuety adds something different: every yielded chunk is persisted, retries can resume with the previously saved chunks, the completed draft is merged back into workflow state, and the stream becomes one durable step in a larger orchestration.
 
 That makes this pattern a good fit when the stream is part of a multi-step business process, not just a request/response UI.
 

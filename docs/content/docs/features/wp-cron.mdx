@@ -33,13 +33,9 @@ Only **recurring** events (those with a `schedule` property like `hourly`, `twic
 
 ## How events are mapped
 
-When a plugin calls `wp_schedule_event()`, Queuety:
+When a plugin calls `wp_schedule_event()`, Queuety resolves the schedule name through `wp_get_schedules()`, creates a Queuety schedule with the handler name `__queuety_cron_{hook}`, and stores the original WordPress hook name and arguments in the schedule payload.
 
-1. Resolves the schedule name (e.g. `hourly`) to an interval in seconds using `wp_get_schedules()`
-2. Creates a Queuety schedule with the handler name `__queuety_cron_{hook}`
-3. Stores the original WordPress hook name and arguments in the schedule payload
-
-When the Queuety worker processes the scheduled job, it calls `do_action()` with the original hook name and arguments. All callbacks registered for that WordPress cron hook are executed as normal.
+Later, when the Queuety worker processes that scheduled job, it calls `do_action()` with the original hook name and arguments. The existing WordPress callbacks still run as normal; the difference is only that the timing and dispatch are now driven by Queuety instead of traffic-triggered WP-Cron.
 
 ### Interval resolution
 
@@ -66,19 +62,11 @@ This removes the filter hooks and allows WordPress to handle cron events through
 
 ## When to use it
 
-The WP-Cron replacement is useful when:
-
-- **Your site has low traffic.** WP-Cron relies on page visits to trigger scheduled events. If your site gets few visitors, cron events can be delayed significantly.
-- **You need reliable timing.** Queuety's worker runs continuously and checks schedules on a fixed interval, independent of site traffic.
-- **You are already running the Queuety worker.** If you have a worker process running, routing cron events through it means one fewer system to manage.
-- **You want centralized observability.** Cron events processed through Queuety appear in the job logs and metrics alongside your other queue jobs.
+The replacement is most useful when your site has low traffic, when you need more reliable timing than WP-Cron can provide, or when you are already running Queuety workers and want cron execution to live in the same operational system. It also helps when centralized observability matters, because cron events then show up in the same logs and metrics as your other queue work.
 
 ## Limitations
 
-- **Requires an active Queuety worker.** If the worker is not running, cron events will not be processed.
-- **Single-fire events are not intercepted.** Only recurring schedules (those with a `schedule` property) are routed through Queuety.
-- **`DISABLE_WP_CRON` is permanent for the request.** Once `replace_wp_cron()` is called, `DISABLE_WP_CRON` is defined as `true` for the remainder of the PHP process. Calling `restore_wp_cron()` removes the filter hooks but does not un-define the constant.
-- **WordPress must be loaded.** The bridge hooks into WordPress filters and calls `do_action()`. It does not work in standalone (non-WordPress) mode.
+There are a few important constraints. An active Queuety worker is required, otherwise the scheduled events will never run. Only recurring schedules are intercepted; single-fire events created with `wp_schedule_single_event()` still stay outside the bridge. `replace_wp_cron()` also defines `DISABLE_WP_CRON` for the rest of the current PHP process, so `restore_wp_cron()` removes the hooks but cannot un-define the constant. Finally, the bridge only works when WordPress is loaded, because it depends on WordPress filters and `do_action()`.
 
 ## Example: full setup
 

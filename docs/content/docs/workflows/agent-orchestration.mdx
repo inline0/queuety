@@ -7,26 +7,13 @@ description: Build planner/executor, human-review, and cross-workflow agent syst
 
 Queuety is a good fit for agent systems when you want adaptive work without giving up durable state, retries, inspection, and explicit wait semantics.
 
-You do not need a runtime-editable DAG engine for most agent flows. In practice, most systems can be modeled with four primitives:
-
-- `fan_out()` when one workflow should expand work inside the same run
-- `spawn_agents()` and `await_agents()` when the planner should hand work off to independent top-level agent workflows
-- `await_decision()` and `await_input()` when a human needs to approve or steer the run
-- `await_workflow()`, `await_workflows()`, and `await_agent_group()` when one top-level workflow should wait for another or for a spawned batch quorum
+You do not need a runtime-editable DAG engine for most agent flows. In practice, most systems can be modeled with a small set of durable orchestration moves. `fan_out()` expands work inside one workflow run. `spawn_agents()` and `await_agents()` hand runtime-discovered work off to independent top-level workflows. `await_decision()` and `await_input()` pause for human control. `await_workflow()`, `await_workflows()`, and `await_agent_group()` let one top-level run wait for another or for a spawned quorum.
 
 ## A useful mental model
 
-Think about agent orchestration in layers:
+Agent orchestration is easiest to reason about in layers. A planner decides what work exists. Queuety turns that work into durable jobs or workflows. Specialist runs produce results and store artifacts. A supervising stage joins those results and decides what happens next. At any point, a human can approve, reject, or correct the run before it continues.
 
-1. a planner decides what work exists
-2. Queuety turns that work into durable jobs or workflows
-3. specialists produce results and store durable artifacts
-4. a supervisor joins those results and decides what happens next
-5. a human can approve, reject, or edit the run before it continues
-
-The important distinction is that the agent decides **what work to do**, but Queuety still decides **how that work is persisted, retried, resumed, and joined**.
-
-When the orchestration target is a long-lived session rather than a bounded run, pair this with [State Machines](/docs/state-machines).
+The important distinction is that the agent decides what work to do, but Queuety still decides how that work is persisted, retried, resumed, and joined. When the orchestration target is a long-lived session rather than a bounded run, pair this with [State Machines](/docs/state-machines).
 
 ## Pattern 1: Planner/executor with independent agent runs
 
@@ -51,19 +38,13 @@ Queuety::workflow( 'brief_research' )
     ->dispatch( [ 'brief_id' => 42 ] );
 ```
 
-In that pattern:
+In this pattern, `PlanResearchTasksStep` writes runtime-discovered items into `$state['agent_tasks']`, `spawn_agents()` dispatches one durable workflow per task, and `await_agent_group()` parks the parent until the chosen join condition is satisfied. `SynthesizeBriefStep` then receives the completed child states under `$state['agent_results']`.
 
-1. `PlanResearchTasksStep` writes an array to `$state['agent_tasks']`
-2. `spawn_agents()` dispatches one durable workflow per task
-3. Queuety stores those workflow IDs in `$state['agent_workflow_ids']`
-4. `await_agent_group()` parks the parent until the chosen join condition is satisfied
-5. `SynthesizeBriefStep` receives the completed child states under `$state['agent_results']`
-
-This is the cleanest starting point for planner/executor systems because each agent run is inspectable and retryable on its own.
+This is the cleanest starting point for planner/executor systems because each agent run remains inspectable and retryable on its own.
 
 ## Pattern 2: Human review before the run continues
 
-Use `await_decision()` when the workflow should stop for a real yes/no decision, and `await_input()` when the operator needs to send structured feedback back into the run.
+Use `await_decision()` when the workflow should stop for a real yes-or-no decision, and `await_input()` when the operator needs to send structured feedback back into the run.
 
 ```php
 use Queuety\Queuety;
@@ -103,20 +84,7 @@ Queuety::reject_workflow(
 );
 ```
 
-After `await_decision()`, the workflow receives a structured payload like:
-
-```php
-[
-    'outcome' => 'approved', // or 'rejected'
-    'signal' => 'approved',  // or 'rejected'
-    'data' => [
-        'reviewer' => 'editor@example.com',
-        'notes' => 'Looks good, publish after legal check',
-    ],
-]
-```
-
-This is the human-in-the-loop point where the system stays durable without holding a PHP process open.
+After `await_decision()`, the workflow receives a structured payload with the final outcome, the signal that resumed the run, and any reviewer data that came with it. That gives you a true human-in-the-loop checkpoint without keeping a PHP process open while the run is waiting.
 
 ## Pattern 3: One top-level workflow waits for another
 
@@ -140,56 +108,25 @@ Queuety::workflow( 'publish_brief' )
     ->dispatch( [ 'brief_id' => 42 ] );
 ```
 
-That gives you:
+That gives you a durable boundary between the research stage and the publication stage. Each run has its own operational lifecycle, but the second workflow still resumes automatically when the dependency completes.
 
-- one workflow responsible for generating the research artifact
-- one workflow responsible for publication or handoff
-- a durable boundary between them
+## Choosing the right primitive
 
-This is often simpler than trying to force every stage of an autonomous system into one very long workflow definition.
+`fan_out()` is the right tool when the work belongs inside one workflow run and the branches are really just step-level parallel execution against one shared state bag.
 
-## When to use each primitive
+`spawn_agents()` is better when each discovered task should be its own durable top-level run and you want to inspect, retry, or export those runs separately.
 
-Use `fan_out()` when:
+`await_workflow()` and `await_workflows()` are the right fit when one top-level workflow depends on another top-level workflow and you want durable asynchronous coordination between those orchestration layers.
 
-- the work belongs inside the same workflow run
-- you want one shared workflow state bag
-- the branches are just step-level parallel work
-
-Use `spawn_agents()` when:
-
-- each discovered task should be its own durable top-level run
-- you want to inspect, retry, or export those runs separately
-- the planner and executor should be loosely coupled
-
-Use `await_workflow()` or `await_workflows()` when:
-
-- one top-level workflow depends on another top-level workflow
-- you want durable async coordination between orchestration layers
-- a later stage should not start until an earlier workflow is finished
-
-Use `await_decision()` or `await_input()` when:
-
-- a human needs to approve, reject, or correct the run
-- the workflow should stay paused without consuming worker capacity
+`await_decision()` and `await_input()` belong at the points where a human needs to approve, reject, or steer the run while the workflow stays paused without consuming worker capacity.
 
 ## Suggested state conventions
 
-Agent systems get easier to debug when the state keys are predictable.
-
-A good convention is:
-
-- `agent_tasks` for the planner's runtime-discovered work items
-- `agent_workflow_ids` for the spawned top-level agent runs
-- `agent_results` for joined child workflow state
-- `review` or `decision` for approve/reject payloads
-- the artifact store for generated drafts, citations, or other durable outputs you do not want to inflate the main workflow state with
-
-The names are not required, but keeping them stable makes status inspection and event-log timelines much easier to read.
+Agent systems are easier to debug when the state keys are predictable. In practice, `agent_tasks` works well for planner output, `agent_workflow_ids` for spawned top-level runs, `agent_results` for joined child workflow state, and `review` or `decision` for approve or reject payloads. Larger outputs such as drafts, citations, or research manifests usually belong in the artifact store instead of the main workflow state bag.
 
 ## Recommended guardrails for agent runs
 
-Agent workflows benefit from the workflow guardrails more than almost any other use case.
+Agent workflows benefit from guardrails more than almost any other use case because they are dynamic by nature.
 
 ```php
 Queuety::workflow( 'agent_research' )
@@ -200,14 +137,7 @@ Queuety::workflow( 'agent_research' )
     ->max_state_bytes( 32768 );
 ```
 
-Those controls answer four practical questions:
-
-- which definition version produced this run
-- can duplicate external requests accidentally dispatch the same workflow twice
-- can a planner create too many branches
-- can workflow state grow without bound
-
-For most agent systems, start with those guardrails before you start tuning worker counts or queue topology.
+Those controls answer the practical questions that matter in production: which definition version produced a run, whether duplicate external requests can dispatch it twice, whether a planner can create too many branches, and whether workflow state can grow without bound. For most agent systems, start with those guardrails before you start tuning worker counts or queue topology.
 
 ## See also
 

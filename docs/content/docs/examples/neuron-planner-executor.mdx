@@ -7,25 +7,11 @@ description: Use Neuron agents inside Queuety planner/executor workflows with pr
 
 This example uses Queuety for orchestration and Neuron for the actual agent execution.
 
-The pattern is:
-
-1. a Queuety planner step decides what work exists
-2. `spawn_agents()` turns those tasks into independent top-level workflows
-3. each child workflow runs a Neuron agent
-4. `await_agents()` joins the results back into the parent workflow
+The pattern is straightforward. A Queuety planner step decides what work exists, `spawn_agents()` turns those tasks into independent top-level workflows, each child workflow runs a Neuron agent, and `await_agents()` joins the results back into the parent workflow.
 
 ## Why this split works well
 
-Neuron is good at:
-
-- switching providers with minimal code changes
-- encapsulating the prompt, tools, and memory for a specialist agent
-
-Queuety is good at:
-
-- durable fan-out and joining
-- retries and resumability
-- workflow inspection and human gates
+Neuron is good at switching providers with minimal code changes and encapsulating the prompt, tools, and memory for a specialist agent. Queuety is good at durable fan-out and joining, retries, resumability, and the inspection or human-review surfaces around the run.
 
 ## Step 1: create a provider-switchable Neuron agent
 
@@ -155,9 +141,7 @@ Queuety will create one top-level workflow per task, wait until they are all com
 
 You could do that, but you would lose the orchestration advantages:
 
-- each agent run would not be individually inspectable
-- a partial crash would likely restart the whole batch
-- there would be no clean join point for later stages
+Each agent run would stop being individually inspectable, a partial crash would likely restart the whole batch, and there would be no clean join point for later stages.
 
 This pattern keeps the agent code simple while letting Queuety own the durable orchestration.
 
