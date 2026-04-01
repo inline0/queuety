@@ -36,14 +36,14 @@ class Worker {
 	 * @param Workflow              $workflow          Workflow manager.
 	 * @param HandlerRegistry       $registry          Handler registry.
 	 * @param Config                $config            Configuration.
-	 * @param RateLimiter|null      $rate_limiter      Optional rate limiter.
-	 * @param ResourceManager|null  $resource_manager  Optional resource manager for admission and concurrency policies.
-	 * @param Scheduler|null        $scheduler         Optional scheduler for recurring jobs.
-	 * @param WebhookNotifier|null  $webhook_notifier  Optional webhook notifier.
-	 * @param BatchManager|null     $batch_manager     Optional batch manager.
-	 * @param ChunkStore|null       $chunk_store       Optional chunk store for streaming steps.
-	 * @param WorkflowEventLog|null $event_log         Optional workflow event log.
-	 * @param StateMachine|null     $state_machines    Optional state machine manager.
+	 * @param RateLimiter|null      $rate_limiter     Optional rate limiter.
+	 * @param Scheduler|null        $scheduler        Optional scheduler for recurring jobs.
+	 * @param WebhookNotifier|null  $webhook_notifier Optional webhook notifier.
+	 * @param BatchManager|null     $batch_manager    Optional batch manager.
+	 * @param ChunkStore|null       $chunk_store      Optional chunk store for streaming steps.
+	 * @param WorkflowEventLog|null $event_log        Optional workflow event log.
+	 * @param StateMachine|null     $state_machines   Optional state machine manager.
+	 * @param ResourceManager|null  $resource_manager Optional resource manager for admission and concurrency policies.
 	 */
 	public function __construct(
 		private readonly Connection $conn,
@@ -53,13 +53,13 @@ class Worker {
 		private readonly HandlerRegistry $registry,
 		Config $config,
 		private readonly ?RateLimiter $rate_limiter = null,
-		private readonly ?ResourceManager $resource_manager = null,
 		private readonly ?Scheduler $scheduler = null,
 		private readonly ?WebhookNotifier $webhook_notifier = null,
 		private readonly ?BatchManager $batch_manager = null,
 		private readonly ?ChunkStore $chunk_store = null,
 		private readonly ?WorkflowEventLog $event_log = null,
 		private readonly ?StateMachine $state_machines = null,
+		private readonly ?ResourceManager $resource_manager = null,
 	) {}
 
 	/**

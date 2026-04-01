@@ -223,13 +223,13 @@ class Queuety {
 			self::$registry,
 			new Config(),
 			self::$rate_limiter,
-			self::$resource_manager,
 			self::$scheduler,
 			self::$webhook_notifier,
 			self::$batch_manager,
 			self::$chunk_store,
 			self::$workflow_event_log,
 			self::$state_machine,
+			self::$resource_manager,
 		);
 	}
 

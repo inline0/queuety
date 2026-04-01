@@ -175,13 +175,13 @@ class WorkerPool {
 			$registry,
 			new Config(),
 			$rate_limiter,
-			$resource_manager,
 			$scheduler,
 			$webhook_notifier,
 			$batch_manager,
 			$chunk_store,
 			$event_log,
 			$state_machines,
+			$resource_manager,
 		);
 
 		pcntl_signal(
