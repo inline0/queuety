@@ -138,6 +138,9 @@ class JobPropertiesTest extends IntegrationTestCase {
 		$this->assertArrayNotHasKey( 'timeout', $serialized['payload'] );
 		$this->assertArrayNotHasKey( 'max_exceptions', $serialized['payload'] );
 		$this->assertArrayNotHasKey( 'backoff', $serialized['payload'] );
+		$this->assertArrayNotHasKey( 'concurrency_group', $serialized['payload'] );
+		$this->assertArrayNotHasKey( 'concurrency_limit', $serialized['payload'] );
+		$this->assertArrayNotHasKey( 'cost_units', $serialized['payload'] );
 		$this->assertArrayHasKey( 'data', $serialized['payload'] );
 	}
 

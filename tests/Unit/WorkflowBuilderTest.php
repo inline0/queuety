@@ -78,9 +78,33 @@ class WorkflowBuilderTest extends TestCase {
 			->idempotency_key( 'run:42' )
 			->max_transitions( 8 )
 			->max_fan_out_items( 16 )
-			->max_state_bytes( 4096 );
+			->max_state_bytes( 4096 )
+			->max_cost_units( 32 )
+			->max_spawned_workflows( 12 );
 
 		$this->assertSame( $builder, $result );
+	}
+
+	public function test_build_runtime_definition_includes_extended_workflow_budgets(): void {
+		$definition = $this->make_builder( 'budgeted' )
+			->then( 'FetchDataHandler' )
+			->max_transitions( 8 )
+			->max_fan_out_items( 16 )
+			->max_state_bytes( 4096 )
+			->max_cost_units( 32 )
+			->max_spawned_workflows( 12 )
+			->build_runtime_definition();
+
+		$this->assertSame(
+			array(
+				'max_transitions'       => 8,
+				'max_fan_out_items'     => 16,
+				'max_state_bytes'       => 4096,
+				'max_cost_units'        => 32,
+				'max_spawned_workflows' => 12,
+			),
+			$definition['workflow_budget']
+		);
 	}
 
 	public function test_dispatch_throws_when_no_steps_defined(): void {

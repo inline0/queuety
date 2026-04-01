@@ -53,6 +53,8 @@ Queuety::workflow( 'research_run' )
     ->max_transitions( 20 )
     ->max_fan_out_items( 12 )
     ->max_state_bytes( 32768 )
+    ->max_cost_units( 40 )
+    ->max_spawned_workflows( 8 )
     ->then( PlanResearchStep::class )
     ->fan_out( 'tasks', ExecuteResearchTask::class, 'results' )
     ->dispatch();
@@ -69,6 +71,16 @@ Limits how many runtime-discovered items a single `fan_out()` step may expand. T
 ### `max_state_bytes()`
 
 Limits the encoded size of the public workflow state. This helps keep long-running workflows from growing into large blobs that are slow to inspect, export, or retry.
+
+### `max_cost_units()`
+
+Limits the total cost units consumed by completed steps. Cost units come from the step or job metadata that Queuety resolves when it enqueues work. Regular user work defaults to `1`, orchestration placeholders such as timers and waits use `0`, and handlers can raise or lower the value through `config()` or job properties.
+
+This is useful when a workflow can revisit the same area or fan out into work that is expensive in ways that are not captured by step count alone. A planner that keeps re-running an expensive model call may stay within `max_transitions()` but still exceed the cost envelope you intended.
+
+### `max_spawned_workflows()`
+
+Limits how many top-level workflows a run may spawn through `spawn_workflows()` or `spawn_agents()`. The limit is checked before the child workflows are dispatched, so the parent fails without partially creating a group that already exceeds the budget.
 
 When a budget is exceeded, Queuety fails the workflow immediately instead of retrying the step.
 

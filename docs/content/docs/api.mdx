@@ -51,6 +51,8 @@ When a `Contracts\Job` instance is passed, the serializer extracts the FQCN as t
 | `rate_limit( int $max, int $window )` | Rate limit: max executions per window seconds |
 | `unique()` | Prevent duplicate dispatches |
 | `after( int $job_id )` | Wait for another job to complete first |
+| `concurrency_group( string $group, int $limit )` | Put the job into a shared worker-admission group |
+| `cost_units( int $units )` | Attach relative execution cost metadata to the dispatch |
 | `id()` | Force dispatch and return the job ID |
 
 ### `Queuety::dispatch_sync( $handler, $payload )`
@@ -275,6 +277,8 @@ $workflow_id = Queuety::workflow( 'generate_report' )
 | `max_transitions( int $max )` | Fail the workflow if more than `$max` step transitions complete. |
 | `max_fan_out_items( int $max )` | Fail the workflow if a `fan_out()` step tries to expand more than `$max` items. |
 | `max_state_bytes( int $bytes )` | Fail the workflow if the public state grows beyond `$bytes`. |
+| `max_cost_units( int $max )` | Fail the workflow if completed steps consume more than `$max` cost units. |
+| `max_spawned_workflows( int $max )` | Fail the workflow before dispatching more than `$max` child workflows. |
 | `compensate_with( string $class )` | Attach a compensation handler to the most recently added step. |
 | `compensate_on_failure()` | Run completed-step compensations automatically when the workflow fails. |
 | `on_queue( string $queue )` | Set the queue for all steps. |
@@ -545,6 +549,8 @@ $machine_id = Queuety::machine( 'agent_session' )
 | `version( string $version )` | Tag the machine definition with an application-level version. |
 | `idempotency_key( string $key )` | Make dispatch durable for a caller-supplied key. Dispatching again with the same key returns the original machine ID. |
 | `dispatch( array $initial_state = [] )` | Dispatch the machine and return the machine ID. |
+
+State-entry action classes may also expose an optional `config()` method with the same resource-policy keys that workflow steps support: `concurrency_group`, `concurrency_limit`, and `cost_units`.
 
 ### `Queuety::dispatch_state_machine_definition( $definition, $initial_state = [], $options = [] )`
 
@@ -904,6 +910,7 @@ These methods return internal instances for advanced use cases.
 | `Queuety::batch_manager()` | `BatchManager` | Batch lifecycle management (cancel, prune) |
 | `Queuety::chunk_store()` | `ChunkStore` | Chunk persistence for streaming steps |
 | `Queuety::workflow_events()` | `WorkflowEventLog` | Workflow event timeline and state snapshots |
+| `Queuety::resource_manager()` | `ResourceManager` | Worker admission profiles and concurrency-group inspection |
 | `Queuety::cache()` | `Cache` | Cache backend instance |
 
 ## Testing
@@ -954,6 +961,8 @@ interface Handler {
 }
 ```
 
+`config()` may return `queue`, `max_attempts`, `backoff`, `rate_limit`, `concurrency_group`, `concurrency_limit`, and `cost_units`.
+
 ### `Step`
 
 Interface for workflow step handlers.
@@ -964,6 +973,8 @@ interface Step {
     public function config(): array;
 }
 ```
+
+`config()` may return `max_attempts`, `backoff`, `concurrency_group`, `concurrency_limit`, and `cost_units`.
 
 ### `Contracts\FanOutHandler`
 
@@ -977,6 +988,8 @@ interface FanOutHandler {
     public function config(): array;
 }
 ```
+
+`config()` may return `max_attempts`, `backoff`, `rate_limit`, `concurrency_group`, `concurrency_limit`, and `cost_units`.
 
 ### `Contracts\JoinReducer`
 
@@ -1027,6 +1040,8 @@ interface StateAction {
 ```
 
 Return public state updates. Include `_event` and optionally `_event_payload` when the action should transition immediately.
+
+State actions may also define an optional `config()` method. Queuety reads `concurrency_group`, `concurrency_limit`, and `cost_units` from it when the entry action is queued.
 
 ### `Contracts\StateGuard`
 
@@ -1111,7 +1126,7 @@ interface StreamingStep {
 |---|---|
 | `stream( $state, $existing_chunks )` | Generator that yields string chunks. Each yield triggers an immediate DB write. On retry, `$existing_chunks` contains previously persisted chunks. |
 | `on_complete( $chunks, $state )` | Called after the stream finishes. Returns data to merge into workflow state. |
-| `config()` | Optional configuration. Supports `max_attempts` and `backoff`. |
+| `config()` | Optional configuration. Supports `max_attempts`, `backoff`, `concurrency_group`, `concurrency_limit`, and `cost_units`. |
 
 ### `ChunkStore`
 

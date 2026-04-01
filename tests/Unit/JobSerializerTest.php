@@ -122,6 +122,18 @@ class JobSerializerTest extends TestCase {
 		$job = JobSerializer::deserialize( JobSerializerTest_NoConstructorJob::class, array() );
 		$this->assertInstanceOf( JobSerializerTest_NoConstructorJob::class, $job );
 	}
+
+	public function test_serialize_excludes_runtime_resource_properties(): void {
+		$job    = new JobSerializerTest_ConfiguredJob( 'configured' );
+		$result = JobSerializer::serialize( $job );
+
+		$this->assertSame(
+			array(
+				'name' => 'configured',
+			),
+			$result['payload']
+		);
+	}
 }
 
 // -- Test fixture classes (inline for unit tests) ---------------------------
@@ -184,6 +196,29 @@ class JobSerializerTest_NestedEnumJob implements Job {
 }
 
 class JobSerializerTest_NoConstructorJob implements Job {
+
+	public function handle(): void {}
+}
+
+class JobSerializerTest_ConfiguredJob implements Job {
+
+	public int $tries = 5;
+
+	public int $timeout = 30;
+
+	public int $max_exceptions = 2;
+
+	public array $backoff = array( 5, 30 );
+
+	public string $concurrency_group = 'providers';
+
+	public int $concurrency_limit = 2;
+
+	public int $cost_units = 4;
+
+	public function __construct(
+		public readonly string $name,
+	) {}
 
 	public function handle(): void {}
 }

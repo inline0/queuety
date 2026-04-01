@@ -292,7 +292,7 @@ class Workflow {
 		}
 
 		$normalized = array();
-		foreach ( array( 'max_transitions', 'max_fan_out_items', 'max_state_bytes' ) as $key ) {
+		foreach ( array( 'max_transitions', 'max_fan_out_items', 'max_state_bytes', 'max_cost_units', 'max_spawned_workflows' ) as $key ) {
 			if ( isset( $limits[ $key ] ) && (int) $limits[ $key ] > 0 ) {
 				$normalized[ $key ] = (int) $limits[ $key ];
 			}
@@ -316,6 +316,8 @@ class Workflow {
 		$counters                      = $state['_workflow_counters'] ?? array();
 		$summary                       = $limits;
 		$summary['transitions']        = (int) ( $counters['transitions'] ?? 0 );
+		$summary['cost_units']         = (int) ( $counters['cost_units'] ?? 0 );
+		$summary['spawned_workflows']  = (int) ( $counters['spawned_workflows'] ?? 0 );
 		$summary['public_state_bytes'] = $this->public_state_size_bytes( $state );
 
 		return $summary;
@@ -333,6 +335,55 @@ class Workflow {
 
 		$state['_workflow_counters']              ??= array();
 		$state['_workflow_counters']['transitions'] = (int) ( $state['_workflow_counters']['transitions'] ?? 0 ) + 1;
+	}
+
+	/**
+	 * Increment consumed workflow cost units.
+	 *
+	 * @param array $state Workflow state.
+	 * @param int   $cost_units Cost units to add.
+	 */
+	private function increment_cost_units( array &$state, int $cost_units ): void {
+		if ( $cost_units < 1 || empty( $this->workflow_budget_limits( $state ) ) ) {
+			return;
+		}
+
+		$state['_workflow_counters']             ??= array();
+		$state['_workflow_counters']['cost_units'] = (int) ( $state['_workflow_counters']['cost_units'] ?? 0 ) + $cost_units;
+	}
+
+	/**
+	 * Increment the spawned workflow counter when budgets are enabled.
+	 *
+	 * @param array $state Workflow state.
+	 * @param int   $count Spawned workflow count to add.
+	 */
+	private function increment_spawned_workflow_counter( array &$state, int $count ): void {
+		if ( $count < 1 || empty( $this->workflow_budget_limits( $state ) ) ) {
+			return;
+		}
+
+		$state['_workflow_counters']                    ??= array();
+		$state['_workflow_counters']['spawned_workflows'] = (int) ( $state['_workflow_counters']['spawned_workflows'] ?? 0 ) + $count;
+	}
+
+	/**
+	 * Extract internal workflow budget deltas emitted by orchestration steps.
+	 *
+	 * @param array $step_output Step output.
+	 * @return array{spawned_workflows: int}
+	 */
+	private function workflow_budget_delta_from_step_output( array $step_output ): array {
+		$delta = $step_output['_workflow_budget_delta'] ?? null;
+		if ( ! is_array( $delta ) ) {
+			return array(
+				'spawned_workflows' => 0,
+			);
+		}
+
+		return array(
+			'spawned_workflows' => max( 0, (int) ( $delta['spawned_workflows'] ?? 0 ) ),
+		);
 	}
 
 	/**
@@ -363,6 +414,26 @@ class Workflow {
 				sprintf(
 					'Workflow exceeded max_state_bytes budget of %d.',
 					$limits['max_state_bytes']
+				)
+			);
+		}
+
+		$cost_units = (int) ( $state['_workflow_counters']['cost_units'] ?? 0 );
+		if ( isset( $limits['max_cost_units'] ) && $cost_units > $limits['max_cost_units'] ) {
+			throw new WorkflowConstraintViolationException(
+				sprintf(
+					'Workflow exceeded max_cost_units budget of %d.',
+					$limits['max_cost_units']
+				)
+			);
+		}
+
+		$spawned_workflows = (int) ( $state['_workflow_counters']['spawned_workflows'] ?? 0 );
+		if ( isset( $limits['max_spawned_workflows'] ) && $spawned_workflows > $limits['max_spawned_workflows'] ) {
+			throw new WorkflowConstraintViolationException(
+				sprintf(
+					'Workflow exceeded max_spawned_workflows budget of %d.',
+					$limits['max_spawned_workflows']
 				)
 			);
 		}
@@ -1813,6 +1884,9 @@ class Workflow {
 
 		$current_step_def = $steps[ $current_step ] ?? null;
 		$this->push_compensation_snapshot( $state, $current_step_def, $current_step );
+		$this->increment_cost_units( $state, (int) ( $job_row['cost_units'] ?? 0 ) );
+		$budget_delta = $this->workflow_budget_delta_from_step_output( $step_output );
+		$this->increment_spawned_workflow_counter( $state, $budget_delta['spawned_workflows'] );
 		$this->increment_transition_counter( $state );
 		$this->assert_workflow_budget( $state );
 
@@ -1945,6 +2019,9 @@ class Workflow {
 					max_attempts: $handler_defaults['max_attempts'] ?? $max_attempts,
 					workflow_id: $workflow_id,
 					step_index: $step_index,
+					concurrency_group: $handler_defaults['concurrency_group'],
+					concurrency_limit: $handler_defaults['concurrency_limit'],
+					cost_units: $handler_defaults['cost_units'] ?? 1,
 				);
 			}
 		} elseif ( 'fan_out' === $type ) {
@@ -1956,6 +2033,7 @@ class Workflow {
 				max_attempts: $max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				cost_units: 0,
 			);
 		} elseif ( 'sub_workflow' === $type ) {
 			$this->queue->dispatch(
@@ -1966,6 +2044,7 @@ class Workflow {
 				max_attempts: $max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				cost_units: 0,
 			);
 		} elseif ( 'spawn_workflows' === $type ) {
 			$this->queue->dispatch(
@@ -1976,6 +2055,7 @@ class Workflow {
 				max_attempts: $max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				cost_units: 0,
 			);
 		} elseif ( 'timer' === $type ) {
 			$this->queue->dispatch(
@@ -1987,6 +2067,7 @@ class Workflow {
 				max_attempts: $max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				cost_units: 0,
 			);
 		} elseif ( 'signal' === $type ) {
 			$this->queue->dispatch(
@@ -1997,6 +2078,7 @@ class Workflow {
 				max_attempts: $max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				cost_units: 0,
 			);
 		} elseif ( 'workflow_wait' === $type ) {
 			$this->queue->dispatch(
@@ -2007,6 +2089,7 @@ class Workflow {
 				max_attempts: $max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				cost_units: 0,
 			);
 		} elseif ( 'loop' === $type ) {
 			$this->queue->dispatch(
@@ -2017,6 +2100,7 @@ class Workflow {
 				max_attempts: $max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				cost_units: 0,
 			);
 		} else {
 			$handler          = $this->resolve_step_handler( $step_def );
@@ -2029,6 +2113,9 @@ class Workflow {
 				max_attempts: $handler_defaults['max_attempts'] ?? $max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				concurrency_group: $handler_defaults['concurrency_group'],
+				concurrency_limit: $handler_defaults['concurrency_limit'],
+				cost_units: $handler_defaults['cost_units'] ?? 1,
 			);
 		}
 	}
@@ -2311,6 +2398,9 @@ class Workflow {
 					max_attempts: $effective_max,
 					workflow_id: $workflow_id,
 					step_index: $step_index,
+					concurrency_group: $handler_defaults['concurrency_group'],
+					concurrency_limit: $handler_defaults['concurrency_limit'],
+					cost_units: $handler_defaults['cost_units'] ?? 1,
 				);
 			}
 
@@ -3056,6 +3146,8 @@ class Workflow {
 				$state['_fan_out_steps'][ $current_step ] = $runtime;
 
 				if ( ! $this->fan_out_join_satisfied( $current_step_def, $runtime ) ) {
+					$this->increment_cost_units( $state, (int) ( $job_row['cost_units'] ?? 0 ) );
+					$this->assert_workflow_budget( $state );
 					$this->persist_internal_state( $workflow_id, $state );
 
 					$this->mark_workflow_job_completed( $pdo, $completed_job_id );
@@ -3108,6 +3200,7 @@ class Workflow {
 
 			if ( 'parallel' === $current_step_type ) {
 				$this->merge_step_output_into_state( $state, $step_output, $current_step );
+				$this->increment_cost_units( $state, (int) ( $job_row['cost_units'] ?? 0 ) );
 				$total_handlers = count( $current_step_def['handlers'] ?? array() );
 
 				// Parallel branches can finish out of order, so count only after this branch is marked complete.
@@ -3439,10 +3532,10 @@ class Workflow {
 			$state['_definition_hash'] = trim( $definition_hash );
 		}
 
-		$workflow_budget = $definition['workflow_budget'] ?? null;
+			$workflow_budget = $definition['workflow_budget'] ?? null;
 		if ( is_array( $workflow_budget ) && ! empty( $workflow_budget ) ) {
 			$normalized_budget = array();
-			foreach ( array( 'max_transitions', 'max_fan_out_items', 'max_state_bytes' ) as $key ) {
+			foreach ( array( 'max_transitions', 'max_fan_out_items', 'max_state_bytes', 'max_cost_units', 'max_spawned_workflows' ) as $key ) {
 				$value = $workflow_budget[ $key ] ?? null;
 				if ( is_int( $value ) && $value > 0 ) {
 					$normalized_budget[ $key ] = $value;
@@ -3451,7 +3544,11 @@ class Workflow {
 
 			if ( ! empty( $normalized_budget ) ) {
 				$state['_workflow_budget']   = $normalized_budget;
-				$state['_workflow_counters'] = array( 'transitions' => 0 );
+				$state['_workflow_counters'] = array(
+					'transitions'       => 0,
+					'cost_units'        => 0,
+					'spawned_workflows' => 0,
+				);
 
 				$max_state_bytes = $normalized_budget['max_state_bytes'] ?? null;
 				if ( null !== $max_state_bytes && strlen( json_encode( $initial_state, JSON_THROW_ON_ERROR ) ) > $max_state_bytes ) {
@@ -3728,6 +3825,7 @@ class Workflow {
 	 * @param array $workflow_state Parent workflow state.
 	 * @return array Step output containing the spawned workflow IDs.
 	 * @throws \RuntimeException If the step definition or source payloads are invalid.
+	 * @throws WorkflowConstraintViolationException If the step would exceed the configured spawn budget.
 	 */
 	public function handle_spawn_workflows_step( int $workflow_id, int $step_index, array $workflow_state ): array {
 		$steps    = $workflow_state['_steps'] ?? array();
@@ -3748,13 +3846,29 @@ class Workflow {
 			throw new \RuntimeException( "Spawn step '{$step_def['name']}' is missing a valid workflow definition." );
 		}
 
-		$result_key    = trim( (string) ( $step_def['result_key'] ?? 'spawned_workflow_ids' ) );
-		$payload_key   = trim( (string) ( $step_def['payload_key'] ?? 'item' ) );
-		$group_key     = trim( (string) ( $step_def['group_key'] ?? '' ) );
-		$inherit_state = ! empty( $step_def['inherit_state'] );
-		$base_state    = $inherit_state ? $this->public_state( $workflow_state ) : array();
+		$result_key     = trim( (string) ( $step_def['result_key'] ?? 'spawned_workflow_ids' ) );
+		$payload_key    = trim( (string) ( $step_def['payload_key'] ?? 'item' ) );
+		$group_key      = trim( (string) ( $step_def['group_key'] ?? '' ) );
+		$inherit_state  = ! empty( $step_def['inherit_state'] );
+		$base_state     = $inherit_state ? $this->public_state( $workflow_state ) : array();
+		$spawn_count    = count( $items );
+		$budget_limits  = $this->workflow_budget_limits( $workflow_state );
+		$spawned_so_far = (int) ( $workflow_state['_workflow_counters']['spawned_workflows'] ?? 0 );
 
 		unset( $base_state[ $items_key ], $base_state[ $result_key ] );
+
+		if (
+			isset( $budget_limits['max_spawned_workflows'] )
+			&& $spawned_so_far + $spawn_count > $budget_limits['max_spawned_workflows']
+		) {
+			throw new WorkflowConstraintViolationException(
+				sprintf(
+					"Spawn step '%s' would exceed max_spawned_workflows budget of %d.",
+					$step_def['name'] ?? (string) $step_index,
+					$budget_limits['max_spawned_workflows']
+				)
+			);
+		}
 
 		$spawned_ids = array();
 		foreach ( array_values( $items ) as $index => $item ) {
@@ -3789,6 +3903,12 @@ class Workflow {
 			$groups                     = is_array( $groups ) ? $groups : array();
 			$groups[ $group_key ]       = $spawned_ids;
 			$output['_workflow_groups'] = $groups;
+		}
+
+		if ( ! empty( $spawned_ids ) ) {
+			$output['_workflow_budget_delta'] = array(
+				'spawned_workflows' => count( $spawned_ids ),
+			);
 		}
 
 		return $output;

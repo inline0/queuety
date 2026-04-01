@@ -611,6 +611,7 @@ class StateMachine {
 		if ( '' === $action_class ) {
 			return;
 		}
+		$action_defaults = HandlerMetadata::from_class( $action_class );
 
 		$this->queue->dispatch(
 			handler: '__queuety_state_machine_action',
@@ -623,6 +624,9 @@ class StateMachine {
 			queue: (string) ( $definition['queue'] ?? 'default' ),
 			priority: Priority::tryFrom( (int) ( $definition['priority'] ?? 0 ) ) ?? Priority::Low,
 			max_attempts: max( 1, (int) ( $definition['max_attempts'] ?? 3 ) ),
+			concurrency_group: $action_defaults['concurrency_group'],
+			concurrency_limit: $action_defaults['concurrency_limit'],
+			cost_units: $action_defaults['cost_units'] ?? 1,
 		);
 	}
 

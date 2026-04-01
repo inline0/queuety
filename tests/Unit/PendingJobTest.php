@@ -139,11 +139,15 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->anything(),
 				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-			)
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+				)
 			->willReturn( 1 );
 
 		$pending = new PendingJob( 'MyCustomHandler', array(), $queue );
@@ -163,11 +167,15 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->anything(),
 				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-			)
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+				)
 			->willReturn( 1 );
 
 		$pending = new PendingJob( 'Handler', $payload, $queue );
@@ -185,11 +193,15 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->anything(),
 				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-			)
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+				)
 			->willReturn( 1 );
 
 		$pending = new PendingJob( 'Handler', array(), $queue );
@@ -207,11 +219,15 @@ class PendingJobTest extends TestCase {
 				$this->identicalTo( Priority::High ),
 				$this->anything(),
 				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-			)
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+				)
 			->willReturn( 1 );
 
 		$pending = new PendingJob( 'Handler', array(), $queue );
@@ -229,11 +245,15 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->identicalTo( 300 ),
 				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-			)
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+				)
 			->willReturn( 1 );
 
 		$pending = new PendingJob( 'Handler', array(), $queue );
@@ -251,11 +271,15 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->anything(),
 				$this->identicalTo( 10 ),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-			)
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+				)
 			->willReturn( 1 );
 
 		$pending = new PendingJob( 'Handler', array(), $queue );
@@ -273,11 +297,15 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->anything(),
 				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-			)
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+				)
 			->willReturn( 1 );
 
 		$pending = new PendingJob( 'Handler', array(), $queue );
@@ -387,12 +415,16 @@ class PendingJobTest extends TestCase {
 				$this->identicalTo( 'notifications' ),
 				$this->identicalTo( Priority::Urgent ),
 				$this->identicalTo( 600 ),
-				$this->identicalTo( 7 ),
-				$this->anything(),
-				$this->anything(),
-				$this->identicalTo( true ),
-				$this->identicalTo( 42 ),
-			)
+					$this->identicalTo( 7 ),
+					$this->anything(),
+					$this->anything(),
+					$this->identicalTo( true ),
+					$this->identicalTo( 42 ),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+				)
 			->willReturn( 123 );
 
 		$pending = new PendingJob( 'SendEmail', array( 'to' => 'a@b.com' ), $queue );
@@ -418,12 +450,16 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->anything(),
 				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->identicalTo( false ),
-				$this->anything(),
-			)
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->identicalTo( false ),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+				)
 			->willReturn( 1 );
 
 		$pending = new PendingJob( 'Handler', array(), $queue );
@@ -440,15 +476,57 @@ class PendingJobTest extends TestCase {
 				$this->anything(),
 				$this->anything(),
 				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->anything(),
-				$this->identicalTo( null ),
-			)
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->identicalTo( null ),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+					$this->anything(),
+				)
 			->willReturn( 1 );
 
 		$pending = new PendingJob( 'Handler', array(), $queue );
 		$pending->id();
+	}
+
+	public function test_concurrency_group_and_cost_units_are_forwarded_to_dispatch(): void {
+		$queue = $this->createMock( Queue::class );
+		$queue->expects( $this->once() )
+			->method( 'dispatch' )
+			->with(
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->anything(),
+				$this->identicalTo( 'providers' ),
+				$this->identicalTo( 2 ),
+				$this->identicalTo( 4 ),
+			)
+			->willReturn( 1 );
+
+		$pending = new PendingJob( 'Handler', array(), $queue );
+		$pending
+			->concurrency_group( 'providers', 2 )
+			->cost_units( 4 )
+			->id();
+	}
+
+	public function test_cost_units_rejects_non_positive_values(): void {
+		$pending = new PendingJob( 'Handler', array(), $this->make_stub_queue() );
+
+		$this->expectException( \InvalidArgumentException::class );
+		$this->expectExceptionMessage( 'Job cost_units must be at least 1.' );
+
+		$pending->cost_units( 0 );
 	}
 }

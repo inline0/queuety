@@ -30,6 +30,9 @@ class JobSerializer {
 		'timeout',
 		'max_exceptions',
 		'backoff',
+		'concurrency_group',
+		'concurrency_limit',
+		'cost_units',
 	);
 
 	/**

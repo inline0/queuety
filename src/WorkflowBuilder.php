@@ -119,6 +119,20 @@ class WorkflowBuilder {
 	private ?int $max_state_bytes = null;
 
 	/**
+	 * Maximum total cost units a workflow may consume.
+	 *
+	 * @var int|null
+	 */
+	private ?int $max_cost_units = null;
+
+	/**
+	 * Maximum number of child workflows this workflow may spawn.
+	 *
+	 * @var int|null
+	 */
+	private ?int $max_spawned_workflows = null;
+
+	/**
 	 * Whether to automatically run compensations when the workflow fails.
 	 *
 	 * @var bool
@@ -309,8 +323,8 @@ class WorkflowBuilder {
 		?string $condition_class = null,
 		?int $max_iterations = null,
 	): self {
-		$target_step = trim( $target_step );
-		$state_key   = null !== $state_key ? trim( $state_key ) : null;
+		$target_step     = trim( $target_step );
+		$state_key       = null !== $state_key ? trim( $state_key ) : null;
 		$condition_class = null !== $condition_class ? trim( $condition_class ) : null;
 
 		if ( '' === $target_step ) {
@@ -348,12 +362,12 @@ class WorkflowBuilder {
 
 		$index         = count( $this->steps );
 		$this->steps[] = array(
-			'type'        => 'loop',
-			'name'        => $name ?? 'repeat_' . $mode . '_' . $index,
-			'loop_mode'   => $mode,
-			'target_step' => $target_step,
-			'state_key'   => $state_key,
-			'expected'    => $expected,
+			'type'            => 'loop',
+			'name'            => $name ?? 'repeat_' . $mode . '_' . $index,
+			'loop_mode'       => $mode,
+			'target_step'     => $target_step,
+			'state_key'       => $state_key,
+			'expected'        => $expected,
 			'condition_class' => $condition_class,
 			'max_iterations'  => $max_iterations,
 		);
@@ -555,7 +569,7 @@ class WorkflowBuilder {
 			$correlation_key,
 		);
 
-		$last_index = count( $this->steps ) - 1;
+		$last_index                                 = count( $this->steps ) - 1;
 		$this->steps[ $last_index ]['human_wait']   = 'decision';
 		$this->steps[ $last_index ]['decision_map'] = array(
 			$approve_signal => 'approved',
@@ -1031,6 +1045,40 @@ class WorkflowBuilder {
 	}
 
 	/**
+	 * Limit the total execution cost units a workflow may consume.
+	 *
+	 * Cost units are counted from completed handler and state-action jobs.
+	 *
+	 * @param int $max Maximum cost units.
+	 * @return self
+	 * @throws \InvalidArgumentException If the limit is less than 1.
+	 */
+	public function max_cost_units( int $max ): self {
+		if ( $max < 1 ) {
+			throw new \InvalidArgumentException( 'Workflow max_cost_units must be at least 1.' );
+		}
+
+		$this->max_cost_units = $max;
+		return $this;
+	}
+
+	/**
+	 * Limit how many child workflows a workflow may spawn in total.
+	 *
+	 * @param int $max Maximum spawned workflows.
+	 * @return self
+	 * @throws \InvalidArgumentException If the limit is less than 1.
+	 */
+	public function max_spawned_workflows( int $max ): self {
+		if ( $max < 1 ) {
+			throw new \InvalidArgumentException( 'Workflow max_spawned_workflows must be at least 1.' );
+		}
+
+		$this->max_spawned_workflows = $max;
+		return $this;
+	}
+
+	/**
 	 * Set the queue for all steps.
 	 *
 	 * @param string $queue Queue name.
@@ -1170,15 +1218,15 @@ class WorkflowBuilder {
 				);
 			} elseif ( 'loop' === $step['type'] ) {
 				$result[] = array(
-					'type'         => 'loop',
-					'name'         => $step['name'],
-					'loop_mode'    => $step['loop_mode'],
-					'target_step'  => $step['target_step'],
-					'state_key'    => $step['state_key'],
-					'expected'     => $step['expected'],
+					'type'            => 'loop',
+					'name'            => $step['name'],
+					'loop_mode'       => $step['loop_mode'],
+					'target_step'     => $step['target_step'],
+					'state_key'       => $step['state_key'],
+					'expected'        => $step['expected'],
 					'condition_class' => $step['condition_class'] ?? null,
 					'max_iterations'  => $step['max_iterations'] ?? null,
-					'compensation' => $step['compensation'] ?? null,
+					'compensation'    => $step['compensation'] ?? null,
 				);
 			} elseif ( 'spawn_workflows' === $step['type'] ) {
 				$result[] = array(
@@ -1249,9 +1297,11 @@ class WorkflowBuilder {
 	private function workflow_budget_definition(): array {
 		return array_filter(
 			array(
-				'max_transitions'   => $this->max_transitions,
-				'max_fan_out_items' => $this->max_fan_out_items,
-				'max_state_bytes'   => $this->max_state_bytes,
+				'max_transitions'       => $this->max_transitions,
+				'max_fan_out_items'     => $this->max_fan_out_items,
+				'max_state_bytes'       => $this->max_state_bytes,
+				'max_cost_units'        => $this->max_cost_units,
+				'max_spawned_workflows' => $this->max_spawned_workflows,
 			),
 			static fn( mixed $value ): bool => null !== $value
 		);
@@ -1301,11 +1351,11 @@ class WorkflowBuilder {
 
 		$built_steps = $this->build_steps();
 
-		$state                  = $initial_payload;
-		$state['_steps']        = $built_steps;
-		$state['_queue']        = $this->queue;
-		$state['_priority']     = $this->priority->value;
-		$state['_max_attempts'] = $this->max_attempts;
+		$state                     = $initial_payload;
+		$state['_steps']           = $built_steps;
+		$state['_queue']           = $this->queue;
+		$state['_priority']        = $this->priority->value;
+		$state['_max_attempts']    = $this->max_attempts;
 		$state['_definition_hash'] = $this->definition_hash( $built_steps );
 
 		if ( null !== $this->cancel_handler ) {
@@ -1336,7 +1386,11 @@ class WorkflowBuilder {
 		$workflow_budget = $this->workflow_budget_definition();
 		if ( ! empty( $workflow_budget ) ) {
 			$state['_workflow_budget']   = $workflow_budget;
-			$state['_workflow_counters'] = array( 'transitions' => 0 );
+			$state['_workflow_counters'] = array(
+				'transitions'       => 0,
+				'cost_units'        => 0,
+				'spawned_workflows' => 0,
+			);
 		}
 
 		if ( $this->compensate_on_failure ) {
@@ -1459,7 +1513,7 @@ class WorkflowBuilder {
 	 * @return bool
 	 */
 	private function is_duplicate_key_error( \PDOException $e ): bool {
-		$sql_state = (string) $e->getCode();
+		$sql_state  = (string) $e->getCode();
 		$error_info = $e->errorInfo; // phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase -- PDO exposes this property with a fixed name.
 		$driver     = $error_info[1] ?? null;
 
@@ -1485,6 +1539,9 @@ class WorkflowBuilder {
 					max_attempts: $handler_defaults['max_attempts'] ?? $this->max_attempts,
 					workflow_id: $workflow_id,
 					step_index: $step_index,
+					concurrency_group: $handler_defaults['concurrency_group'],
+					concurrency_limit: $handler_defaults['concurrency_limit'],
+					cost_units: $handler_defaults['cost_units'] ?? 1,
 				);
 			}
 		} elseif ( 'sub_workflow' === $step_def['type'] ) {
@@ -1497,6 +1554,7 @@ class WorkflowBuilder {
 				max_attempts: $this->max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				cost_units: 0,
 			);
 		} elseif ( 'timer' === $step_def['type'] ) {
 			$this->queue_ops->dispatch(
@@ -1508,6 +1566,7 @@ class WorkflowBuilder {
 				max_attempts: $this->max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				cost_units: 0,
 			);
 		} elseif ( 'fan_out' === $step_def['type'] ) {
 			$this->queue_ops->dispatch(
@@ -1518,6 +1577,7 @@ class WorkflowBuilder {
 				max_attempts: $this->max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				cost_units: 0,
 			);
 		} elseif ( 'signal' === $step_def['type'] ) {
 			// Signal steps must round-trip through the workflow runtime so pre-sent signals can resume immediately.
@@ -1529,6 +1589,7 @@ class WorkflowBuilder {
 				max_attempts: $this->max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				cost_units: 0,
 			);
 		} elseif ( 'workflow_wait' === $step_def['type'] ) {
 			$this->queue_ops->dispatch(
@@ -1539,6 +1600,7 @@ class WorkflowBuilder {
 				max_attempts: $this->max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				cost_units: 0,
 			);
 		} elseif ( 'loop' === $step_def['type'] ) {
 			$this->queue_ops->dispatch(
@@ -1549,6 +1611,7 @@ class WorkflowBuilder {
 				max_attempts: $this->max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				cost_units: 0,
 			);
 		} elseif ( 'spawn_workflows' === $step_def['type'] ) {
 			$this->queue_ops->dispatch(
@@ -1559,6 +1622,7 @@ class WorkflowBuilder {
 				max_attempts: $this->max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				cost_units: 0,
 			);
 		} else {
 			$handler_defaults = HandlerMetadata::from_class( $step_def['class'] );
@@ -1570,6 +1634,9 @@ class WorkflowBuilder {
 				max_attempts: $handler_defaults['max_attempts'] ?? $this->max_attempts,
 				workflow_id: $workflow_id,
 				step_index: $step_index,
+				concurrency_group: $handler_defaults['concurrency_group'],
+				concurrency_limit: $handler_defaults['concurrency_limit'],
+				cost_units: $handler_defaults['cost_units'] ?? 1,
 			);
 		}
 	}

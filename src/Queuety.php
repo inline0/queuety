@@ -153,6 +153,13 @@ class Queuety {
 	private static ?StateMachine $state_machine = null;
 
 	/**
+	 * Resource manager instance.
+	 *
+	 * @var ResourceManager|null
+	 */
+	private static ?ResourceManager $resource_manager = null;
+
+	/**
 	 * Cache backend instance.
 	 *
 	 * @var Cache|null
@@ -201,6 +208,7 @@ class Queuety {
 		self::$state_machine           = new StateMachine( $conn, self::$queue, self::$state_machine_event_log );
 		self::$registry                = new HandlerRegistry();
 		self::$rate_limiter            = new RateLimiter( $conn, self::$cache );
+		self::$resource_manager        = new ResourceManager( $conn, self::$cache );
 		self::$scheduler               = new Scheduler( $conn, self::$queue );
 		self::$workflow_registry       = new WorkflowRegistry();
 		self::$metrics                 = new Metrics( $conn );
@@ -215,6 +223,7 @@ class Queuety {
 			self::$registry,
 			new Config(),
 			self::$rate_limiter,
+			self::$resource_manager,
 			self::$scheduler,
 			self::$webhook_notifier,
 			self::$batch_manager,
@@ -1019,6 +1028,16 @@ class Queuety {
 	}
 
 	/**
+	 * Get the resource manager instance.
+	 *
+	 * @return ResourceManager
+	 */
+	public static function resource_manager(): ResourceManager {
+		self::ensure_initialized();
+		return self::$resource_manager;
+	}
+
+	/**
 	 * Get the batch manager instance.
 	 *
 	 * @return BatchManager
@@ -1630,6 +1649,7 @@ class Queuety {
 		self::$worker                  = null;
 		self::$registry                = null;
 		self::$rate_limiter            = null;
+		self::$resource_manager        = null;
 		self::$scheduler               = null;
 		self::$workflow_registry       = null;
 		self::$metrics                 = null;
@@ -1696,7 +1716,22 @@ class Queuety {
 		$class = null;
 
 		if ( $handler instanceof JobContract ) {
-			$class = get_class( $handler );
+			$class    = get_class( $handler );
+			$defaults = JobMetadata::from_class( $class );
+
+			if ( null !== $defaults['tries'] ) {
+				$pending->max_attempts( $defaults['tries'] );
+			}
+
+			if ( null !== $defaults['concurrency_group'] && null !== $defaults['concurrency_limit'] ) {
+				$pending->concurrency_group( $defaults['concurrency_group'], $defaults['concurrency_limit'] );
+			}
+
+			if ( null !== $defaults['cost_units'] ) {
+				$pending->cost_units( $defaults['cost_units'] );
+			}
+
+			return $pending;
 		} elseif ( null !== self::$registry ) {
 			$class = self::$registry->class_name( $handler );
 		} elseif ( class_exists( $handler ) ) {
@@ -1715,6 +1750,14 @@ class Queuety {
 
 		if ( null !== $defaults['max_attempts'] ) {
 			$pending->max_attempts( $defaults['max_attempts'] );
+		}
+
+		if ( null !== $defaults['concurrency_group'] && null !== $defaults['concurrency_limit'] ) {
+			$pending->concurrency_group( $defaults['concurrency_group'], $defaults['concurrency_limit'] );
+		}
+
+		if ( null !== $defaults['cost_units'] ) {
+			$pending->cost_units( $defaults['cost_units'] );
 		}
 
 		return $pending;

@@ -31,17 +31,20 @@ class Queue {
 	/**
 	 * Dispatch a new job.
 	 *
-	 * @param string   $handler      Handler name or class.
-	 * @param array    $payload      Job payload.
-	 * @param string   $queue        Queue name.
-	 * @param Priority $priority     Job priority.
-	 * @param int      $delay        Delay in seconds before the job becomes available.
-	 * @param int      $max_attempts Maximum retry attempts.
-	 * @param int|null $workflow_id  Parent workflow ID, if part of a workflow.
-	 * @param int|null $step_index   Step index within the workflow.
-	 * @param bool     $unique       When true, prevent duplicate jobs with the same handler and payload.
-	 * @param int|null $depends_on   ID of a job that must complete before this one can be claimed.
-	 * @param int|null $batch_id     Batch ID, if part of a batch.
+	 * @param string      $handler      Handler name or class.
+	 * @param array       $payload      Job payload.
+	 * @param string      $queue        Queue name.
+	 * @param Priority    $priority     Job priority.
+	 * @param int         $delay        Delay in seconds before the job becomes available.
+	 * @param int         $max_attempts Maximum retry attempts.
+	 * @param int|null    $workflow_id  Parent workflow ID, if part of a workflow.
+	 * @param int|null    $step_index   Step index within the workflow.
+	 * @param bool        $unique       When true, prevent duplicate jobs with the same handler and payload.
+	 * @param int|null    $depends_on   ID of a job that must complete before this one can be claimed.
+	 * @param int|null    $batch_id     Batch ID, if part of a batch.
+	 * @param string|null $concurrency_group Optional global concurrency group name.
+	 * @param int|null    $concurrency_limit Optional concurrency cap for the group.
+	 * @param int         $cost_units        Relative execution cost units.
 	 * @return int The new job ID (or the existing job ID if unique and a duplicate exists).
 	 */
 	public function dispatch(
@@ -56,11 +59,25 @@ class Queue {
 		bool $unique = false,
 		?int $depends_on = null,
 		?int $batch_id = null,
+		?string $concurrency_group = null,
+		?int $concurrency_limit = null,
+		int $cost_units = 1,
 	): int {
 		$table        = $this->conn->table( Config::table_jobs() );
 		$available_at = gmdate( 'Y-m-d H:i:s', time() + $delay );
 		$payload_json = json_encode( $payload, JSON_THROW_ON_ERROR ) ?: '{}';
 		$payload_hash = $unique ? hash( 'sha256', $payload_json ) : null;
+		$cost_units   = max( 0, $cost_units );
+
+		$concurrency_group = null !== $concurrency_group ? trim( $concurrency_group ) : null;
+		if ( '' === $concurrency_group ) {
+			$concurrency_group = null;
+		}
+
+		if ( null === $concurrency_group || null === $concurrency_limit || $concurrency_limit < 1 ) {
+			$concurrency_group = null;
+			$concurrency_limit = null;
+		}
 
 		if ( $unique ) {
 			$check = $this->conn->pdo()->prepare(
@@ -86,25 +103,28 @@ class Queue {
 
 		$stmt = $this->conn->pdo()->prepare(
 			"INSERT INTO {$table}
-				(queue, handler, payload, payload_hash, priority, status, max_attempts, available_at, workflow_id, step_index, depends_on, batch_id)
+				(queue, handler, payload, payload_hash, priority, status, max_attempts, available_at, workflow_id, step_index, depends_on, batch_id, concurrency_group, concurrency_limit, cost_units)
 			VALUES
-				(:queue, :handler, :payload, :payload_hash, :priority, :status, :max_attempts, :available_at, :workflow_id, :step_index, :depends_on, :batch_id)"
+				(:queue, :handler, :payload, :payload_hash, :priority, :status, :max_attempts, :available_at, :workflow_id, :step_index, :depends_on, :batch_id, :concurrency_group, :concurrency_limit, :cost_units)"
 		);
 
 		$stmt->execute(
 			array(
-				'queue'        => $queue,
-				'handler'      => $handler,
-				'payload'      => $payload_json,
-				'payload_hash' => $payload_hash,
-				'priority'     => $priority->value,
-				'status'       => JobStatus::Pending->value,
-				'max_attempts' => $max_attempts,
-				'available_at' => $available_at,
-				'workflow_id'  => $workflow_id,
-				'step_index'   => $step_index,
-				'depends_on'   => $depends_on,
-				'batch_id'     => $batch_id,
+				'queue'             => $queue,
+				'handler'           => $handler,
+				'payload'           => $payload_json,
+				'payload_hash'      => $payload_hash,
+				'priority'          => $priority->value,
+				'status'            => JobStatus::Pending->value,
+				'max_attempts'      => $max_attempts,
+				'available_at'      => $available_at,
+				'workflow_id'       => $workflow_id,
+				'step_index'        => $step_index,
+				'depends_on'        => $depends_on,
+				'batch_id'          => $batch_id,
+				'concurrency_group' => $concurrency_group,
+				'concurrency_limit' => $concurrency_limit,
+				'cost_units'        => $cost_units,
 			)
 		);
 

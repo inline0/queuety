@@ -36,8 +36,11 @@ readonly class Job {
 	 * @param \DateTimeImmutable      $created_at    When the job was created.
 	 * @param string|null             $payload_hash  SHA-256 hash of the payload for unique job detection.
 	 * @param int|null                $depends_on    ID of the job this job depends on.
-	 * @param int|null                $batch_id       Batch ID if part of a batch.
+	 * @param int|null                $batch_id      Batch ID if part of a batch.
 	 * @param array|null              $heartbeat_data Progress data from heartbeats.
+	 * @param string|null             $concurrency_group Optional global concurrency group name.
+	 * @param int|null                $concurrency_limit Optional maximum concurrent jobs for the group.
+	 * @param int                     $cost_units    Relative execution cost units for guardrails.
 	 */
 	public function __construct(
 		public int $id,
@@ -60,6 +63,9 @@ readonly class Job {
 		public ?int $depends_on = null,
 		public ?int $batch_id = null,
 		public ?array $heartbeat_data = null,
+		public ?string $concurrency_group = null,
+		public ?int $concurrency_limit = null,
+		public int $cost_units = 1,
 	) {}
 
 	/**
@@ -92,6 +98,13 @@ readonly class Job {
 			heartbeat_data: array_key_exists( 'heartbeat_data', $row ) && null !== $row['heartbeat_data']
 				? ( json_decode( $row['heartbeat_data'], true ) ?: null )
 				: null,
+			concurrency_group: array_key_exists( 'concurrency_group', $row ) && null !== $row['concurrency_group']
+				? (string) $row['concurrency_group']
+				: null,
+			concurrency_limit: array_key_exists( 'concurrency_limit', $row ) && null !== $row['concurrency_limit']
+				? (int) $row['concurrency_limit']
+				: null,
+			cost_units: array_key_exists( 'cost_units', $row ) ? max( 0, (int) $row['cost_units'] ) : 1,
 		);
 	}
 

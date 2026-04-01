@@ -37,6 +37,7 @@ class Worker {
 	 * @param HandlerRegistry       $registry          Handler registry.
 	 * @param Config                $config            Configuration.
 	 * @param RateLimiter|null      $rate_limiter      Optional rate limiter.
+	 * @param ResourceManager|null  $resource_manager  Optional resource manager for admission and concurrency policies.
 	 * @param Scheduler|null        $scheduler         Optional scheduler for recurring jobs.
 	 * @param WebhookNotifier|null  $webhook_notifier  Optional webhook notifier.
 	 * @param BatchManager|null     $batch_manager     Optional batch manager.
@@ -52,6 +53,7 @@ class Worker {
 		private readonly HandlerRegistry $registry,
 		Config $config,
 		private readonly ?RateLimiter $rate_limiter = null,
+		private readonly ?ResourceManager $resource_manager = null,
 		private readonly ?Scheduler $scheduler = null,
 		private readonly ?WebhookNotifier $webhook_notifier = null,
 		private readonly ?BatchManager $batch_manager = null,
@@ -121,6 +123,41 @@ class Worker {
 	}
 
 	/**
+	 * Decide whether one claimed job should proceed to execution.
+	 *
+	 * Denied jobs are returned to pending so another worker mode or queue can
+	 * pick them up later.
+	 *
+	 * @param Job  $job                 Claimed job.
+	 * @param bool $respect_time_budget Whether to enforce a once-run time budget.
+	 * @param int  $run_started_at      Worker-loop start time from hrtime(true).
+	 * @return bool
+	 */
+	private function admit_claimed_job( Job $job, bool $respect_time_budget, int $run_started_at ): bool {
+		if ( null === $this->resource_manager ) {
+			return true;
+		}
+
+		$elapsed_ms = (int) ( ( hrtime( true ) - $run_started_at ) / 1_000_000 );
+		$decision   = $this->resource_manager->admit( $job, $respect_time_budget, $elapsed_ms );
+		if ( $decision['allowed'] ) {
+			return true;
+		}
+
+		$this->debug_log(
+			sprintf(
+				'Deferring job #%d (%s): %s',
+				$job->id,
+				$job->handler,
+				$decision['reason'] ?? 'resource policy'
+			),
+			$job->queue
+		);
+		$this->queue->unclaim( $job->id );
+		return false;
+	}
+
+	/**
 	 * Run the worker loop.
 	 *
 	 * Supports processing multiple queues in priority order. When a comma-separated
@@ -138,6 +175,7 @@ class Worker {
 		$schedule_check_timer = time();
 		$deadline_check_timer = time();
 		$primary_queue        = $queues[0];
+		$run_started_at       = hrtime( true );
 
 		while ( ! $this->should_stop ) {
 			$job = $this->claim_from_queues( $queues, log_paused: true );
@@ -181,6 +219,14 @@ class Worker {
 					sleep( Config::worker_sleep() );
 					continue;
 				}
+			}
+
+			if ( ! $this->admit_claimed_job( $job, $once, $run_started_at ) ) {
+				if ( $once ) {
+					break;
+				}
+				sleep( Config::worker_sleep() );
+				continue;
 			}
 
 			$this->process_job( $job );
@@ -227,10 +273,11 @@ class Worker {
 	 * @return int Total jobs processed.
 	 */
 	public function flush( string|array $queue_name = 'default' ): int {
-		$queues       = $this->parse_queue_names( $queue_name );
-		$count        = 0;
-		$last_skipped = null;
-		$skip_streak  = 0;
+		$queues         = $this->parse_queue_names( $queue_name );
+		$count          = 0;
+		$last_skipped   = null;
+		$skip_streak    = 0;
+		$run_started_at = hrtime( true );
 
 		while ( true ) {
 			$job = $this->claim_from_queues( $queues );
@@ -256,6 +303,19 @@ class Worker {
 					}
 					continue;
 				}
+			}
+
+			if ( ! $this->admit_claimed_job( $job, false, $run_started_at ) ) {
+				if ( $last_skipped === $job->id ) {
+					++$skip_streak;
+					if ( $skip_streak >= 2 ) {
+						break;
+					}
+				} else {
+					$last_skipped = $job->id;
+					$skip_streak  = 1;
+				}
+				continue;
 			}
 
 			$last_skipped = null;
@@ -940,45 +1000,21 @@ class Worker {
 	}
 
 	/**
-	 * Read job properties (tries, timeout, backoff) from a Contracts\Job class via reflection.
+	 * Read runtime properties from a Contracts\Job class.
 	 *
 	 * @param string $handler_class Fully qualified class name.
-	 * @return array{tries: int|null, timeout: int|null, max_exceptions: int|null, backoff: array|null}
+	 * @return array{
+	 *     tries: int|null,
+	 *     timeout: int|null,
+	 *     max_exceptions: int|null,
+	 *     backoff: array|null,
+	 *     concurrency_group: string|null,
+	 *     concurrency_limit: int|null,
+	 *     cost_units: int|null
+	 * }
 	 */
 	private function read_job_properties( string $handler_class ): array {
-		$result = array(
-			'tries'          => null,
-			'timeout'        => null,
-			'max_exceptions' => null,
-			'backoff'        => null,
-		);
-
-		try {
-			$reflection = new \ReflectionClass( $handler_class );
-		} catch ( \ReflectionException ) {
-			return $result;
-		}
-
-		foreach ( array( 'tries', 'timeout', 'max_exceptions' ) as $prop_name ) {
-			if ( $reflection->hasProperty( $prop_name ) ) {
-				$prop = $reflection->getProperty( $prop_name );
-				if ( $prop->isPublic() && $prop->hasDefaultValue() ) {
-					$result[ $prop_name ] = $prop->getDefaultValue();
-				}
-			}
-		}
-
-		if ( $reflection->hasProperty( 'backoff' ) ) {
-			$prop = $reflection->getProperty( 'backoff' );
-			if ( $prop->isPublic() && $prop->hasDefaultValue() ) {
-				$value = $prop->getDefaultValue();
-				if ( is_array( $value ) ) {
-					$result['backoff'] = $value;
-				}
-			}
-		}
-
-		return $result;
+		return JobMetadata::from_class( $handler_class );
 	}
 
 	/**

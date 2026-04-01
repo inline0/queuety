@@ -96,6 +96,51 @@ class Config {
 	}
 
 	/**
+	 * Whether resource-aware admission checks are enabled.
+	 *
+	 * @return bool
+	 */
+	public static function resource_admission_enabled(): bool {
+		return defined( 'QUEUETY_RESOURCE_ADMISSION' ) ? (bool) QUEUETY_RESOURCE_ADMISSION : true;
+	}
+
+	/**
+	 * Get the recent profile lookback window in minutes.
+	 *
+	 * @return int
+	 */
+	public static function resource_profile_window_minutes(): int {
+		return defined( 'QUEUETY_RESOURCE_PROFILE_WINDOW_MINUTES' ) ? max( 1, (int) QUEUETY_RESOURCE_PROFILE_WINDOW_MINUTES ) : 60;
+	}
+
+	/**
+	 * Get the resource profile cache TTL in seconds.
+	 *
+	 * @return int
+	 */
+	public static function resource_profile_ttl_seconds(): int {
+		return defined( 'QUEUETY_RESOURCE_PROFILE_TTL' ) ? max( 1, (int) QUEUETY_RESOURCE_PROFILE_TTL ) : 30;
+	}
+
+	/**
+	 * Get the memory headroom in MB reserved before admitting another job.
+	 *
+	 * @return int
+	 */
+	public static function resource_memory_headroom_mb(): int {
+		return defined( 'QUEUETY_RESOURCE_MEMORY_HEADROOM_MB' ) ? max( 0, (int) QUEUETY_RESOURCE_MEMORY_HEADROOM_MB ) : 16;
+	}
+
+	/**
+	 * Get the time headroom in milliseconds reserved for once-run workers.
+	 *
+	 * @return int
+	 */
+	public static function resource_time_headroom_ms(): int {
+		return defined( 'QUEUETY_RESOURCE_TIME_HEADROOM_MS' ) ? max( 0, (int) QUEUETY_RESOURCE_TIME_HEADROOM_MS ) : 5000;
+	}
+
+	/**
 	 * Get the retry backoff strategy.
 	 *
 	 * @return BackoffStrategy

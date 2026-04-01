@@ -80,6 +80,27 @@ class PendingJob {
 	private ?int $batch_id = null;
 
 	/**
+	 * Optional global concurrency group name.
+	 *
+	 * @var string|null
+	 */
+	private ?string $concurrency_group = null;
+
+	/**
+	 * Optional global concurrency limit for the group.
+	 *
+	 * @var int|null
+	 */
+	private ?int $concurrency_limit = null;
+
+	/**
+	 * Relative execution cost units for resource-aware workflows.
+	 *
+	 * @var int
+	 */
+	private int $cost_units = 1;
+
+	/**
 	 * Whether the job has been dispatched.
 	 *
 	 * @var bool
@@ -234,6 +255,48 @@ class PendingJob {
 	}
 
 	/**
+	 * Attach this job to a global concurrency group.
+	 *
+	 * Jobs in the same group are only admitted up to the configured limit
+	 * across all workers.
+	 *
+	 * @param string $group Group name.
+	 * @param int    $limit Maximum concurrent jobs in the group.
+	 * @return self
+	 * @throws \InvalidArgumentException If the group name or limit is invalid.
+	 */
+	public function concurrency_group( string $group, int $limit ): self {
+		$group = trim( $group );
+		if ( '' === $group ) {
+			throw new \InvalidArgumentException( 'Job concurrency group cannot be empty.' );
+		}
+
+		if ( $limit < 1 ) {
+			throw new \InvalidArgumentException( 'Job concurrency group limit must be at least 1.' );
+		}
+
+		$this->concurrency_group = $group;
+		$this->concurrency_limit = $limit;
+		return $this;
+	}
+
+	/**
+	 * Set the relative execution cost units for this job.
+	 *
+	 * @param int $units Cost units.
+	 * @return self
+	 * @throws \InvalidArgumentException If the cost is less than 1.
+	 */
+	public function cost_units( int $units ): self {
+		if ( $units < 1 ) {
+			throw new \InvalidArgumentException( 'Job cost_units must be at least 1.' );
+		}
+
+		$this->cost_units = $units;
+		return $this;
+	}
+
+	/**
 	 * Get the dispatched job ID. Forces dispatch if not yet done.
 	 *
 	 * @return int
@@ -259,6 +322,9 @@ class PendingJob {
 			unique: $this->unique,
 			depends_on: $this->depends_on,
 			batch_id: $this->batch_id,
+			concurrency_group: $this->concurrency_group,
+			concurrency_limit: $this->concurrency_limit,
+			cost_units: $this->cost_units,
 		);
 		$this->dispatched = true;
 

@@ -46,6 +46,27 @@ class JobWithProperties implements Job {
 	public array $backoff = array( 10, 60, 300 );
 
 	/**
+	 * Shared concurrency group for resource-aware admission tests.
+	 *
+	 * @var string
+	 */
+	public string $concurrency_group = 'job-properties';
+
+	/**
+	 * Concurrency cap for the shared group.
+	 *
+	 * @var int
+	 */
+	public int $concurrency_limit = 2;
+
+	/**
+	 * Relative execution cost units.
+	 *
+	 * @var int
+	 */
+	public int $cost_units = 3;
+
+	/**
 	 * Processed payloads.
 	 *
 	 * @var array

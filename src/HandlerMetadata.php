@@ -8,6 +8,7 @@
 namespace Queuety;
 
 use Queuety\Contracts\FanOutHandler;
+use Queuety\Contracts\StateAction;
 use Queuety\Attributes\QueuetyHandler;
 use Queuety\Attributes\QueuetyStep;
 use Queuety\Contracts\StreamingStep;
@@ -28,15 +29,21 @@ class HandlerMetadata {
 	 *     queue: string|null,
 	 *     max_attempts: int|null,
 	 *     backoff: string|array|null,
-	 *     rate_limit: array{int, int}|null
+	 *     rate_limit: array{int, int}|null,
+	 *     concurrency_group: string|null,
+	 *     concurrency_limit: int|null,
+	 *     cost_units: int|null
 	 * }
 	 */
 	public static function from_class( string $class ): array {
 		$defaults = array(
-			'queue'        => null,
-			'max_attempts' => null,
-			'backoff'      => null,
-			'rate_limit'   => null,
+			'queue'             => null,
+			'max_attempts'      => null,
+			'backoff'           => null,
+			'rate_limit'        => null,
+			'concurrency_group' => null,
+			'concurrency_limit' => null,
+			'cost_units'        => null,
 		);
 
 		if ( ! class_exists( $class ) ) {
@@ -65,7 +72,8 @@ class HandlerMetadata {
 		$implements_configurable = $reflection->implementsInterface( Handler::class )
 			|| $reflection->implementsInterface( Step::class )
 			|| $reflection->implementsInterface( FanOutHandler::class )
-			|| $reflection->implementsInterface( StreamingStep::class );
+			|| $reflection->implementsInterface( StreamingStep::class )
+			|| $reflection->implementsInterface( StateAction::class );
 
 		if ( ! $implements_configurable ) {
 			return $defaults;
@@ -109,6 +117,31 @@ class HandlerMetadata {
 				(int) $config['rate_limit'][0],
 				(int) $config['rate_limit'][1],
 			);
+		}
+
+		if ( isset( $config['concurrency_group'] ) && is_string( $config['concurrency_group'] ) ) {
+			$group = trim( $config['concurrency_group'] );
+			if ( '' !== $group ) {
+				$defaults['concurrency_group'] = $group;
+			}
+		}
+
+		if ( isset( $config['concurrency_limit'] ) ) {
+			$limit = (int) $config['concurrency_limit'];
+			if ( $limit > 0 ) {
+				$defaults['concurrency_limit'] = $limit;
+			}
+		}
+
+		if ( isset( $config['cost_units'] ) ) {
+			$cost_units = (int) $config['cost_units'];
+			if ( $cost_units > 0 ) {
+				$defaults['cost_units'] = $cost_units;
+			}
+		}
+
+		if ( null === $defaults['concurrency_group'] ) {
+			$defaults['concurrency_limit'] = null;
 		}
 
 		return $defaults;

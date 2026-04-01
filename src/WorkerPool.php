@@ -161,12 +161,13 @@ class WorkerPool {
 			$registry = new HandlerRegistry();
 		}
 
-		$rate_limiter     = new RateLimiter( $conn, $cache );
-		$scheduler        = new Scheduler( $conn, $queue_op );
-		$webhook_notifier = new WebhookNotifier( $conn );
-		$batch_manager    = new BatchManager( $conn );
-		$chunk_store      = new ChunkStore( $conn );
-		$worker           = new Worker(
+			$rate_limiter     = new RateLimiter( $conn, $cache );
+			$resource_manager = new ResourceManager( $conn, $cache );
+			$scheduler        = new Scheduler( $conn, $queue_op );
+			$webhook_notifier = new WebhookNotifier( $conn );
+			$batch_manager    = new BatchManager( $conn );
+			$chunk_store      = new ChunkStore( $conn );
+		$worker               = new Worker(
 			$conn,
 			$queue_op,
 			$logger,
@@ -174,6 +175,7 @@ class WorkerPool {
 			$registry,
 			new Config(),
 			$rate_limiter,
+			$resource_manager,
 			$scheduler,
 			$webhook_notifier,
 			$batch_manager,

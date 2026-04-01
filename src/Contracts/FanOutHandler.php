@@ -25,7 +25,7 @@ interface FanOutHandler {
 	/**
 	 * Optional handler configuration.
 	 *
-	 * Supported keys: max_attempts, backoff, rate_limit.
+	 * Supported keys: max_attempts, backoff, rate_limit, concurrency_group, concurrency_limit, cost_units.
 	 *
 	 * @return array
 	 */

@@ -103,6 +103,44 @@ command=wp queuety work --queue=default,low
 numprocs=2
 ```
 
+## Resource-aware admission
+
+Workers do more than just claim the next pending row. Before a claimed job starts, Queuety can apply coarse admission checks based on the job's concurrency group and the recent execution profile for that handler.
+
+A concurrency group gives several handlers or job classes a shared ceiling. If you mark several expensive providers with the same group and limit, a worker will release newly claimed work instead of starting it once the group is saturated. That keeps independent queues from stampeding one downstream system just because there are multiple idle workers.
+
+Recent execution logs also feed a simple admission profile. When resource admission is enabled, Queuety looks at recent average duration and peak memory for the handler it is about to run. If the current worker is already close to its configured memory ceiling, or a `--once` style run is close to its time envelope, Queuety defers the job rather than starting work that is unlikely to finish cleanly.
+
+You opt into the policy from the work definition rather than from the worker command:
+
+```php
+class CallProviderStep implements \Queuety\Step {
+    public function handle( array $state ): array {
+        // ...
+    }
+
+    public function config(): array {
+        return [
+            'concurrency_group' => 'providers',
+            'concurrency_limit' => 3,
+            'cost_units' => 5,
+        ];
+    }
+}
+```
+
+The same metadata can be attached to dispatchable job classes with public properties or to an individual dispatch through `PendingJob::concurrency_group()` and `PendingJob::cost_units()`.
+
+The worker-side admission profile is controlled with these constants:
+
+| Constant | Description |
+|---|---|
+| `QUEUETY_RESOURCE_ADMISSION` | Enable or disable profile-based admission checks |
+| `QUEUETY_RESOURCE_PROFILE_WINDOW_MINUTES` | How far back to look when building recent handler profiles |
+| `QUEUETY_RESOURCE_PROFILE_TTL` | Cache TTL for recent handler profiles |
+| `QUEUETY_RESOURCE_MEMORY_HEADROOM_MB` | Reserved memory headroom before admitting another job |
+| `QUEUETY_RESOURCE_TIME_HEADROOM_MS` | Reserved time headroom for one-shot worker runs |
+
 ## Worker lifecycle
 
 A worker stops gracefully when any of these conditions are met:

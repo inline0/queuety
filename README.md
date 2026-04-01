@@ -295,7 +295,8 @@ wp queuety work
 - **Dynamic fan-out** -- `fan_out()` expands runtime-discovered work with `All`, `FirstSuccess`, and `Quorum` join modes
 - **Durable loops** -- `repeat_until()` and `repeat_while()` revisit earlier named steps without hiding the back-edge inside arbitrary step code
 - **Durable artifacts** -- store named workflow outputs outside the main state bag and inspect them later through status, CLI, export, and replay
-- **Workflow guardrails** -- `version()`, a deterministic definition hash, `idempotency_key()`, `max_transitions()`, `max_fan_out_items()`, and `max_state_bytes()` make long-running agent workflows easier to inspect and safer to operate
+- **Workflow guardrails** -- `version()`, a deterministic definition hash, `idempotency_key()`, `max_transitions()`, `max_fan_out_items()`, `max_state_bytes()`, `max_cost_units()`, and `max_spawned_workflows()` keep long-running runs inside a defined envelope
+- **Resource-aware admission** -- concurrency groups, per-handler cost units, and observed memory/time headroom let workers defer expensive work instead of oversubscribing a process
 - **Step compensation** -- `compensate_with()` and `compensate_on_failure()` provide saga-style rollback hooks for completed steps
 - **Streaming steps** -- `StreamingStep` interface with `ChunkStore` for persisting streamed data chunk by chunk
 - **Cache layer** -- pluggable cache with `MemoryCache` and `ApcuCache` backends, auto-detected via `CacheFactory`
@@ -313,7 +314,7 @@ wp queuety work
 - **Recurring jobs** -- interval-based (`every('1 hour')`) and cron-based (`cron('0 3 * * *')`) scheduling
 - **Job dependencies** -- job B waits for job A to complete before running
 - **Unique jobs** -- prevent duplicate dispatches for the same handler and payload
-- **Job properties** -- `$tries`, `$timeout`, and `$backoff` declared directly on job classes
+- **Job properties** -- `$tries`, `$timeout`, `$backoff`, `$concurrency_group`, `$concurrency_limit`, and `$cost_units` declared directly on job classes
 - **`failed()` hook** -- called on the job instance when all retries are exhausted
 - **Conditional dispatch** -- `dispatch_if()` and `dispatch_unless()` on the `Dispatchable` trait
 - **Synchronous dispatch** -- `dispatch_sync()` runs a job immediately without the queue

@@ -63,6 +63,8 @@ The two primitives work best together rather than competing with each other. A s
 
 `StateMachineBuilder` stays deliberately small. `initial()` and `state()` define the lifecycle graph. `action()` attaches queued work to one state. `on()` declares which events can move the machine into the next state. `on_queue()`, `with_priority()`, and `max_attempts()` control how state actions are executed, while `version()` and `idempotency_key()` attach durable dispatch metadata. `dispatch()` creates the machine instance.
 
+State actions can also expose an optional `config()` method, using the same resource-policy keys that workflow steps and handlers use. That makes it possible to keep one expensive state transition inside a shared concurrency group or to attach a higher cost weight when an action consumes more budget than a normal step.
+
 ## Contracts
 
 State-entry actions implement `Queuety\Contracts\StateAction`:
@@ -74,6 +76,8 @@ interface StateAction {
     public function handle( array $state, ?string $event = null, array $event_payload = [] ): array|string;
 }
 ```
+
+State actions may also define an optional `config()` method with `concurrency_group`, `concurrency_limit`, and `cost_units` when the queued entry action should participate in worker admission policies.
 
 Transition guards implement `Queuety\Contracts\StateGuard`:
 

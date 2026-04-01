@@ -14,6 +14,7 @@ use Queuety\StateMachineEventLog;
 use Queuety\Tests\Integration\Fixtures\StateMachineApproveGuard;
 use Queuety\Tests\Integration\Fixtures\StateMachineFailingAction;
 use Queuety\Tests\Integration\Fixtures\StateMachinePlanningAction;
+use Queuety\Tests\Integration\Fixtures\StateMachineResourceAwareAction;
 use Queuety\Tests\IntegrationTestCase;
 use Queuety\Worker;
 use Queuety\Workflow;
@@ -248,7 +249,23 @@ class StateMachineTest extends IntegrationTestCase {
 				'action_failed',
 				'machine_failed',
 			),
-			$events
-		);
+				$events
+			);
+	}
+
+	public function test_state_machine_entry_actions_inherit_resource_policy(): void {
+		$machine_id = Queuety::machine( 'resource_session' )
+			->state( 'planning' )
+			->action( StateMachineResourceAwareAction::class )
+			->dispatch();
+
+		$this->assertGreaterThan( 0, $machine_id );
+
+		$job = $this->queue->claim();
+		$this->assertNotNull( $job );
+		$this->assertSame( '__queuety_state_machine_action', $job->handler );
+		$this->assertSame( 'state-actions', $job->concurrency_group );
+		$this->assertSame( 2, $job->concurrency_limit );
+		$this->assertSame( 3, $job->cost_units );
 	}
 }

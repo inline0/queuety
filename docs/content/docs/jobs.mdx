@@ -63,6 +63,9 @@ The `handle()` method receives the job payload and performs the work. The `confi
 | `max_attempts` | `int` | Maximum retry attempts |
 | `backoff` | `string` | Retry backoff strategy: `exponential`, `linear`, or `fixed` |
 | `rate_limit` | `array` | Rate limit as `[max_executions, window_seconds]` |
+| `concurrency_group` | `string` | Shared worker admission group for expensive handlers |
+| `concurrency_limit` | `int` | Maximum concurrent processing jobs inside that group |
+| `cost_units` | `int` | Relative execution cost used by workflow budgets and admission heuristics |
 
 Register the handler:
 
@@ -293,6 +296,9 @@ class ImportProductsJob implements Job {
     public int $tries = 5;
     public int $timeout = 120;
     public array $backoff = [ 10, 30, 60, 120 ];
+    public string $concurrency_group = 'imports';
+    public int $concurrency_limit = 2;
+    public int $cost_units = 4;
 
     public function __construct(
         public readonly int $supplier_id,
@@ -309,8 +315,13 @@ class ImportProductsJob implements Job {
 | `$tries` | `int` | Maximum number of attempts before the job is buried. Overrides the dispatch-time `max_attempts` value. |
 | `$timeout` | `int` | Maximum execution time in seconds. Overrides the global `QUEUETY_MAX_EXECUTION_TIME` constant. Requires `pcntl`. |
 | `$backoff` | `array` | Array of delay values in seconds for each retry attempt. The last value is reused for subsequent attempts. |
+| `$concurrency_group` | `string` | Shared worker-admission group for expensive jobs. |
+| `$concurrency_limit` | `int` | Maximum concurrent `processing` jobs in that group. Ignored without `$concurrency_group`. |
+| `$cost_units` | `int` | Relative execution cost used by workflow budgets and worker admission. |
 
 The `$backoff` array provides escalating retry delays. For example, `[10, 30, 60, 120]` means the first retry waits 10 seconds, the second 30 seconds, the third 60 seconds, and any further retries wait 120 seconds.
+
+The resource-related properties are useful when job classes represent different cost profiles. A fast cache refresh and a large provider call can both be "one job", but they should not necessarily count the same way when a workflow budget or worker admission decision is trying to keep the process inside a safe envelope.
 
 ### Failed hook
 

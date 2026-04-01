@@ -37,7 +37,7 @@ interface Step {
 	/**
 	 * Optional step configuration.
 	 *
-	 * Supported keys: max_attempts, backoff.
+	 * Supported keys: max_attempts, backoff, concurrency_group, concurrency_limit, cost_units.
 	 *
 	 * @return array Configuration array.
 	 */

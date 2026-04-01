@@ -9,6 +9,7 @@ use Queuety\Job;
 use Queuety\Logger;
 use Queuety\Queue;
 use Queuety\Tests\Integration\Fixtures\AccumulatingStep;
+use Queuety\Tests\Integration\Fixtures\CostlyAccumulatingStep;
 use Queuety\Tests\Integration\Fixtures\DataFetchStep;
 use Queuety\Tests\Integration\Fixtures\FanOutItemStep;
 use Queuety\Tests\Integration\Fixtures\FanOutPlanningStep;
@@ -158,5 +159,47 @@ class WorkflowGuardrailsTest extends IntegrationTestCase {
 
 		$status = $this->workflow->status( $workflow_id );
 		$this->assertSame( WorkflowStatus::Failed, $status->status );
+	}
+
+	public function test_max_cost_units_fails_workflow_when_completed_steps_exceed_budget(): void {
+		$workflow_id = ( new WorkflowBuilder( 'cost_budget', $this->conn, $this->queue, $this->logger ) )
+			->max_cost_units( 3 )
+			->then( CostlyAccumulatingStep::class )
+			->then( CostlyAccumulatingStep::class )
+			->dispatch();
+
+		$this->process_one();
+
+		$status = $this->workflow->status( $workflow_id );
+		$this->assertSame( WorkflowStatus::Running, $status->status );
+		$this->assertSame( 2, $status->budget['cost_units'] );
+
+		$this->process_one();
+
+		$status = $this->workflow->status( $workflow_id );
+		$this->assertSame( WorkflowStatus::Failed, $status->status );
+	}
+
+	public function test_max_spawned_workflows_fails_before_spawn_step_dispatches_children(): void {
+		$child = ( new WorkflowBuilder( 'child_agent', $this->conn, $this->queue, $this->logger ) )
+			->then( AccumulatingStep::class );
+
+		$workflow_id = ( new WorkflowBuilder( 'spawn_budget', $this->conn, $this->queue, $this->logger ) )
+			->max_spawned_workflows( 1 )
+			->spawn_workflows( 'tasks', $child, 'child_workflow_ids' )
+			->dispatch(
+				array(
+					'tasks' => array(
+						array( 'topic' => 'pricing' ),
+						array( 'topic' => 'reviews' ),
+					),
+				)
+			);
+
+		$this->process_one();
+
+		$status = $this->workflow->status( $workflow_id );
+		$this->assertSame( WorkflowStatus::Failed, $status->status );
+		$this->assertArrayNotHasKey( 'child_workflow_ids', $status->state );
 	}
 }

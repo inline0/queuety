@@ -15,7 +15,7 @@ class Schema {
 	/**
 	 * Current schema version for plugin-managed upgrades.
 	 */
-	public const CURRENT_VERSION = '0.18.0';
+	public const CURRENT_VERSION = '0.19.0';
 
 	/**
 	 * Create all Queuety tables.
@@ -57,19 +57,23 @@ class Schema {
 				completed_at DATETIME DEFAULT NULL,
 				failed_at DATETIME DEFAULT NULL,
 				error_message TEXT DEFAULT NULL,
-				workflow_id BIGINT UNSIGNED DEFAULT NULL,
-				step_index TINYINT UNSIGNED DEFAULT NULL,
-				depends_on BIGINT UNSIGNED DEFAULT NULL,
-				batch_id BIGINT UNSIGNED DEFAULT NULL,
-				heartbeat_data JSON DEFAULT NULL,
-				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-					INDEX idx_queue_status_available (queue, status, available_at, priority),
-					INDEX idx_queue_claim (queue, status, priority, id, available_at),
-					INDEX idx_status (status),
+					workflow_id BIGINT UNSIGNED DEFAULT NULL,
+					step_index TINYINT UNSIGNED DEFAULT NULL,
+					depends_on BIGINT UNSIGNED DEFAULT NULL,
+					batch_id BIGINT UNSIGNED DEFAULT NULL,
+					concurrency_group VARCHAR(191) DEFAULT NULL,
+					concurrency_limit SMALLINT UNSIGNED DEFAULT NULL,
+					cost_units INT UNSIGNED NOT NULL DEFAULT 1,
+					heartbeat_data JSON DEFAULT NULL,
+					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+						INDEX idx_queue_status_available (queue, status, available_at, priority),
+						INDEX idx_queue_claim (queue, status, priority, id, available_at),
+						INDEX idx_status (status),
 					INDEX idx_status_completed (status, completed_at),
 					INDEX idx_reserved (status, reserved_at),
-					INDEX idx_handler_status (handler, status),
-					INDEX idx_workflow (workflow_id, step_index),
+						INDEX idx_handler_status (handler, status),
+						INDEX idx_group_status (concurrency_group, status),
+						INDEX idx_workflow (workflow_id, step_index),
 					INDEX idx_unique (handler, payload_hash, status),
 					INDEX idx_depends (depends_on),
 				INDEX idx_batch (batch_id)
@@ -386,6 +390,11 @@ class Schema {
 			$version = '0.18.0';
 		}
 
+		if ( version_compare( $version, '0.19.0', '<' ) ) {
+			self::migrate_0190( $conn );
+			$version = '0.19.0';
+		}
+
 		return self::CURRENT_VERSION;
 	}
 
@@ -400,7 +409,7 @@ class Schema {
 			return '0.5.0';
 		}
 
-		$jobs               = $conn->table( Config::table_jobs() );
+			$jobs           = $conn->table( Config::table_jobs() );
 		$wf                 = $conn->table( Config::table_workflows() );
 		$schedules          = $conn->table( Config::table_schedules() );
 		$signals            = $conn->table( Config::table_signals() );
@@ -413,9 +422,18 @@ class Schema {
 			$state_machines = $conn->table( Config::table_state_machines() );
 
 		if (
-			self::table_exists( $conn, $state_machines ) &&
-			self::index_exists( $conn, $jobs, 'idx_queue_claim' ) &&
-			self::index_exists( $conn, $wf, 'idx_status_completed' ) &&
+				self::column_exists( $conn, $jobs, 'concurrency_group' ) &&
+				self::column_exists( $conn, $jobs, 'concurrency_limit' ) &&
+				self::column_exists( $conn, $jobs, 'cost_units' ) &&
+				self::index_exists( $conn, $jobs, 'idx_group_status' )
+			) {
+			return '0.19.0';
+		}
+
+		if (
+				self::table_exists( $conn, $state_machines ) &&
+				self::index_exists( $conn, $jobs, 'idx_queue_claim' ) &&
+				self::index_exists( $conn, $wf, 'idx_status_completed' ) &&
 			self::index_exists( $conn, $batches, 'idx_finished' )
 		) {
 			return '0.18.0';
@@ -880,6 +898,23 @@ class Schema {
 		self::add_index_if_missing( $conn, $wf, 'idx_status_completed', 'INDEX idx_status_completed (status, completed_at)' );
 		self::add_index_if_missing( $conn, $batches, 'idx_finished', 'INDEX idx_finished (finished_at)' );
 		self::add_index_if_missing( $conn, $workflow_events, 'idx_timeline', 'INDEX idx_timeline (workflow_id, id)' );
+	}
+
+	/**
+	 * Migrate from v0.18.x to v0.19.0.
+	 *
+	 * Adds persisted resource policy columns used for admission control and
+	 * named concurrency groups.
+	 *
+	 * @param Connection $conn Database connection.
+	 */
+	public static function migrate_0190( Connection $conn ): void {
+		$jobs = $conn->table( Config::table_jobs() );
+
+		self::add_column_if_missing( $conn, $jobs, 'concurrency_group', 'concurrency_group VARCHAR(191) DEFAULT NULL AFTER batch_id' );
+		self::add_column_if_missing( $conn, $jobs, 'concurrency_limit', 'concurrency_limit SMALLINT UNSIGNED DEFAULT NULL AFTER concurrency_group' );
+		self::add_column_if_missing( $conn, $jobs, 'cost_units', 'cost_units INT UNSIGNED NOT NULL DEFAULT 1 AFTER concurrency_limit' );
+		self::add_index_if_missing( $conn, $jobs, 'idx_group_status', 'INDEX idx_group_status (concurrency_group, status)' );
 	}
 
 	/**
