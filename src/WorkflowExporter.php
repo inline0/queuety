@@ -25,11 +25,11 @@ class WorkflowExporter {
 	 * @throws \RuntimeException If the workflow is not found.
 	 */
 	public static function export( int $workflow_id, Connection $conn ): array {
-		$pdo    = $conn->pdo();
-		$wf_tbl = $conn->table( Config::table_workflows() );
-		$jb_tbl = $conn->table( Config::table_jobs() );
-		$lg_tbl = $conn->table( Config::table_logs() );
-		$ev_tbl = $conn->table( Config::table_workflow_events() );
+		$pdo     = $conn->pdo();
+		$wf_tbl  = $conn->table( Config::table_workflows() );
+		$jb_tbl  = $conn->table( Config::table_jobs() );
+		$lg_tbl  = $conn->table( Config::table_logs() );
+		$ev_tbl  = $conn->table( Config::table_workflow_events() );
 		$sig_tbl = $conn->table( Config::table_signals() );
 		$dep_tbl = $conn->table( Config::table_workflow_dependencies() );
 		$art_tbl = $conn->table( Config::table_artifacts() );
@@ -196,15 +196,15 @@ class WorkflowExporter {
 		}
 
 		return array(
-			'workflow'        => $wf_data,
-			'jobs'            => $jobs,
-			'events'          => $events,
-			'logs'            => $logs,
-			'signals'         => $signals,
-			'artifacts'       => $artifacts,
+			'workflow'          => $wf_data,
+			'jobs'              => $jobs,
+			'events'            => $events,
+			'logs'              => $logs,
+			'signals'           => $signals,
+			'artifacts'         => $artifacts,
 			'wait_dependencies' => $wait_dependencies,
-			'exported_at'     => gmdate( 'c' ),
-			'queuety_version' => Schema::CURRENT_VERSION,
+			'exported_at'       => gmdate( 'c' ),
+			'queuety_version'   => defined( 'QUEUETY_VERSION' ) ? QUEUETY_VERSION : 'dev',
 		);
 	}
 

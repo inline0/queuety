@@ -18,7 +18,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'QUEUETY_VERSION', '0.12.0' );
-define( 'QUEUETY_DB_VERSION_OPTION', 'queuety_db_version' );
 define( 'QUEUETY_PLUGIN_FILE', __FILE__ );
 define( 'QUEUETY_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 
@@ -74,33 +73,14 @@ $queuety_make_connection = static function () {
 add_action(
 	'plugins_loaded',
 	static function () use ( $queuety_make_connection ) {
-		$conn              = $queuety_make_connection();
-		$installed_version = get_option( QUEUETY_DB_VERSION_OPTION );
-
-		if (
-			! is_string( $installed_version ) ||
-			version_compare( $installed_version, Queuety\Schema::CURRENT_VERSION, '<' )
-		) {
-			$resolved_version = Queuety\Schema::upgrade(
-				$conn,
-				is_string( $installed_version ) ? $installed_version : null
-			);
-
-			if ( $installed_version !== $resolved_version ) {
-				update_option( QUEUETY_DB_VERSION_OPTION, $resolved_version, false );
-			}
-		}
-
-		Queuety\Queuety::init( $conn );
+		Queuety\Queuety::init( $queuety_make_connection() );
 	}
 );
 
 register_activation_hook(
 	__FILE__,
 	static function () use ( $queuety_make_connection ) {
-		$conn    = $queuety_make_connection();
-		$version = Queuety\Schema::upgrade( $conn );
-		update_option( QUEUETY_DB_VERSION_OPTION, $version, false );
+		Queuety\Schema::install( $queuety_make_connection() );
 	}
 );
 
