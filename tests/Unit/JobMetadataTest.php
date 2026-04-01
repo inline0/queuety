@@ -11,7 +11,7 @@ class JobMetadataTest extends TestCase {
 	public function test_from_class_reads_resource_and_retry_properties(): void {
 		$metadata = JobMetadata::from_class( JobMetadataTest_ConfiguredJob::class );
 
-		$this->assertSame( 5, $metadata['max_attempts'] );
+		$this->assertSame( 5, $metadata['tries'] );
 		$this->assertSame( 45, $metadata['timeout'] );
 		$this->assertSame( 2, $metadata['max_exceptions'] );
 		$this->assertSame( array( 10, 60 ), $metadata['backoff'] );
