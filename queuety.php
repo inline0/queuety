@@ -73,7 +73,13 @@ $queuety_make_connection = static function () {
 add_action(
 	'plugins_loaded',
 	static function () use ( $queuety_make_connection ) {
-		Queuety\Queuety::init( $queuety_make_connection() );
+		$conn = $queuety_make_connection();
+
+		if ( ! Queuety\Schema::table_exists( $conn, $conn->table( Queuety\Config::table_jobs() ) ) ) {
+			Queuety\Schema::install( $conn );
+		}
+
+		Queuety\Queuety::init( $conn );
 	}
 );
 
