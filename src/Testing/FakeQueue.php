@@ -43,17 +43,20 @@ class FakeQueue extends Queue {
 	/**
 	 * Record a synthetic dispatch and return a fake job ID.
 	 *
-	 * @param string   $handler      Handler name or class.
-	 * @param array    $payload      Job payload.
-	 * @param string   $queue        Queue name.
-	 * @param Priority $priority     Job priority.
-	 * @param int      $delay        Delay before availability.
-	 * @param int      $max_attempts Maximum attempts.
-	 * @param int|null $workflow_id  Parent workflow ID.
-	 * @param int|null $step_index   Step index within the workflow.
-	 * @param bool     $unique       Whether the job is unique.
-	 * @param int|null $depends_on   Dependency job ID.
-	 * @param int|null $batch_id     Parent batch ID.
+	 * @param string      $handler      Handler name or class.
+	 * @param array       $payload      Job payload.
+	 * @param string      $queue        Queue name.
+	 * @param Priority    $priority     Job priority.
+	 * @param int         $delay        Delay before availability.
+	 * @param int         $max_attempts Maximum attempts.
+	 * @param int|null    $workflow_id  Parent workflow ID.
+	 * @param int|null    $step_index   Step index within the workflow.
+	 * @param bool        $unique       Whether the job is unique.
+	 * @param int|null    $depends_on   Dependency job ID.
+	 * @param int|null    $batch_id     Parent batch ID.
+	 * @param string|null $concurrency_group Shared worker admission group.
+	 * @param int|null    $concurrency_limit Maximum concurrent jobs in that group.
+	 * @param int         $cost_units        Relative execution cost.
 	 * @return int
 	 */
 	public function dispatch(
@@ -68,8 +71,11 @@ class FakeQueue extends Queue {
 		bool $unique = false,
 		?int $depends_on = null,
 		?int $batch_id = null,
+		?string $concurrency_group = null,
+		?int $concurrency_limit = null,
+		int $cost_units = 1,
 	): int {
-		unset( $priority, $delay, $max_attempts, $workflow_id, $step_index, $unique, $depends_on, $batch_id );
+		unset( $priority, $delay, $max_attempts, $workflow_id, $step_index, $unique, $depends_on, $batch_id, $concurrency_group, $concurrency_limit, $cost_units );
 
 		$this->fake->push( $handler, $payload, $queue );
 

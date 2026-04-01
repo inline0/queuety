@@ -44,11 +44,7 @@ class JobMetadata {
 			return $result;
 		}
 
-		try {
-			$reflection = new \ReflectionClass( $class );
-		} catch ( \ReflectionException ) {
-			return $result;
-		}
+		$reflection = new \ReflectionClass( $class );
 
 		foreach ( array( 'tries', 'timeout', 'max_exceptions' ) as $prop_name ) {
 			if ( $reflection->hasProperty( $prop_name ) ) {
