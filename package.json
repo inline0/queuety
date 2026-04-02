@@ -7,6 +7,6 @@
 		"test:e2e:wp-env": "bash tests/e2e/test-wp-env.sh"
 	},
 	"devDependencies": {
-		"@wordpress/env": "^10.0.0"
+		"@wordpress/env": "^11.3.0"
 	}
 }
