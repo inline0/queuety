@@ -6,8 +6,21 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-WP_ENV_DIR="$(cd "$PROJECT_DIR" && npx wp-env install-path 2>/dev/null | tail -n 1)"
-COMPOSE_FILE="${WP_ENV_DIR}/docker-compose.yml"
+COMPOSE_FILE="$(
+    cd "$PROJECT_DIR" && node - <<'NODE' 2>/dev/null
+const { loadConfig } = require('@wordpress/env/lib/config');
+
+(async () => {
+  const config = await loadConfig(process.cwd(), null);
+  process.stdout.write(config.dockerComposeConfigPath || '');
+})().catch(() => process.exit(1));
+NODE
+)"
+
+if [ -z "$COMPOSE_FILE" ]; then
+    WP_ENV_DIR="$(cd "$PROJECT_DIR" && npx wp-env install-path 2>/dev/null | tail -n 1)"
+    COMPOSE_FILE="${WP_ENV_DIR}/docker-compose.yml"
+fi
 
 if [ ! -f "$COMPOSE_FILE" ]; then
     echo "wp-env docker-compose.yml not found at ${COMPOSE_FILE}" >&2
