@@ -354,15 +354,14 @@ class WorkerPool {
 	 * @param int    $current_workers Current worker count.
 	 * @return int
 	 */
-	private function desired_worker_count( string $queue, int $current_workers ): int {
+	protected function desired_worker_count( string $queue, int $current_workers ): int {
 		if ( ! $this->is_adaptive() ) {
 			return $this->min_worker_count;
 		}
 
 		try {
-			$conn             = new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix );
-			$queue_op         = new Queue( $conn );
-			$resource_manager = new ResourceManager( $conn );
+			$queue_op         = $this->scaling_queue();
+			$resource_manager = $this->scaling_resource_manager();
 			$queues           = $this->active_queue_names( $queue, $queue_op );
 			$backlog          = empty( $queues ) ? 0 : $queue_op->available_pending_count( $queues );
 			$can_scale_up     = $this->can_scale_up_for_capacity( $resource_manager );
@@ -388,7 +387,7 @@ class WorkerPool {
 	 * @param ResourceManager $resource_manager Resource manager.
 	 * @return bool
 	 */
-	private function can_scale_up_for_capacity( ResourceManager $resource_manager ): bool {
+	protected function can_scale_up_for_capacity( ResourceManager $resource_manager ): bool {
 		if ( ! Config::resource_system_memory_awareness_enabled() ) {
 			return true;
 		}
@@ -414,7 +413,7 @@ class WorkerPool {
 	 * @param int $backlog Claimable pending jobs.
 	 * @return bool
 	 */
-	private function can_scale_down( int $backlog ): bool {
+	protected function can_scale_down( int $backlog ): bool {
 		if ( $backlog > 0 ) {
 			$this->last_nonempty_backlog_at = time();
 			return true;
@@ -434,7 +433,7 @@ class WorkerPool {
 	 * @param Queue  $queue_op Queue operations.
 	 * @return array<int, string>
 	 */
-	private function active_queue_names( string $queue, Queue $queue_op ): array {
+	protected function active_queue_names( string $queue, Queue $queue_op ): array {
 		$queues = $this->parse_queue_names( $queue );
 
 		return array_values(
@@ -451,7 +450,7 @@ class WorkerPool {
 	 * @param string $queue Queue name or comma-separated list.
 	 * @return array<int, string>
 	 */
-	private function parse_queue_names( string $queue ): array {
+	protected function parse_queue_names( string $queue ): array {
 		if ( str_contains( $queue, ',' ) ) {
 			return array_values( array_filter( array_map( 'trim', explode( ',', $queue ) ) ) );
 		}
@@ -466,5 +465,25 @@ class WorkerPool {
 	 */
 	private function is_adaptive(): bool {
 		return $this->max_worker_count > $this->min_worker_count;
+	}
+
+	/**
+	 * Build the queue operations instance used by the parent scaling loop.
+	 *
+	 * @return Queue
+	 */
+	protected function scaling_queue(): Queue {
+		$conn = new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix );
+		return new Queue( $conn );
+	}
+
+	/**
+	 * Build the resource manager used by the parent scaling loop.
+	 *
+	 * @return ResourceManager
+	 */
+	protected function scaling_resource_manager(): ResourceManager {
+		$conn = new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix );
+		return new ResourceManager( $conn );
 	}
 }

@@ -359,7 +359,7 @@ class ResourceManager {
 	 *
 	 * @return array{source: string, limit_kb: int|null, used_kb: int|null, available_kb: int|null}|null
 	 */
-	private function read_cgroup_v2_memory_snapshot(): ?array {
+	protected function read_cgroup_v2_memory_snapshot(): ?array {
 		$limit   = $this->read_trimmed_file( '/sys/fs/cgroup/memory.max' );
 		$current = $this->read_trimmed_file( '/sys/fs/cgroup/memory.current' );
 
@@ -381,7 +381,7 @@ class ResourceManager {
 	 *
 	 * @return array{source: string, limit_kb: int|null, used_kb: int|null, available_kb: int|null}|null
 	 */
-	private function read_cgroup_v1_memory_snapshot(): ?array {
+	protected function read_cgroup_v1_memory_snapshot(): ?array {
 		$limit   = $this->read_trimmed_file( '/sys/fs/cgroup/memory/memory.limit_in_bytes' );
 		$current = $this->read_trimmed_file( '/sys/fs/cgroup/memory/memory.usage_in_bytes' );
 
@@ -407,7 +407,7 @@ class ResourceManager {
 	 *
 	 * @return array{source: string, limit_kb: int|null, used_kb: int|null, available_kb: int|null}|null
 	 */
-	private function read_proc_meminfo_snapshot(): ?array {
+	protected function read_proc_meminfo_snapshot(): ?array {
 		$contents = $this->read_trimmed_file( '/proc/meminfo' );
 		if ( null === $contents ) {
 			return null;
@@ -444,7 +444,7 @@ class ResourceManager {
 	 * @param int    $current_bytes Current memory use in bytes.
 	 * @return array{source: string, limit_kb: int|null, used_kb: int|null, available_kb: int|null}
 	 */
-	private function memory_snapshot_from_bytes( string $source, int $limit_bytes, int $current_bytes ): array {
+	protected function memory_snapshot_from_bytes( string $source, int $limit_bytes, int $current_bytes ): array {
 		$limit_kb     = (int) floor( $limit_bytes / 1024 );
 		$used_kb      = (int) floor( $current_bytes / 1024 );
 		$available_kb = max( 0, $limit_kb - $used_kb );
@@ -463,7 +463,7 @@ class ResourceManager {
 	 * @param string $path Filesystem path.
 	 * @return string|null
 	 */
-	private function read_trimmed_file( string $path ): ?string {
+	protected function read_trimmed_file( string $path ): ?string {
 		if ( ! is_readable( $path ) ) {
 			return null;
 		}
@@ -483,7 +483,7 @@ class ResourceManager {
 	 * @param string $value Raw byte string.
 	 * @return int|null
 	 */
-	private function normalize_memory_bytes( string $value ): ?int {
+	protected function normalize_memory_bytes( string $value ): ?int {
 		if ( '' === $value || ! ctype_digit( $value ) ) {
 			return null;
 		}
