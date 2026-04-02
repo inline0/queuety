@@ -67,6 +67,8 @@ The `handle()` method receives the job payload and performs the work. The `confi
 | `concurrency_limit` | `int` | Maximum concurrent processing jobs inside that group |
 | `cost_units` | `int` | Relative execution cost used by workflow budgets and admission heuristics |
 
+These resource keys are part of Queuety's broader [Resource Management](/docs/features/resource-management) model, where job metadata, workflow budgets, and worker admission all work together.
+
 Register the handler:
 
 ```php
@@ -322,6 +324,8 @@ class ImportProductsJob implements Job {
 The `$backoff` array provides escalating retry delays. For example, `[10, 30, 60, 120]` means the first retry waits 10 seconds, the second 30 seconds, the third 60 seconds, and any further retries wait 120 seconds.
 
 The resource-related properties are useful when job classes represent different cost profiles. A fast cache refresh and a large provider call can both be "one job", but they should not necessarily count the same way when a workflow budget or worker admission decision is trying to keep the process inside a safe envelope.
+
+For the full model, including workflow budgets and worker-side admission, see [Resource Management](/docs/features/resource-management).
 
 ### Failed hook
 

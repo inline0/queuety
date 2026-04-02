@@ -65,6 +65,8 @@ The two primitives work best together rather than competing with each other. A s
 
 State actions can also expose an optional `config()` method, using the same resource-policy keys that workflow steps and handlers use. That makes it possible to keep one expensive state transition inside a shared concurrency group or to attach a higher cost weight when an action consumes more budget than a normal step.
 
+The broader resource model is described in [Resource Management](/docs/features/resource-management).
+
 ## Contracts
 
 State-entry actions implement `Queuety\Contracts\StateAction`:

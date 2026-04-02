@@ -1,0 +1,108 @@
+---
+title: Resource Management
+description: Concurrency groups, cost units, workflow budgets, and worker admission.
+---
+
+# Resource management
+
+Queuety separates resource control into three layers.
+
+The first layer describes how expensive one unit of work is. The second defines how much a single workflow run is allowed to consume. The third decides whether a worker should start the next claimed job right now or defer it until the process has more headroom.
+
+Those layers work together. A handler can declare that it belongs to an expensive shared pool, a workflow can cap how much such work it is willing to create, and the worker can still refuse to start more of that work when the current process is already too close to its limits.
+
+## Describe the cost of one unit of work
+
+Jobs, workflow steps, and state-entry actions can all publish the same three resource hints:
+
+- `concurrency_group`
+- `concurrency_limit`
+- `cost_units`
+
+`concurrency_group` and `concurrency_limit` describe shared pressure on one downstream system. If several handlers all hit the same provider, API account, or tenant, they can use the same group so workers do not start too many at once.
+
+`cost_units` describes relative weight. A cache refresh and a large provider call may both be “one job”, but they should not contribute equally when a workflow budget or worker admission rule is deciding whether more work is still safe.
+
+```php
+final class CallProviderStep implements \Queuety\Step
+{
+    public function handle( array $state ): array
+    {
+        // ...
+    }
+
+    public function config(): array
+    {
+        return [
+            'concurrency_group' => 'providers',
+            'concurrency_limit' => 3,
+            'cost_units' => 5,
+        ];
+    }
+}
+```
+
+The same idea applies to dispatchable jobs through class properties, and to individual dispatches through `PendingJob::concurrency_group()` and `PendingJob::cost_units()`.
+
+## Keep one workflow inside an envelope
+
+Workflow budgets exist for cases where the problem is not one heavy job, but a run that keeps discovering more work than intended.
+
+That is common in agentic systems. A planner may revisit the same expensive branch, fan out into too many subtasks, or keep spawning child workflows while technically staying inside a normal retry model.
+
+Queuety exposes workflow-level limits for that:
+
+```php
+Queuety::workflow( 'research_run' )
+    ->max_transitions( 20 )
+    ->max_fan_out_items( 12 )
+    ->max_state_bytes( 32768 )
+    ->max_cost_units( 40 )
+    ->max_spawned_workflows( 8 )
+    ->then( PlanResearchStep::class )
+    ->fan_out( 'tasks', ExecuteResearchTask::class, 'results' )
+    ->dispatch();
+```
+
+`max_cost_units()` keeps the run from consuming more weighted work than intended. `max_spawned_workflows()` stops a parent from turning into an unbounded tree of top-level child runs. The other guardrails still matter because not every runaway workflow is expensive in the same way.
+
+Workflow status exposes the configured limits and the current usage through the public `budget` payload, so the run stays inspectable while those limits are active.
+
+## Let workers defer work when the process is already too full
+
+Even when metadata and workflow budgets are configured well, the final decision still belongs to the worker process that is about to execute the job.
+
+That is where resource-aware admission comes in. Before a claimed job starts, Queuety can look at:
+
+- the job's shared concurrency group
+- recent duration and peak-memory history for the handler
+- the current worker's remaining memory headroom
+- the remaining time envelope for one-shot style runs
+
+If the worker is already too close to its configured ceiling, Queuety releases the job instead of starting work that is unlikely to finish cleanly.
+
+This is intentionally conservative. It is not a full cluster scheduler. It is a process-level safety layer that helps a busy worker avoid oversubscribing itself.
+
+## A realistic way to combine the three layers
+
+Imagine a research workflow that plans provider calls, spawns specialist workflows, and then synthesizes the result.
+
+The provider-facing step can publish `cost_units` and a shared `concurrency_group` so multiple workers do not stampede the same model provider. The parent workflow can cap `max_cost_units()` and `max_spawned_workflows()` so a planner cannot grow the run forever. Then the worker can still defer a newly claimed provider call if recent peak-memory or duration data says the process is already too close to its ceiling.
+
+That gives you three separate controls:
+
+1. describe the weight of the work
+2. cap what one run is allowed to create
+3. keep a hot worker from starting more than it should
+
+## Where the detailed APIs live
+
+This page is the conceptual overview.
+
+For the concrete knobs:
+
+- [Workers](/docs/features/workers) covers admission behavior and runtime constants
+- [Workflow Guardrails](/docs/workflows/guardrails) covers workflow budgets
+- [Jobs](/docs/jobs) covers job and handler metadata
+- [State Machines](/docs/state-machines) covers state-action resource metadata
+- [API](/docs/api) lists the exact methods and return shapes

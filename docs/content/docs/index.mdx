@@ -105,6 +105,7 @@ If you want workflows to start from WordPress domain events like `save_post`, se
 - **WordPress action triggers.** `on_action()` maps core or plugin action hooks into durable workflow dispatches with gating and idempotency.
 - **Durable artifacts.** Store named workflow outputs outside the main state bag and carry them through status, CLI inspection, export, and replay.
 - **Workflow guardrails.** `version()`, a deterministic definition hash, idempotent dispatch keys, and workflow budgets make agent-style runs easier to inspect and harder to duplicate or let run away silently.
+- **Resource management.** Concurrency groups, cost units, workflow budgets, and worker admission help keep expensive agent-style work inside a defined envelope.
 - **Step compensation.** `compensate_with()` and `compensate_on_failure()` provide rollback hooks for completed steps when workflows are cancelled or fail.
 - **Heartbeats.** Long-running steps send heartbeats to prevent the stale-job recovery system from reclaiming active work.
 - **Workflow event log.** Every step transition is recorded with a full state snapshot, enabling time-travel debugging via `workflow_state_at()`.

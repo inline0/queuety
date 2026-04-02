@@ -107,6 +107,8 @@ numprocs=2
 
 Workers do more than just claim the next pending row. Before a claimed job starts, Queuety can apply coarse admission checks based on the job's concurrency group and the recent execution profile for that handler.
 
+For the broader model, including how this fits together with job metadata and workflow budgets, see [Resource Management](/docs/features/resource-management).
+
 A concurrency group gives several handlers or job classes a shared ceiling. If you mark several expensive providers with the same group and limit, a worker will release newly claimed work instead of starting it once the group is saturated. That keeps independent queues from stampeding one downstream system just because there are multiple idle workers.
 
 Recent execution logs also feed a simple admission profile. When resource admission is enabled, Queuety looks at recent average duration and peak memory for the handler it is about to run. If the current worker is already close to its configured memory ceiling, or a `--once` style run is close to its time envelope, Queuety defers the job rather than starting work that is unlikely to finish cleanly.

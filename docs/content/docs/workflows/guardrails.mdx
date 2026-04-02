@@ -7,6 +7,8 @@ description: Versioning, idempotent dispatch, and workflow budgets.
 
 Agent-style workflows are flexible, but they also make it easier to create duplicate runs or let a planner produce more work than intended. Queuety provides lightweight guardrails at the workflow level so you can keep that flexibility without giving up control.
 
+For the broader resource model around worker admission and per-job cost metadata, see [Resource Management](/docs/features/resource-management).
+
 ## Version a workflow definition
 
 Use `version()` to attach an application-level version label to a workflow definition:
