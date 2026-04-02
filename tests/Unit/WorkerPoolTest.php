@@ -53,6 +53,25 @@ class WorkerPoolTest extends TestCase {
 		$this->assertInstanceOf( WorkerPool::class, $pool );
 	}
 
+	public function test_constructor_accepts_valid_adaptive_range(): void {
+		if ( ! function_exists( 'pcntl_fork' ) ) {
+			$this->markTestSkipped( 'pcntl extension not available.' );
+		}
+
+		$pool = new WorkerPool( 2, 'localhost', 'test', 'root', '', 'wp_', 6 );
+		$this->assertInstanceOf( WorkerPool::class, $pool );
+	}
+
+	public function test_constructor_rejects_maximum_below_minimum(): void {
+		if ( ! function_exists( 'pcntl_fork' ) ) {
+			$this->markTestSkipped( 'pcntl extension not available.' );
+		}
+
+		$this->expectException( \RuntimeException::class );
+		$this->expectExceptionMessage( 'Maximum worker count must be between the minimum and 32.' );
+		new WorkerPool( 4, 'localhost', 'test', 'root', '', 'wp_', 2 );
+	}
+
 	public function test_constructor_requires_pcntl(): void {
 		if ( function_exists( 'pcntl_fork' ) ) {
 			$this->markTestSkipped( 'pcntl is available, cannot test missing pcntl.' );

@@ -50,6 +50,19 @@ class CliCommandMapTest extends TestCase {
 		);
 	}
 
+	public function test_worker_command_catalog_includes_adaptive_pool_target(): void {
+		$definitions = array_column( Queuety::cli_command_map(), null, 'operation' );
+		$definition  = $definitions['worker.run'];
+
+		$this->assertContains(
+			array(
+				'transport' => 'php',
+				'callable'  => \Queuety\Queuety::class . '::run_auto_scaling_worker_pool',
+			),
+			$definition['targets']
+		);
+	}
+
 	public function test_resolve_accepts_full_wp_cli_path(): void {
 		$plan = Queuety::resolve_cli_command( 'wp queuety workflow list' );
 
@@ -83,6 +96,37 @@ class CliCommandMapTest extends TestCase {
 		$this->assertSame( 'worker.run', $plan['operation'] );
 		$this->assertSame( \Queuety\Queuety::class . '::run_worker_pool', $plan['callable'] );
 		$this->assertSame( array( 4, 'critical,default' ), $plan['arguments'] );
+	}
+
+	public function test_resolve_work_with_min_and_max_workers_uses_adaptive_pool_target(): void {
+		$plan = Queuety::resolve_cli_command(
+			array( 'work' ),
+			array(),
+			array(
+				'queue'       => 'critical,default',
+				'min-workers' => '2',
+				'max-workers' => '6',
+			)
+		);
+
+		$this->assertSame( 'worker.run', $plan['operation'] );
+		$this->assertSame( \Queuety\Queuety::class . '::run_auto_scaling_worker_pool', $plan['callable'] );
+		$this->assertSame( array( 2, 6, 'critical,default' ), $plan['arguments'] );
+	}
+
+	public function test_resolve_work_rejects_mixing_fixed_and_adaptive_pool_flags(): void {
+		$this->expectException( \InvalidArgumentException::class );
+		$this->expectExceptionMessage( 'Use either --workers for a fixed pool or --min-workers/--max-workers for adaptive scaling.' );
+
+		Queuety::resolve_cli_command(
+			array( 'work' ),
+			array(),
+			array(
+				'workers'     => '4',
+				'min-workers' => '2',
+				'max-workers' => '6',
+			)
+		);
 	}
 
 	public function test_resolve_dispatch_normalizes_payload_priority_and_delay(): void {

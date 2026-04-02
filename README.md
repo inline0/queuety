@@ -280,6 +280,12 @@ Start a worker:
 wp queuety work
 ```
 
+Scale a worker pool between a warm minimum and a backlog-driven maximum:
+
+```bash
+wp queuety work --queue=providers --min-workers=2 --max-workers=6
+```
+
 ## Features
 
 - **Fast execution** -- workers use direct MySQL queue access and avoid per-job cron/bootstrap overhead
@@ -296,7 +302,7 @@ wp queuety work
 - **Durable loops** -- `repeat_until()` and `repeat_while()` revisit earlier named steps without hiding the back-edge inside arbitrary step code
 - **Durable artifacts** -- store named workflow outputs outside the main state bag and inspect them later through status, CLI, export, and replay
 - **Workflow guardrails** -- `version()`, a deterministic definition hash, `idempotency_key()`, `max_transitions()`, `max_fan_out_items()`, `max_state_bytes()`, `max_cost_units()`, and `max_spawned_workflows()` keep long-running runs inside a defined envelope
-- **Resource-aware admission** -- concurrency groups, per-handler cost units, and observed memory/time headroom let workers defer expensive work instead of oversubscribing a process
+- **Resource-aware admission** -- concurrency groups, weighted queue and provider budgets, observed memory/time headroom, and optional container-awareness let workers defer expensive work instead of oversubscribing a process
 - **Step compensation** -- `compensate_with()` and `compensate_on_failure()` provide saga-style rollback hooks for completed steps
 - **Streaming steps** -- `StreamingStep` interface with `ChunkStore` for persisting streamed data chunk by chunk
 - **Cache layer** -- pluggable cache with `MemoryCache` and `ApcuCache` backends, auto-detected via `CacheFactory`
@@ -438,7 +444,8 @@ class StreamLLMHandler implements StreamingStep {
 
 | Command | Description |
 |---------|-------------|
-| `wp queuety work [--queue=<q>] [--once] [--workers=<n>]` | Start a worker (or N workers) |
+| `wp queuety work [--queue=<q>] [--once] [--workers=<n>]` | Start one worker or a fixed worker pool |
+| `wp queuety work [--queue=<q>] [--min-workers=<n>] --max-workers=<n>` | Start an adaptive worker pool |
 | `wp queuety work --queue=high,default,low` | Process multiple queues with priority ordering |
 | `wp queuety flush` | Process all pending jobs and exit |
 | `wp queuety dispatch <handler> --payload='{}'` | Dispatch a job |

@@ -24,6 +24,8 @@ This starts a single worker on the `default` queue. It runs in a loop: claim a j
 | `--queue=<queue>` | Queue(s) to process, comma-separated for priority ordering (default: `default`) |
 | `--once` | Process one batch and exit |
 | `--workers=<n>` | Fork N worker processes (requires `pcntl` extension) |
+| `--min-workers=<n>` | Minimum worker count for an adaptive pool. Requires `--max-workers` |
+| `--max-workers=<n>` | Maximum worker count for an adaptive pool |
 
 ```bash
 # Process a specific queue
@@ -34,6 +36,9 @@ wp queuety work --once
 
 # Run 4 concurrent workers
 wp queuety work --workers=4
+
+# Scale between 2 and 6 workers as backlog changes
+wp queuety work --queue=providers --min-workers=2 --max-workers=6
 ```
 
 ## Multi-queue priorities
@@ -111,7 +116,7 @@ For the broader model, including how this fits together with job metadata and wo
 
 A concurrency group gives several handlers or job classes a shared ceiling. If you mark several expensive providers with the same group and limit, a worker will release newly claimed work instead of starting it once the group is saturated. That keeps independent queues from stampeding one downstream system just because there are multiple idle workers.
 
-Recent execution logs also feed a simple admission profile. When resource admission is enabled, Queuety looks at recent average duration and peak memory for the handler it is about to run. If the current worker is already close to its configured memory ceiling, or a `--once` style run is close to its time envelope, Queuety defers the job rather than starting work that is unlikely to finish cleanly.
+Recent execution logs also feed a simple admission profile. When resource admission is enabled, Queuety looks at recent average duration and peak memory for the handler it is about to run. If the current worker is already close to its configured memory ceiling, a queue or provider group is already at its weighted budget, the current container does not appear to have enough remaining memory for that handler's observed profile, or a `--once` style run is close to its time envelope, Queuety defers the job rather than starting work that is unlikely to finish cleanly.
 
 You opt into the policy from the work definition rather than from the worker command:
 
@@ -141,6 +146,10 @@ The worker-side admission profile is controlled with these constants:
 | `QUEUETY_RESOURCE_PROFILE_WINDOW_MINUTES` | How far back to look when building recent handler profiles |
 | `QUEUETY_RESOURCE_PROFILE_TTL` | Cache TTL for recent handler profiles |
 | `QUEUETY_RESOURCE_MEMORY_HEADROOM_MB` | Reserved memory headroom before admitting another job |
+| `QUEUETY_RESOURCE_SYSTEM_MEMORY_AWARENESS` | Enable or disable best-effort container or host memory checks |
+| `QUEUETY_RESOURCE_SYSTEM_MEMORY_HEADROOM_MB` | Reserved system-memory headroom before admitting another job |
+| `QUEUETY_RESOURCE_QUEUE_COST_BUDGETS` | Weighted cost budgets keyed by queue name |
+| `QUEUETY_RESOURCE_GROUP_COST_BUDGETS` | Weighted cost budgets keyed by `concurrency_group` |
 | `QUEUETY_RESOURCE_TIME_HEADROOM_MS` | Reserved time headroom for one-shot worker runs |
 
 ## Worker lifecycle
@@ -165,6 +174,25 @@ wp queuety work --queue=default --workers=4
 
 Requirements:
 The `pcntl` PHP extension must be installed, and each child uses its own database connection, so your MySQL `max_connections` setting needs to accommodate the pool.
+
+## Adaptive worker pools
+
+Adaptive pools keep a minimum number of workers warm, then grow and shrink inside a configured range:
+
+```bash
+wp queuety work --queue=providers --min-workers=2 --max-workers=6
+```
+
+The parent process watches claimable backlog in the selected queue set and adjusts the child count toward that backlog, capped by the configured maximum. When the queue quiets down, the pool waits for the idle grace window before scaling back down so short bursts do not immediately churn the process list.
+
+Scale-up is still conservative. When Queuety can read container or host memory telemetry, it refuses to add more children if there is not enough remaining memory for another full worker envelope.
+
+The parent-side scaling loop is controlled with:
+
+| Constant | Description |
+|---|---|
+| `QUEUETY_WORKER_POOL_SCALE_INTERVAL` | How often the parent reconciles the pool size |
+| `QUEUETY_WORKER_POOL_IDLE_GRACE` | How long backlog must stay quiet before scaling back down |
 
 ## Stale job recovery
 

@@ -79,7 +79,7 @@ interface StateAction {
 }
 ```
 
-State actions may also define an optional `config()` method with `concurrency_group`, `concurrency_limit`, and `cost_units` when the queued entry action should participate in worker admission policies.
+State actions may also define an optional `config()` method with `concurrency_group`, `concurrency_limit`, and `cost_units` when the queued entry action should participate in worker admission, weighted queue or provider budgets, and other resource policies.
 
 Transition guards implement `Queuety\Contracts\StateGuard`:
 

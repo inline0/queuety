@@ -55,6 +55,8 @@ When a `Contracts\Job` instance is passed, the serializer extracts the FQCN as t
 | `cost_units( int $units )` | Attach relative execution cost metadata to the dispatch |
 | `id()` | Force dispatch and return the job ID |
 
+`concurrency_group()` and `cost_units()` feed the broader [Resource Management](/docs/features/resource-management) model, so the same dispatch can participate in count-based concurrency limits, weighted queue or provider budgets, and worker admission heuristics.
+
 ### `Queuety::dispatch_sync( $handler, $payload )`
 
 Execute a job synchronously in the current process without adding it to the queue.
@@ -120,6 +122,33 @@ $batch = Queuety::find_batch( $batch_id );
 if ( null !== $batch ) {
     echo $batch->progress() . '% complete';
 }
+```
+
+## Worker control
+
+### `Queuety::run_worker( $queue = 'default', $once = false )`
+
+Run one worker loop directly.
+
+```php
+Queuety::run_worker( 'default' );
+Queuety::run_worker( 'critical,default', true );
+```
+
+### `Queuety::run_worker_pool( $workers, $queue = 'default' )`
+
+Run a fixed-size worker pool directly.
+
+```php
+Queuety::run_worker_pool( 4, 'providers' );
+```
+
+### `Queuety::run_auto_scaling_worker_pool( $min_workers, $max_workers, $queue = 'default' )`
+
+Run an adaptive worker pool directly.
+
+```php
+Queuety::run_auto_scaling_worker_pool( 2, 6, 'providers' );
 ```
 
 ### `Batch` value object
@@ -910,7 +939,7 @@ These methods return internal instances for advanced use cases.
 | `Queuety::batch_manager()` | `BatchManager` | Batch lifecycle management (cancel, prune) |
 | `Queuety::chunk_store()` | `ChunkStore` | Chunk persistence for streaming steps |
 | `Queuety::workflow_events()` | `WorkflowEventLog` | Workflow event timeline and state snapshots |
-| `Queuety::resource_manager()` | `ResourceManager` | Worker admission profiles and concurrency-group inspection |
+| `Queuety::resource_manager()` | `ResourceManager` | Worker admission profiles, weighted budgets, and system-memory inspection |
 | `Queuety::cache()` | `Cache` | Cache backend instance |
 
 ## Testing

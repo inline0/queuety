@@ -31,6 +31,12 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * [--workers=<n>]
 	 * : Fork N worker processes (requires pcntl extension).
 	 *
+	 * [--min-workers=<n>]
+	 * : Minimum worker count for an adaptive pool. Requires --max-workers.
+	 *
+	 * [--max-workers=<n>]
+	 * : Maximum worker count for an adaptive pool.
+	 *
 	 * ## EXAMPLES
 	 *
 	 *     # Process a single queue
@@ -43,9 +49,31 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * @param array $assoc_args Associative arguments.
 	 */
 	public function work( $args, $assoc_args ) {
-		$queue   = $assoc_args['queue'] ?? 'default';
-		$once    = isset( $assoc_args['once'] );
-		$workers = isset( $assoc_args['workers'] ) ? (int) $assoc_args['workers'] : 0;
+		$queue       = $assoc_args['queue'] ?? 'default';
+		$once        = isset( $assoc_args['once'] );
+		$workers     = isset( $assoc_args['workers'] ) ? (int) $assoc_args['workers'] : 0;
+		$min_workers = isset( $assoc_args['min-workers'] ) ? (int) $assoc_args['min-workers'] : 1;
+		$max_workers = isset( $assoc_args['max-workers'] ) ? (int) $assoc_args['max-workers'] : 0;
+
+		if ( $workers > 1 && ( isset( $assoc_args['min-workers'] ) || isset( $assoc_args['max-workers'] ) ) ) {
+			\WP_CLI::error( 'Use either --workers for a fixed pool or --min-workers/--max-workers for adaptive scaling.' );
+		}
+
+		if ( isset( $assoc_args['min-workers'] ) && ! isset( $assoc_args['max-workers'] ) ) {
+			\WP_CLI::error( '--min-workers requires --max-workers.' );
+		}
+
+		if ( $max_workers > 0 ) {
+			\WP_CLI::log( "Starting adaptive worker pool ({$min_workers}-{$max_workers}) on queue: {$queue}" );
+
+			try {
+				Queuety::run_auto_scaling_worker_pool( $min_workers, $max_workers, $queue );
+				\WP_CLI::success( 'Adaptive worker pool stopped.' );
+			} catch ( \RuntimeException $e ) {
+				\WP_CLI::error( $e->getMessage() );
+			}
+			return;
+		}
 
 		if ( $workers > 1 ) {
 			\WP_CLI::log( "Starting {$workers} workers on queue: {$queue}" );

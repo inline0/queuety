@@ -20,11 +20,30 @@ class CliCommandAdapters {
 	 * @param array<int, string>   $args Positional arguments.
 	 * @param array<string, mixed> $assoc_args Associative arguments.
 	 * @return array<string, mixed>
+	 *
+	 * @throws \InvalidArgumentException If mutually exclusive worker-pool flags are combined.
 	 */
 	public static function worker_run( array $args, array $assoc_args ): array {
-		$queue   = self::optional_assoc( $assoc_args, 'queue' ) ?? 'default';
-		$once    = self::flag( $assoc_args, 'once' );
-		$workers = self::int_assoc( $assoc_args, 'workers', 0 );
+		$queue       = self::optional_assoc( $assoc_args, 'queue' ) ?? 'default';
+		$once        = self::flag( $assoc_args, 'once' );
+		$workers     = self::int_assoc( $assoc_args, 'workers', 0 );
+		$min_workers = self::int_assoc( $assoc_args, 'min-workers', 1 );
+		$max_workers = self::int_assoc( $assoc_args, 'max-workers', 0 );
+
+		if ( $workers > 1 && ( array_key_exists( 'min-workers', $assoc_args ) || array_key_exists( 'max-workers', $assoc_args ) ) ) {
+			throw new \InvalidArgumentException( 'Use either --workers for a fixed pool or --min-workers/--max-workers for adaptive scaling.' );
+		}
+
+		if ( array_key_exists( 'min-workers', $assoc_args ) && ! array_key_exists( 'max-workers', $assoc_args ) ) {
+			throw new \InvalidArgumentException( '--min-workers requires --max-workers.' );
+		}
+
+		if ( $max_workers > 0 ) {
+			return self::php_plan(
+				Queuety::class . '::run_auto_scaling_worker_pool',
+				array( $min_workers, $max_workers, $queue )
+			);
+		}
 
 		if ( $workers > 1 ) {
 			return self::php_plan(

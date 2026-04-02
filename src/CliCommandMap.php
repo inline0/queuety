@@ -119,9 +119,13 @@ class CliCommandMap {
 						'transport' => 'php',
 						'callable'  => Queuety::class . '::run_worker_pool',
 					),
+					array(
+						'transport' => 'php',
+						'callable'  => Queuety::class . '::run_auto_scaling_worker_pool',
+					),
 				),
 				CliCommandAdapters::class . '::worker_run',
-				'Run one worker or a forked worker pool.'
+				'Run one worker, a fixed worker pool, or an adaptive worker pool.'
 			),
 			self::definition_item(
 				'queue.flush',

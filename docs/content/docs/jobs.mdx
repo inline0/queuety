@@ -65,7 +65,7 @@ The `handle()` method receives the job payload and performs the work. The `confi
 | `rate_limit` | `array` | Rate limit as `[max_executions, window_seconds]` |
 | `concurrency_group` | `string` | Shared worker admission group for expensive handlers |
 | `concurrency_limit` | `int` | Maximum concurrent processing jobs inside that group |
-| `cost_units` | `int` | Relative execution cost used by workflow budgets and admission heuristics |
+| `cost_units` | `int` | Relative execution cost used by weighted queue or provider budgets, workflow budgets, and admission heuristics |
 
 These resource keys are part of Queuety's broader [Resource Management](/docs/features/resource-management) model, where job metadata, workflow budgets, and worker admission all work together.
 

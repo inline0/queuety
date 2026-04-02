@@ -221,6 +221,28 @@ class QueueTest extends IntegrationTestCase {
 		$this->assertSame( 1, $stats['pending'] );
 	}
 
+	public function test_available_pending_count_only_counts_claimable_jobs(): void {
+		$ready_id   = $this->queue->dispatch( 'ready', queue: 'default' );
+		$blocked_id = $this->queue->dispatch( 'blocked', queue: 'default', depends_on: $ready_id );
+		$this->queue->dispatch( 'delayed', queue: 'default', delay: 3600 );
+
+		$this->assertSame( 1, $this->queue->available_pending_count( 'default' ) );
+
+		$this->queue->complete( $ready_id );
+
+		$this->assertSame( 1, $this->queue->available_pending_count( 'default' ) );
+		$this->assertNotNull( $this->queue->find( $blocked_id ) );
+	}
+
+	public function test_available_pending_count_accepts_ordered_queue_lists(): void {
+		$this->queue->dispatch( 'emails', queue: 'emails' );
+		$this->queue->dispatch( 'default', queue: 'default' );
+		$this->queue->dispatch( 'delayed', queue: 'low', delay: 3600 );
+
+		$this->assertSame( 2, $this->queue->available_pending_count( array( 'emails', 'default', 'low' ) ) );
+		$this->assertSame( 2, $this->queue->available_pending_count( 'emails,default,low' ) );
+	}
+
 	// -- buried -------------------------------------------------------------
 
 	public function test_buried_returns_only_buried_jobs(): void {

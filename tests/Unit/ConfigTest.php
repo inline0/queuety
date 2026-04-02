@@ -18,6 +18,14 @@ class ConfigTest extends TestCase {
 		$this->assertSame( 1, Config::worker_sleep() );
 		$this->assertSame( 1000, Config::worker_max_jobs() );
 		$this->assertSame( 128, Config::worker_max_memory() );
+		$this->assertTrue( Config::resource_admission_enabled() );
+		$this->assertTrue( Config::resource_system_memory_awareness_enabled() );
+		$this->assertSame( 16, Config::resource_memory_headroom_mb() );
+		$this->assertSame( 32, Config::resource_system_memory_headroom_mb() );
+		$this->assertSame( array(), Config::resource_queue_cost_budgets() );
+		$this->assertSame( array(), Config::resource_group_cost_budgets() );
+		$this->assertSame( 5, Config::worker_pool_scale_interval_seconds() );
+		$this->assertSame( 15, Config::worker_pool_idle_grace_seconds() );
 		$this->assertSame( BackoffStrategy::Exponential, Config::retry_backoff() );
 		$this->assertSame( 600, Config::stale_timeout() );
 	}

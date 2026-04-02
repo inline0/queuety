@@ -20,6 +20,7 @@ Start a worker that processes jobs.
 
 ```bash
 wp queuety work [--queue=<queue>] [--once] [--workers=<n>]
+wp queuety work [--queue=<queue>] [--min-workers=<n>] --max-workers=<n>
 ```
 
 | Option | Description |
@@ -27,6 +28,8 @@ wp queuety work [--queue=<queue>] [--once] [--workers=<n>]
 | `--queue=<queue>` | Queue(s) to process, comma-separated for priority ordering (default: `default`) |
 | `--once` | Process one batch and exit |
 | `--workers=<n>` | Fork N worker processes (requires `pcntl` extension) |
+| `--min-workers=<n>` | Minimum worker count for an adaptive pool. Requires `--max-workers` |
+| `--max-workers=<n>` | Maximum worker count for an adaptive pool |
 
 ```bash
 # Single worker on default queue
@@ -43,9 +46,12 @@ wp queuety work --once
 
 # Multi-worker mode
 wp queuety work --workers=4
+
+# Adaptive worker pool
+wp queuety work --queue=providers --min-workers=2 --max-workers=6
 ```
 
-When multiple queues are specified, the worker tries to claim from each queue in the listed order. The first queue with an available job wins. See [Workers](/docs/features/workers) for deployment strategies.
+When multiple queues are specified, the worker tries to claim from each queue in the listed order. The first queue with an available job wins. `--workers` keeps the pool fixed. `--min-workers` and `--max-workers` turn on adaptive scaling for the same command surface. See [Workers](/docs/features/workers) for deployment strategies and [Resource Management](/docs/features/resource-management) for the admission model behind adaptive pools.
 
 ### `wp queuety flush`
 

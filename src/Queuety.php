@@ -361,6 +361,29 @@ class Queuety {
 	}
 
 	/**
+	 * Run one adaptive worker pool directly.
+	 *
+	 * @param int    $min_workers Minimum worker count.
+	 * @param int    $max_workers Maximum worker count.
+	 * @param string $queue       Queue name(s) in priority order.
+	 * @return void
+	 */
+	public static function run_auto_scaling_worker_pool( int $min_workers, int $max_workers, string $queue = 'default' ): void {
+		self::ensure_initialized();
+
+		$pool = new WorkerPool(
+			$min_workers,
+			DB_HOST,
+			DB_NAME,
+			DB_USER,
+			DB_PASSWORD,
+			self::$conn->prefix(),
+			$max_workers,
+		);
+		$pool->run( $queue );
+	}
+
+	/**
 	 * Flush pending jobs for one queue or ordered queue list.
 	 *
 	 * @param string|array<int, string> $queue Queue name or ordered queue list.

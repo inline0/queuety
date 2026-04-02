@@ -132,6 +132,42 @@ class Config {
 	}
 
 	/**
+	 * Whether OS or container memory awareness is enabled for admission checks.
+	 *
+	 * @return bool
+	 */
+	public static function resource_system_memory_awareness_enabled(): bool {
+		return defined( 'QUEUETY_RESOURCE_SYSTEM_MEMORY_AWARENESS' ) ? (bool) QUEUETY_RESOURCE_SYSTEM_MEMORY_AWARENESS : true;
+	}
+
+	/**
+	 * Get the reserved system-memory headroom in MB.
+	 *
+	 * @return int
+	 */
+	public static function resource_system_memory_headroom_mb(): int {
+		return defined( 'QUEUETY_RESOURCE_SYSTEM_MEMORY_HEADROOM_MB' ) ? max( 0, (int) QUEUETY_RESOURCE_SYSTEM_MEMORY_HEADROOM_MB ) : 32;
+	}
+
+	/**
+	 * Get weighted cost budgets per queue.
+	 *
+	 * @return array<string, int>
+	 */
+	public static function resource_queue_cost_budgets(): array {
+		return self::normalize_int_map_constant( 'QUEUETY_RESOURCE_QUEUE_COST_BUDGETS' );
+	}
+
+	/**
+	 * Get weighted cost budgets per concurrency group.
+	 *
+	 * @return array<string, int>
+	 */
+	public static function resource_group_cost_budgets(): array {
+		return self::normalize_int_map_constant( 'QUEUETY_RESOURCE_GROUP_COST_BUDGETS' );
+	}
+
+	/**
 	 * Get the time headroom in milliseconds reserved for once-run workers.
 	 *
 	 * @return int
@@ -162,6 +198,24 @@ class Config {
 	}
 
 	/**
+	 * Get the worker-pool scale reconciliation interval in seconds.
+	 *
+	 * @return int
+	 */
+	public static function worker_pool_scale_interval_seconds(): int {
+		return defined( 'QUEUETY_WORKER_POOL_SCALE_INTERVAL' ) ? max( 1, (int) QUEUETY_WORKER_POOL_SCALE_INTERVAL ) : 5;
+	}
+
+	/**
+	 * Get the idle grace period before scaling a worker pool back down.
+	 *
+	 * @return int
+	 */
+	public static function worker_pool_idle_grace_seconds(): int {
+		return defined( 'QUEUETY_WORKER_POOL_IDLE_GRACE' ) ? max( 0, (int) QUEUETY_WORKER_POOL_IDLE_GRACE ) : 15;
+	}
+
+	/**
 	 * Get the schedules table name.
 	 *
 	 * @return string
@@ -186,6 +240,40 @@ class Config {
 	 */
 	public static function table_webhooks(): string {
 		return defined( 'QUEUETY_TABLE_WEBHOOKS' ) ? QUEUETY_TABLE_WEBHOOKS : 'queuety_webhooks';
+	}
+
+	/**
+	 * Normalize one associative integer-map constant.
+	 *
+	 * @param string $constant Constant name.
+	 * @return array<string, int>
+	 */
+	private static function normalize_int_map_constant( string $constant ): array {
+		if ( ! defined( $constant ) ) {
+			return array();
+		}
+
+		$value = constant( $constant );
+		if ( ! is_array( $value ) ) {
+			return array();
+		}
+
+		$result = array();
+		foreach ( $value as $key => $limit ) {
+			$key = trim( (string) $key );
+			if ( '' === $key ) {
+				continue;
+			}
+
+			$limit = (int) $limit;
+			if ( $limit < 1 ) {
+				continue;
+			}
+
+			$result[ $key ] = $limit;
+		}
+
+		return $result;
 	}
 
 	/**

@@ -468,6 +468,68 @@ class Queue {
 	}
 
 	/**
+	 * Count claimable pending jobs for one queue or ordered queue list.
+	 *
+	 * This mirrors the same workflow/dependency eligibility checks as `claim()`,
+	 * but returns a count instead of one claimed job.
+	 *
+	 * @param string|array<int, string> $queue Queue name or ordered queue list.
+	 * @return int
+	 */
+	public function available_pending_count( string|array $queue = 'default' ): int {
+		$table   = $this->conn->table( Config::table_jobs() );
+		$wf_tbl  = $this->conn->table( Config::table_workflows() );
+		$queues  = $this->normalize_queue_names( $queue );
+		$params  = array(
+			'status'               => JobStatus::Pending->value,
+			'workflow_running'     => 'running',
+			'workflow_paused'      => 'paused',
+			'dependency_completed' => JobStatus::Completed->value,
+		);
+		$clauses = array();
+
+		if ( empty( $queues ) ) {
+			return 0;
+		}
+
+		foreach ( $queues as $index => $queue_name ) {
+			$key            = "queue_{$index}";
+			$clauses[]      = ":{$key}";
+			$params[ $key ] = $queue_name;
+		}
+
+		$in   = implode( ', ', $clauses );
+		$stmt = $this->conn->pdo()->prepare(
+			"SELECT COUNT(*)
+			FROM {$table} AS job FORCE INDEX (idx_queue_claim)
+			WHERE job.status = :status
+				AND job.queue IN ({$in})
+				AND job.available_at <= NOW()
+				AND (
+					job.workflow_id IS NULL
+					OR EXISTS (
+						SELECT 1
+						FROM {$wf_tbl} AS wf
+						WHERE wf.id = job.workflow_id
+							AND wf.status IN (:workflow_running, :workflow_paused)
+					)
+				)
+				AND (
+					job.depends_on IS NULL
+					OR EXISTS (
+						SELECT 1
+						FROM {$table} AS dep
+						WHERE dep.id = job.depends_on
+							AND dep.status = :dependency_completed
+					)
+				)"
+		);
+		$stmt->execute( $params );
+
+		return (int) $stmt->fetchColumn();
+	}
+
+	/**
 	 * Get all buried jobs.
 	 *
 	 * @param string|null $queue Optional queue filter.
@@ -639,5 +701,31 @@ class Queue {
 		);
 
 		return array_column( $stmt->fetchAll(), 'queue' );
+	}
+
+	/**
+	 * Normalize one queue name parameter into a flat list.
+	 *
+	 * @param string|array<int, string> $queue Queue name or list.
+	 * @return array<int, string>
+	 */
+	private function normalize_queue_names( string|array $queue ): array {
+		if ( is_array( $queue ) ) {
+			return array_values(
+				array_filter(
+					array_map( 'trim', $queue )
+				)
+			);
+		}
+
+		if ( str_contains( $queue, ',' ) ) {
+			return array_values(
+				array_filter(
+					array_map( 'trim', explode( ',', $queue ) )
+				)
+			);
+		}
+
+		return array( trim( $queue ) );
 	}
 }
