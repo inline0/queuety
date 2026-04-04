@@ -3,4 +3,3 @@
 /.phpunit.cache/
 /.phpstan/
 composer.lock
-docs/package-lock.json
