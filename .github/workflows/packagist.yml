@@ -1,0 +1,25 @@
+name: Packagist
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update-packagist:
+    name: Refresh Packagist metadata
+    runs-on: ubuntu-latest
+    if: ${{ secrets.PACKAGIST_USERNAME != '' && secrets.PACKAGIST_TOKEN != '' }}
+    steps:
+      - name: Notify Packagist
+        run: |
+          curl --fail --show-error --silent \
+            -X POST https://packagist.org/api/update-package \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ secrets.PACKAGIST_USERNAME }}:${{ secrets.PACKAGIST_TOKEN }}" \
+            -d '{"repository":"https://github.com/inline0/queuety"}'
