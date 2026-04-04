@@ -14,29 +14,17 @@ use Queuety\Enums\BackoffStrategy;
  */
 class Config {
 
-	/**
-	 * Get the jobs table name.
-	 *
-	 * @return string
-	 */
+	/** Jobs table base name. */
 	public static function table_jobs(): string {
 		return self::table_name( 'QUEUETY_TABLE_JOBS', 'jobs' );
 	}
 
-	/**
-	 * Get the workflows table name.
-	 *
-	 * @return string
-	 */
+	/** Workflows table base name. */
 	public static function table_workflows(): string {
 		return self::table_name( 'QUEUETY_TABLE_WORKFLOWS', 'workflows' );
 	}
 
-	/**
-	 * Get the logs table name.
-	 *
-	 * @return string
-	 */
+	/** Logs table base name. */
 	public static function table_logs(): string {
 		return self::table_name( 'QUEUETY_TABLE_LOGS', 'logs' );
 	}
@@ -63,146 +51,82 @@ class Config {
 		return rtrim( $prefix, '_' ) . '_';
 	}
 
-	/**
-	 * Get the retention period in days for completed jobs.
-	 *
-	 * @return int
-	 */
+	/** Completed-job retention period, in days. */
 	public static function retention_days(): int {
 		return defined( 'QUEUETY_RETENTION_DAYS' ) ? (int) QUEUETY_RETENTION_DAYS : 7;
 	}
 
-	/**
-	 * Get the retention period in days for log entries.
-	 *
-	 * @return int
-	 */
+	/** Log retention period, in days. */
 	public static function log_retention_days(): int {
 		return defined( 'QUEUETY_LOG_RETENTION_DAYS' ) ? (int) QUEUETY_LOG_RETENTION_DAYS : 0;
 	}
 
-	/**
-	 * Get the maximum execution time in seconds.
-	 *
-	 * @return int
-	 */
+	/** Maximum execution time, in seconds. */
 	public static function max_execution_time(): int {
 		return defined( 'QUEUETY_MAX_EXECUTION_TIME' ) ? (int) QUEUETY_MAX_EXECUTION_TIME : 300;
 	}
 
-	/**
-	 * Get the worker sleep interval in seconds.
-	 *
-	 * @return int
-	 */
+	/** Worker sleep interval, in seconds. */
 	public static function worker_sleep(): int {
 		return defined( 'QUEUETY_WORKER_SLEEP' ) ? (int) QUEUETY_WORKER_SLEEP : 1;
 	}
 
-	/**
-	 * Get the maximum number of jobs a worker processes before restarting.
-	 *
-	 * @return int
-	 */
+	/** Max jobs before a worker restarts. */
 	public static function worker_max_jobs(): int {
 		return defined( 'QUEUETY_WORKER_MAX_JOBS' ) ? (int) QUEUETY_WORKER_MAX_JOBS : 1000;
 	}
 
-	/**
-	 * Get the maximum memory in MB before the worker restarts.
-	 *
-	 * @return int
-	 */
+	/** Worker memory ceiling, in megabytes. */
 	public static function worker_max_memory(): int {
 		return defined( 'QUEUETY_WORKER_MAX_MEMORY' ) ? (int) QUEUETY_WORKER_MAX_MEMORY : 128;
 	}
 
-	/**
-	 * Whether resource-aware admission checks are enabled.
-	 *
-	 * @return bool
-	 */
+	/** Whether resource-aware admission checks are enabled. */
 	public static function resource_admission_enabled(): bool {
 		return defined( 'QUEUETY_RESOURCE_ADMISSION' ) ? (bool) QUEUETY_RESOURCE_ADMISSION : true;
 	}
 
-	/**
-	 * Get the recent profile lookback window in minutes.
-	 *
-	 * @return int
-	 */
+	/** Recent resource-profile lookback window, in minutes. */
 	public static function resource_profile_window_minutes(): int {
 		return defined( 'QUEUETY_RESOURCE_PROFILE_WINDOW_MINUTES' ) ? max( 1, (int) QUEUETY_RESOURCE_PROFILE_WINDOW_MINUTES ) : 60;
 	}
 
-	/**
-	 * Get the resource profile cache TTL in seconds.
-	 *
-	 * @return int
-	 */
+	/** Resource-profile cache TTL, in seconds. */
 	public static function resource_profile_ttl_seconds(): int {
 		return defined( 'QUEUETY_RESOURCE_PROFILE_TTL' ) ? max( 1, (int) QUEUETY_RESOURCE_PROFILE_TTL ) : 30;
 	}
 
-	/**
-	 * Get the memory headroom in MB reserved before admitting another job.
-	 *
-	 * @return int
-	 */
+	/** Reserved memory headroom before admitting another job, in megabytes. */
 	public static function resource_memory_headroom_mb(): int {
 		return defined( 'QUEUETY_RESOURCE_MEMORY_HEADROOM_MB' ) ? max( 0, (int) QUEUETY_RESOURCE_MEMORY_HEADROOM_MB ) : 16;
 	}
 
-	/**
-	 * Whether OS or container memory awareness is enabled for admission checks.
-	 *
-	 * @return bool
-	 */
+	/** Whether container or host memory awareness is enabled. */
 	public static function resource_system_memory_awareness_enabled(): bool {
 		return defined( 'QUEUETY_RESOURCE_SYSTEM_MEMORY_AWARENESS' ) ? (bool) QUEUETY_RESOURCE_SYSTEM_MEMORY_AWARENESS : true;
 	}
 
-	/**
-	 * Get the reserved system-memory headroom in MB.
-	 *
-	 * @return int
-	 */
+	/** Reserved system-memory headroom, in megabytes. */
 	public static function resource_system_memory_headroom_mb(): int {
 		return defined( 'QUEUETY_RESOURCE_SYSTEM_MEMORY_HEADROOM_MB' ) ? max( 0, (int) QUEUETY_RESOURCE_SYSTEM_MEMORY_HEADROOM_MB ) : 32;
 	}
 
-	/**
-	 * Get weighted cost budgets per queue.
-	 *
-	 * @return array<string, int>
-	 */
+	/** Weighted cost budgets per queue. */
 	public static function resource_queue_cost_budgets(): array {
 		return self::normalize_int_map_constant( 'QUEUETY_RESOURCE_QUEUE_COST_BUDGETS' );
 	}
 
-	/**
-	 * Get weighted cost budgets per concurrency group.
-	 *
-	 * @return array<string, int>
-	 */
+	/** Weighted cost budgets per concurrency group. */
 	public static function resource_group_cost_budgets(): array {
 		return self::normalize_int_map_constant( 'QUEUETY_RESOURCE_GROUP_COST_BUDGETS' );
 	}
 
-	/**
-	 * Get the time headroom in milliseconds reserved for once-run workers.
-	 *
-	 * @return int
-	 */
+	/** Reserved once-run time headroom, in milliseconds. */
 	public static function resource_time_headroom_ms(): int {
 		return defined( 'QUEUETY_RESOURCE_TIME_HEADROOM_MS' ) ? max( 0, (int) QUEUETY_RESOURCE_TIME_HEADROOM_MS ) : 5000;
 	}
 
-	/**
-	 * Get the retry backoff strategy.
-	 *
-	 * @return BackoffStrategy
-	 */
+	/** Retry backoff strategy. */
 	public static function retry_backoff(): BackoffStrategy {
 		if ( defined( 'QUEUETY_RETRY_BACKOFF' ) ) {
 			return BackoffStrategy::tryFrom( QUEUETY_RETRY_BACKOFF ) ?? BackoffStrategy::Exponential;
@@ -210,56 +134,32 @@ class Config {
 		return BackoffStrategy::Exponential;
 	}
 
-	/**
-	 * Get the stale job timeout in seconds.
-	 *
-	 * @return int
-	 */
+	/** Seconds before a processing job is treated as stale. */
 	public static function stale_timeout(): int {
 		return defined( 'QUEUETY_STALE_TIMEOUT' ) ? (int) QUEUETY_STALE_TIMEOUT : 600;
 	}
 
-	/**
-	 * Get the worker-pool scale reconciliation interval in seconds.
-	 *
-	 * @return int
-	 */
+	/** Adaptive worker-pool scale interval, in seconds. */
 	public static function worker_pool_scale_interval_seconds(): int {
 		return defined( 'QUEUETY_WORKER_POOL_SCALE_INTERVAL' ) ? max( 1, (int) QUEUETY_WORKER_POOL_SCALE_INTERVAL ) : 5;
 	}
 
-	/**
-	 * Get the idle grace period before scaling a worker pool back down.
-	 *
-	 * @return int
-	 */
+	/** Idle grace period before scaling a worker pool down, in seconds. */
 	public static function worker_pool_idle_grace_seconds(): int {
 		return defined( 'QUEUETY_WORKER_POOL_IDLE_GRACE' ) ? max( 0, (int) QUEUETY_WORKER_POOL_IDLE_GRACE ) : 15;
 	}
 
-	/**
-	 * Get the schedules table name.
-	 *
-	 * @return string
-	 */
+	/** Schedules table base name. */
 	public static function table_schedules(): string {
 		return self::table_name( 'QUEUETY_TABLE_SCHEDULES', 'schedules' );
 	}
 
-	/**
-	 * Get the queue states table name.
-	 *
-	 * @return string
-	 */
+	/** Queue-state table base name. */
 	public static function table_queue_states(): string {
 		return self::table_name( 'QUEUETY_TABLE_QUEUE_STATES', 'queue_states' );
 	}
 
-	/**
-	 * Get the webhooks table name.
-	 *
-	 * @return string
-	 */
+	/** Webhooks table base name. */
 	public static function table_webhooks(): string {
 		return self::table_name( 'QUEUETY_TABLE_WEBHOOKS', 'webhooks' );
 	}
@@ -298,110 +198,62 @@ class Config {
 		return $result;
 	}
 
-	/**
-	 * Get the signals table name.
-	 *
-	 * @return string
-	 */
+	/** Signals table base name. */
 	public static function table_signals(): string {
 		return self::table_name( 'QUEUETY_TABLE_SIGNALS', 'signals' );
 	}
 
-	/**
-	 * Get the workflow dependency waits table name.
-	 *
-	 * @return string
-	 */
+	/** Workflow-dependency table base name. */
 	public static function table_workflow_dependencies(): string {
 		return self::table_name( 'QUEUETY_TABLE_WORKFLOW_DEPENDENCIES', 'workflow_dependencies' );
 	}
 
-	/**
-	 * Get the workflow dispatch idempotency table name.
-	 *
-	 * @return string
-	 */
+	/** Workflow-dispatch-key table base name. */
 	public static function table_workflow_dispatch_keys(): string {
 		return self::table_name( 'QUEUETY_TABLE_WORKFLOW_DISPATCH_KEYS', 'workflow_dispatch_keys' );
 	}
 
-	/**
-	 * Get the locks table name.
-	 *
-	 * @return string
-	 */
+	/** Locks table base name. */
 	public static function table_locks(): string {
 		return self::table_name( 'QUEUETY_TABLE_LOCKS', 'locks' );
 	}
 
-	/**
-	 * Get the batches table name.
-	 *
-	 * @return string
-	 */
+	/** Batches table base name. */
 	public static function table_batches(): string {
 		return self::table_name( 'QUEUETY_TABLE_BATCHES', 'batches' );
 	}
 
-	/**
-	 * Get the chunks table name.
-	 *
-	 * @return string
-	 */
+	/** Chunks table base name. */
 	public static function table_chunks(): string {
 		return self::table_name( 'QUEUETY_TABLE_CHUNKS', 'chunks' );
 	}
 
-	/**
-	 * Get the workflow events table name.
-	 *
-	 * @return string
-	 */
+	/** Workflow-events table base name. */
 	public static function table_workflow_events(): string {
 		return self::table_name( 'QUEUETY_TABLE_WORKFLOW_EVENTS', 'workflow_events' );
 	}
 
-	/**
-	 * Get the workflow artifacts table name.
-	 *
-	 * @return string
-	 */
+	/** Artifacts table base name. */
 	public static function table_artifacts(): string {
 		return self::table_name( 'QUEUETY_TABLE_ARTIFACTS', 'artifacts' );
 	}
 
-	/**
-	 * Get the state machines table name.
-	 *
-	 * @return string
-	 */
+	/** State-machines table base name. */
 	public static function table_state_machines(): string {
 		return self::table_name( 'QUEUETY_TABLE_STATE_MACHINES', 'state_machines' );
 	}
 
-	/**
-	 * Get the state machine events table name.
-	 *
-	 * @return string
-	 */
+	/** State-machine-events table base name. */
 	public static function table_state_machine_events(): string {
 		return self::table_name( 'QUEUETY_TABLE_STATE_MACHINE_EVENTS', 'state_machine_events' );
 	}
 
-	/**
-	 * Get the default cache TTL in seconds.
-	 *
-	 * @return int
-	 */
+	/** Default cache TTL, in seconds. */
 	public static function cache_ttl(): int {
 		return defined( 'QUEUETY_CACHE_TTL' ) ? (int) QUEUETY_CACHE_TTL : 5;
 	}
 
-	/**
-	 * Check if debug mode is enabled.
-	 *
-	 * @return bool
-	 */
+	/** Whether debug mode is enabled. */
 	public static function debug(): bool {
 		return defined( 'QUEUETY_DEBUG' ) && QUEUETY_DEBUG;
 	}

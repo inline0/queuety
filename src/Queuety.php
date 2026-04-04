@@ -34,28 +34,28 @@ use Queuety\Testing\QueueFake;
 class Queuety {
 
 	/**
-	 * Database connection instance.
+	 * Database connection.
 	 *
 	 * @var Connection|null
 	 */
 	private static ?Connection $conn = null;
 
 	/**
-	 * Queue operations instance.
+	 * Queue operations.
 	 *
 	 * @var Queue|null
 	 */
 	private static ?Queue $queue = null;
 
 	/**
-	 * Logger instance.
+	 * Logger.
 	 *
 	 * @var Logger|null
 	 */
 	private static ?Logger $logger = null;
 
 	/**
-	 * Workflow manager instance.
+	 * Workflow manager.
 	 *
 	 * @var Workflow|null
 	 */
@@ -69,105 +69,105 @@ class Queuety {
 	private static ?Worker $worker = null;
 
 	/**
-	 * Handler registry instance.
+	 * Handler registry.
 	 *
 	 * @var HandlerRegistry|null
 	 */
 	private static ?HandlerRegistry $registry = null;
 
 	/**
-	 * Rate limiter instance.
+	 * Rate limiter.
 	 *
 	 * @var RateLimiter|null
 	 */
 	private static ?RateLimiter $rate_limiter = null;
 
 	/**
-	 * Scheduler instance.
+	 * Scheduler.
 	 *
 	 * @var Scheduler|null
 	 */
 	private static ?Scheduler $scheduler = null;
 
 	/**
-	 * Workflow template registry instance.
+	 * Workflow template registry.
 	 *
 	 * @var WorkflowRegistry|null
 	 */
 	private static ?WorkflowRegistry $workflow_registry = null;
 
 	/**
-	 * Metrics instance.
+	 * Metrics collector.
 	 *
 	 * @var Metrics|null
 	 */
 	private static ?Metrics $metrics = null;
 
 	/**
-	 * Webhook notifier instance.
+	 * Webhook notifier.
 	 *
 	 * @var WebhookNotifier|null
 	 */
 	private static ?WebhookNotifier $webhook_notifier = null;
 
 	/**
-	 * Batch manager instance.
+	 * Batch manager.
 	 *
 	 * @var BatchManager|null
 	 */
 	private static ?BatchManager $batch_manager = null;
 
 	/**
-	 * Chunk store instance for streaming steps.
+	 * Streaming chunk store.
 	 *
 	 * @var ChunkStore|null
 	 */
 	private static ?ChunkStore $chunk_store = null;
 
 	/**
-	 * Workflow event log instance.
+	 * Workflow event log.
 	 *
 	 * @var WorkflowEventLog|null
 	 */
 	private static ?WorkflowEventLog $workflow_event_log = null;
 
 	/**
-	 * Workflow artifact storage instance.
+	 * Workflow artifact store.
 	 *
 	 * @var ArtifactStore|null
 	 */
 	private static ?ArtifactStore $artifact_store = null;
 
 	/**
-	 * State machine event log instance.
+	 * State-machine event log.
 	 *
 	 * @var StateMachineEventLog|null
 	 */
 	private static ?StateMachineEventLog $state_machine_event_log = null;
 
 	/**
-	 * State machine manager instance.
+	 * State-machine manager.
 	 *
 	 * @var StateMachine|null
 	 */
 	private static ?StateMachine $state_machine = null;
 
 	/**
-	 * Resource manager instance.
+	 * Resource manager.
 	 *
 	 * @var ResourceManager|null
 	 */
 	private static ?ResourceManager $resource_manager = null;
 
 	/**
-	 * Cache backend instance.
+	 * Cache backend.
 	 *
 	 * @var Cache|null
 	 */
 	private static ?Cache $cache = null;
 
 	/**
-	 * Queue fake for testing.
+	 * Queue fake recorder.
 	 *
 	 * @var QueueFake|null
 	 */
@@ -985,91 +985,55 @@ class Queuety {
 		self::$workflow->resume( $workflow_id );
 	}
 
-	/**
-	 * Get the internal Queue instance.
-	 *
-	 * @return Queue
-	 */
+	/** Queue operations. */
 	public static function queue(): Queue {
 		self::ensure_initialized();
 		return self::$queue;
 	}
 
-	/**
-	 * Get the internal Logger instance.
-	 *
-	 * @return Logger
-	 */
+	/** Logger instance. */
 	public static function logger(): Logger {
 		self::ensure_initialized();
 		return self::$logger;
 	}
 
-	/**
-	 * Get the internal Worker instance.
-	 *
-	 * @return Worker
-	 */
+	/** Worker instance. */
 	public static function worker(): Worker {
 		self::ensure_initialized();
 		return self::$worker;
 	}
 
-	/**
-	 * Get the internal Workflow instance.
-	 *
-	 * @return Workflow
-	 */
+	/** Workflow manager. */
 	public static function workflow_manager(): Workflow {
 		self::ensure_initialized();
 		return self::$workflow;
 	}
 
-	/**
-	 * Get the state machine manager instance.
-	 *
-	 * @return StateMachine
-	 */
+	/** State-machine manager. */
 	public static function machines(): StateMachine {
 		self::ensure_initialized();
 		return self::$state_machine;
 	}
 
-	/**
-	 * Get the handler registry.
-	 *
-	 * @return HandlerRegistry
-	 */
+	/** Handler registry. */
 	public static function registry(): HandlerRegistry {
 		self::ensure_initialized();
 		return self::$registry;
 	}
 
-	/**
-	 * Get the rate limiter instance.
-	 *
-	 * @return RateLimiter
-	 */
+	/** Rate limiter. */
 	public static function rate_limiter(): RateLimiter {
 		self::ensure_initialized();
 		return self::$rate_limiter;
 	}
 
-	/**
-	 * Get the resource manager instance.
-	 *
-	 * @return ResourceManager
-	 */
+	/** Resource manager. */
 	public static function resource_manager(): ResourceManager {
 		self::ensure_initialized();
 		return self::$resource_manager;
 	}
 
-	/**
-	 * Get the batch manager instance.
-	 *
-	 * @return BatchManager
-	 */
+	/** Batch manager. */
 	public static function batch_manager(): BatchManager {
 		if ( null !== self::$queue_fake ) {
 			return self::fake_batch_manager();
@@ -1079,21 +1043,13 @@ class Queuety {
 		return self::$batch_manager;
 	}
 
-	/**
-	 * Get the chunk store instance.
-	 *
-	 * @return ChunkStore
-	 */
+	/** Streaming chunk store. */
 	public static function chunk_store(): ChunkStore {
 		self::ensure_initialized();
 		return self::$chunk_store;
 	}
 
-	/**
-	 * Get the workflow artifact store instance.
-	 *
-	 * @return ArtifactStore
-	 */
+	/** Workflow artifact store. */
 	public static function artifacts(): ArtifactStore {
 		self::ensure_initialized();
 		return self::$artifact_store;
@@ -1111,21 +1067,13 @@ class Queuety {
 		return new PendingSchedule( $handler, $payload, self::$scheduler );
 	}
 
-	/**
-	 * Get the internal Scheduler instance.
-	 *
-	 * @return Scheduler
-	 */
+	/** Scheduler instance. */
 	public static function scheduler(): Scheduler {
 		self::ensure_initialized();
 		return self::$scheduler;
 	}
 
-	/**
-	 * Get the cache backend instance.
-	 *
-	 * @return Cache
-	 */
+	/** Cache backend. */
 	public static function cache(): Cache {
 		self::ensure_initialized();
 		return self::$cache;
@@ -1144,11 +1092,7 @@ class Queuety {
 		self::$cache = $cache;
 	}
 
-	/**
-	 * Get the internal Connection instance.
-	 *
-	 * @return Connection
-	 */
+	/** Database connection. */
 	public static function connection(): Connection {
 		self::ensure_initialized();
 		return self::$conn;
@@ -1219,11 +1163,7 @@ class Queuety {
 		return self::$workflow->dispatch_definition( $definition, $payload, $options );
 	}
 
-	/**
-	 * Get the workflow template registry.
-	 *
-	 * @return WorkflowRegistry
-	 */
+	/** Workflow template registry. */
 	public static function workflow_templates(): WorkflowRegistry {
 		self::ensure_initialized();
 		return self::$workflow_registry;
@@ -1328,11 +1268,7 @@ class Queuety {
 		return WorkflowLoader::load_file( $file_path );
 	}
 
-	/**
-	 * Get the Metrics instance.
-	 *
-	 * @return Metrics
-	 */
+	/** Metrics collector. */
 	public static function metrics(): Metrics {
 		self::ensure_initialized();
 		return self::$metrics;
@@ -1386,11 +1322,7 @@ class Queuety {
 		return self::$logger->purge( $older_than_days );
 	}
 
-	/**
-	 * Get the WebhookNotifier instance.
-	 *
-	 * @return WebhookNotifier
-	 */
+	/** Webhook notifier. */
 	public static function webhook_notifier(): WebhookNotifier {
 		self::ensure_initialized();
 		return self::$webhook_notifier;
@@ -1496,11 +1428,7 @@ class Queuety {
 		return self::$scheduler->tick();
 	}
 
-	/**
-	 * Get the workflow event log instance.
-	 *
-	 * @return WorkflowEventLog
-	 */
+	/** Workflow event log. */
 	public static function workflow_events(): WorkflowEventLog {
 		self::ensure_initialized();
 		return self::$workflow_event_log;
@@ -1657,11 +1585,7 @@ class Queuety {
 		return self::$queue_fake;
 	}
 
-	/**
-	 * Get the active queue fake recorder, if any.
-	 *
-	 * @return QueueFake|null
-	 */
+	/** Active queue fake recorder, if any. */
 	public static function queue_fake(): ?QueueFake {
 		return self::$queue_fake;
 	}
@@ -1707,11 +1631,7 @@ class Queuety {
 		}
 	}
 
-	/**
-	 * Get the fake queue driver.
-	 *
-	 * @return FakeQueue
-	 */
+	/** Fake queue driver. */
 	private static function fake_queue(): FakeQueue {
 		if ( null === self::$fake_queue || null === self::$queue_fake ) {
 			self::fake();
@@ -1720,11 +1640,7 @@ class Queuety {
 		return self::$fake_queue;
 	}
 
-	/**
-	 * Get the fake batch manager.
-	 *
-	 * @return FakeBatchManager
-	 */
+	/** Fake batch manager. */
 	private static function fake_batch_manager(): FakeBatchManager {
 		if ( null === self::$fake_batch_manager || null === self::$queue_fake ) {
 			self::fake();

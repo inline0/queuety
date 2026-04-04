@@ -55,7 +55,7 @@ queuety/
 │   ├── HandlerRegistry.php # Handler name to class mapping
 │   ├── HandlerDiscovery.php # Auto-discover handlers from directories
 │   ├── HookDispatcher.php # WordPress action hook dispatcher
-│   ├── Schema.php         # Table creation/migration
+│   ├── Schema.php         # Table creation
 │   ├── Connection.php     # Direct PDO database connection
 │   ├── ConfigParser.php   # wp-config.php credential parser
 │   ├── Config.php         # Configuration reader
@@ -127,8 +127,13 @@ queuety/
 
 ## Comment Policy
 
-- Internal code: no JSDoc. Comments only for why, not what.
-- Public APIs: JSDoc required (description + params/returns/examples).
+- Use PHPDoc, not JSDoc terminology.
+- Inline comments explain why, not what. Keep them for invariants, races, compatibility edges, persistence quirks, or platform constraints.
+- Public APIs and real contracts get PHPDoc when they need to explain behavior, caveats, or usage.
+- PHPCS requires doc comments in places where the ideal style would omit them. In those cases, use terse one-line PHPDoc and avoid filler paragraphs or redundant `@return` tags.
+- Private and internal methods only get longer PHPDoc when the contract is non-obvious.
+- Typed properties still need concise doc comments if the coding standard requires them. Keep them short.
+- Every `phpcs:ignore` or `phpcs:disable` needs a reason.
 - Tests: no redundant comments that restate test names. Comment only when setup/assertion is non-obvious.
 - **No banner comments**: never use decorative separator lines like `// ==========`, `// -----`, `// ===== SECTION =====`, etc.
 - **No em dashes**: never use em dashes in code, docs, or copy. Use periods, commas, colons, or rewrite the sentence.

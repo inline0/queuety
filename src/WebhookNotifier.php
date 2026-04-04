@@ -13,7 +13,7 @@ namespace Queuety;
 class WebhookNotifier {
 
 	/**
-	 * Constructor.
+	 * Webhook notifier storage.
 	 *
 	 * @param Connection $conn Database connection.
 	 */
@@ -124,8 +124,8 @@ class WebhookNotifier {
 					),
 				)
 			);
-			@file_get_contents( $url, false, $context );
-		} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+			@file_get_contents( $url, false, $context ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Best-effort webhook dispatch uses a one-second local stream timeout and must never block the worker on HTTP API overhead.
+		} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Webhook delivery is best-effort and must not block the worker.
 		}
 	}
 }
