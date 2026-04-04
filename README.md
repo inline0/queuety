@@ -482,7 +482,7 @@ class StreamLLMHandler implements StreamingStep {
 
 ## Configuration
 
-All constants are optional. Define in `wp-config.php`:
+All constants are optional. Define them in `wp-config.php` or before Queuety boots in an embedded theme-style install.
 
 | Constant | Default | Description |
 |----------|---------|-------------|
@@ -496,6 +496,8 @@ All constants are optional. Define in `wp-config.php`:
 | `QUEUETY_STALE_TIMEOUT` | `600` | Seconds before stuck jobs are recovered |
 | `QUEUETY_CACHE_TTL` | `5` | Default cache TTL in seconds |
 | `QUEUETY_DEBUG` | `false` | Enable verbose worker logging |
+| `QUEUETY_CLI_COMMAND` | `queuety` | Root WP-CLI command name |
+| `QUEUETY_TABLE_PREFIX` | `queuety_` | Shared base name for all Queuety tables after the WordPress DB prefix |
 | `QUEUETY_TABLE_JOBS` | `queuety_jobs` | Jobs table name |
 | `QUEUETY_TABLE_WORKFLOWS` | `queuety_workflows` | Workflows table name |
 | `QUEUETY_TABLE_LOGS` | `queuety_logs` | Logs table name |
@@ -506,6 +508,8 @@ All constants are optional. Define in `wp-config.php`:
 | `QUEUETY_TABLE_CHUNKS` | `queuety_chunks` | Streaming chunks table name |
 | `QUEUETY_TABLE_QUEUE_STATES` | `queuety_queue_states` | Queue states table name |
 | `QUEUETY_TABLE_WEBHOOKS` | `queuety_webhooks` | Webhooks table name |
+
+`QUEUETY_TABLE_PREFIX` changes the shared Queuety portion of the table names while leaving the WordPress database prefix in place. For example, with `$wpdb->prefix = 'wp_'` and `QUEUETY_TABLE_PREFIX = 'themequeue_'`, the jobs table becomes `wp_themequeue_jobs`. Explicit `QUEUETY_TABLE_*` constants still override individual tables.
 
 ## Development
 

@@ -1412,6 +1412,8 @@ class SendEmailHandler implements Handler {
 
 Returns the published WP-CLI root command name.
 
+The default root command is `queuety`. Define `QUEUETY_CLI_COMMAND` before Queuety boots if the command should be published under a different name.
+
 ### `Queuety::cli_command_map()`
 
 Returns the serializable Queuety CLI catalog for harnesses that need to understand the shipped command surface without scraping WP-CLI classes.

@@ -20,7 +20,7 @@ class Config {
 	 * @return string
 	 */
 	public static function table_jobs(): string {
-		return defined( 'QUEUETY_TABLE_JOBS' ) ? QUEUETY_TABLE_JOBS : 'queuety_jobs';
+		return self::table_name( 'QUEUETY_TABLE_JOBS', 'jobs' );
 	}
 
 	/**
@@ -29,7 +29,7 @@ class Config {
 	 * @return string
 	 */
 	public static function table_workflows(): string {
-		return defined( 'QUEUETY_TABLE_WORKFLOWS' ) ? QUEUETY_TABLE_WORKFLOWS : 'queuety_workflows';
+		return self::table_name( 'QUEUETY_TABLE_WORKFLOWS', 'workflows' );
 	}
 
 	/**
@@ -38,7 +38,29 @@ class Config {
 	 * @return string
 	 */
 	public static function table_logs(): string {
-		return defined( 'QUEUETY_TABLE_LOGS' ) ? QUEUETY_TABLE_LOGS : 'queuety_logs';
+		return self::table_name( 'QUEUETY_TABLE_LOGS', 'logs' );
+	}
+
+	/**
+	 * Get the shared Queuety table-name prefix.
+	 *
+	 * This is the base name that comes after the WordPress database prefix.
+	 * For example, with `$wpdb->prefix = 'wp_'` and `QUEUETY_TABLE_PREFIX = 'themequeue_'`,
+	 * the jobs table becomes `wp_themequeue_jobs`.
+	 *
+	 * @return string
+	 */
+	public static function table_prefix(): string {
+		if ( ! defined( 'QUEUETY_TABLE_PREFIX' ) ) {
+			return 'queuety_';
+		}
+
+		$prefix = trim( (string) constant( 'QUEUETY_TABLE_PREFIX' ) );
+		if ( '' === $prefix ) {
+			return '';
+		}
+
+		return rtrim( $prefix, '_' ) . '_';
 	}
 
 	/**
@@ -221,7 +243,7 @@ class Config {
 	 * @return string
 	 */
 	public static function table_schedules(): string {
-		return defined( 'QUEUETY_TABLE_SCHEDULES' ) ? QUEUETY_TABLE_SCHEDULES : 'queuety_schedules';
+		return self::table_name( 'QUEUETY_TABLE_SCHEDULES', 'schedules' );
 	}
 
 	/**
@@ -230,7 +252,7 @@ class Config {
 	 * @return string
 	 */
 	public static function table_queue_states(): string {
-		return defined( 'QUEUETY_TABLE_QUEUE_STATES' ) ? QUEUETY_TABLE_QUEUE_STATES : 'queuety_queue_states';
+		return self::table_name( 'QUEUETY_TABLE_QUEUE_STATES', 'queue_states' );
 	}
 
 	/**
@@ -239,7 +261,7 @@ class Config {
 	 * @return string
 	 */
 	public static function table_webhooks(): string {
-		return defined( 'QUEUETY_TABLE_WEBHOOKS' ) ? QUEUETY_TABLE_WEBHOOKS : 'queuety_webhooks';
+		return self::table_name( 'QUEUETY_TABLE_WEBHOOKS', 'webhooks' );
 	}
 
 	/**
@@ -282,7 +304,7 @@ class Config {
 	 * @return string
 	 */
 	public static function table_signals(): string {
-		return defined( 'QUEUETY_TABLE_SIGNALS' ) ? QUEUETY_TABLE_SIGNALS : 'queuety_signals';
+		return self::table_name( 'QUEUETY_TABLE_SIGNALS', 'signals' );
 	}
 
 	/**
@@ -291,7 +313,7 @@ class Config {
 	 * @return string
 	 */
 	public static function table_workflow_dependencies(): string {
-		return defined( 'QUEUETY_TABLE_WORKFLOW_DEPENDENCIES' ) ? QUEUETY_TABLE_WORKFLOW_DEPENDENCIES : 'queuety_workflow_dependencies';
+		return self::table_name( 'QUEUETY_TABLE_WORKFLOW_DEPENDENCIES', 'workflow_dependencies' );
 	}
 
 	/**
@@ -300,7 +322,7 @@ class Config {
 	 * @return string
 	 */
 	public static function table_workflow_dispatch_keys(): string {
-		return defined( 'QUEUETY_TABLE_WORKFLOW_DISPATCH_KEYS' ) ? QUEUETY_TABLE_WORKFLOW_DISPATCH_KEYS : 'queuety_workflow_dispatch_keys';
+		return self::table_name( 'QUEUETY_TABLE_WORKFLOW_DISPATCH_KEYS', 'workflow_dispatch_keys' );
 	}
 
 	/**
@@ -309,7 +331,7 @@ class Config {
 	 * @return string
 	 */
 	public static function table_locks(): string {
-		return defined( 'QUEUETY_TABLE_LOCKS' ) ? QUEUETY_TABLE_LOCKS : 'queuety_locks';
+		return self::table_name( 'QUEUETY_TABLE_LOCKS', 'locks' );
 	}
 
 	/**
@@ -318,7 +340,7 @@ class Config {
 	 * @return string
 	 */
 	public static function table_batches(): string {
-		return defined( 'QUEUETY_TABLE_BATCHES' ) ? QUEUETY_TABLE_BATCHES : 'queuety_batches';
+		return self::table_name( 'QUEUETY_TABLE_BATCHES', 'batches' );
 	}
 
 	/**
@@ -327,7 +349,7 @@ class Config {
 	 * @return string
 	 */
 	public static function table_chunks(): string {
-		return defined( 'QUEUETY_TABLE_CHUNKS' ) ? QUEUETY_TABLE_CHUNKS : 'queuety_chunks';
+		return self::table_name( 'QUEUETY_TABLE_CHUNKS', 'chunks' );
 	}
 
 	/**
@@ -336,7 +358,7 @@ class Config {
 	 * @return string
 	 */
 	public static function table_workflow_events(): string {
-		return defined( 'QUEUETY_TABLE_WORKFLOW_EVENTS' ) ? QUEUETY_TABLE_WORKFLOW_EVENTS : 'queuety_workflow_events';
+		return self::table_name( 'QUEUETY_TABLE_WORKFLOW_EVENTS', 'workflow_events' );
 	}
 
 	/**
@@ -345,7 +367,7 @@ class Config {
 	 * @return string
 	 */
 	public static function table_artifacts(): string {
-		return defined( 'QUEUETY_TABLE_ARTIFACTS' ) ? QUEUETY_TABLE_ARTIFACTS : 'queuety_artifacts';
+		return self::table_name( 'QUEUETY_TABLE_ARTIFACTS', 'artifacts' );
 	}
 
 	/**
@@ -354,7 +376,7 @@ class Config {
 	 * @return string
 	 */
 	public static function table_state_machines(): string {
-		return defined( 'QUEUETY_TABLE_STATE_MACHINES' ) ? QUEUETY_TABLE_STATE_MACHINES : 'queuety_state_machines';
+		return self::table_name( 'QUEUETY_TABLE_STATE_MACHINES', 'state_machines' );
 	}
 
 	/**
@@ -363,7 +385,7 @@ class Config {
 	 * @return string
 	 */
 	public static function table_state_machine_events(): string {
-		return defined( 'QUEUETY_TABLE_STATE_MACHINE_EVENTS' ) ? QUEUETY_TABLE_STATE_MACHINE_EVENTS : 'queuety_state_machine_events';
+		return self::table_name( 'QUEUETY_TABLE_STATE_MACHINE_EVENTS', 'state_machine_events' );
 	}
 
 	/**
@@ -382,5 +404,20 @@ class Config {
 	 */
 	public static function debug(): bool {
 		return defined( 'QUEUETY_DEBUG' ) && QUEUETY_DEBUG;
+	}
+
+	/**
+	 * Resolve one Queuety table name from the shared prefix and an optional per-table override.
+	 *
+	 * @param string $constant Override constant name.
+	 * @param string $suffix Default table suffix after the shared prefix.
+	 * @return string
+	 */
+	private static function table_name( string $constant, string $suffix ): string {
+		if ( defined( $constant ) ) {
+			return (string) constant( $constant );
+		}
+
+		return self::table_prefix() . $suffix;
 	}
 }

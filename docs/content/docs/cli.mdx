@@ -5,7 +5,9 @@ description: Complete WP-CLI command reference for Queuety.
 
 # CLI Reference
 
-All Queuety operations are available through WP-CLI under the `wp queuety` namespace.
+All Queuety operations are available through WP-CLI under the `wp queuety` namespace by default.
+
+Define `QUEUETY_CLI_COMMAND` before Queuety boots if you want to publish the same command tree under a different root, such as `wp themequeue`.
 
 For agent harnesses and other virtual-bash integrations, treat this page as the human reference and use the PHP bridge as the machine contract:
 

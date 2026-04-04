@@ -239,7 +239,12 @@ class Queuety {
 	 * @return string
 	 */
 	public static function cli_command(): string {
-		return 'queuety';
+		if ( ! defined( 'QUEUETY_CLI_COMMAND' ) ) {
+			return 'queuety';
+		}
+
+		$command = trim( (string) constant( 'QUEUETY_CLI_COMMAND' ) );
+		return '' !== $command ? $command : 'queuety';
 	}
 
 	/**

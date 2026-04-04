@@ -9,6 +9,7 @@ use Queuety\Enums\BackoffStrategy;
 class ConfigTest extends TestCase {
 
 	public function test_defaults(): void {
+		$this->assertSame( 'queuety_', Config::table_prefix() );
 		$this->assertSame( 'queuety_jobs', Config::table_jobs() );
 		$this->assertSame( 'queuety_workflows', Config::table_workflows() );
 		$this->assertSame( 'queuety_logs', Config::table_logs() );
