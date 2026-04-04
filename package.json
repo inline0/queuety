@@ -2,13 +2,6 @@
 	"name": "queuety",
 	"private": true,
 	"scripts": {
-		"check": "bash tests/run-all.sh",
-		"check:cs": "composer cs",
-		"check:docs": "npm --prefix docs run build",
-		"check:e2e": "bash tests/e2e/run-all.sh",
-		"check:integration": "composer test:integration",
-		"check:stan": "composer stan",
-		"check:unit": "composer test:unit",
 		"test:e2e": "bash tests/e2e/run-all.sh",
 		"test:e2e:core": "bash tests/e2e/run-core.sh",
 		"test:e2e:wp-env": "bash tests/e2e/test-wp-env.sh"
