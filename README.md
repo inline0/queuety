@@ -518,23 +518,25 @@ All constants are optional. Define them in `wp-config.php` or before Queuety boo
 composer install
 npm install
 
-# Check coding standards
-composer cs
+# Run the full local validation suite
+npm run check
+
+# Run individual categories
+npm run check:cs
+npm run check:stan
+npm run check:unit
+npm run check:integration
+npm run check:e2e
+npm run check:docs
+
+# Run wp-env E2E directly when you only want the WordPress runtime pass
+npm run test:e2e:wp-env
 
 # Auto-fix coding standards
 composer cs:fix
-
-# Run all tests
-composer test
-
-# Run specific test suites
-composer test:unit
-composer test:integration
-
-# Run E2E tests (requires Docker and Node.js)
-npm run test:e2e
-npm run test:e2e:wp-env
 ```
+
+The local wrapper mirrors the CI categories and keeps Queuety's extra integration layer separate instead of flattening it into the unit suite.
 
 ## License
 
