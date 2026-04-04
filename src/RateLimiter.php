@@ -187,7 +187,7 @@ class RateLimiter {
 	private function refresh_from_db( string $handler ): void {
 		$limit = $this->limits[ $handler ];
 		$table = $this->conn->table( Config::table_logs() );
-		$since = gmdate( 'Y-m-d H:i:s', $this->window_starts[ $handler ] );
+		$since = gmdate( 'Y-m-d H:i:s', time() - $limit['window'] );
 
 		$stmt = $this->conn->pdo()->prepare(
 			"SELECT COUNT(*) as cnt FROM {$table}
