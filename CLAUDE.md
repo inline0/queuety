@@ -234,3 +234,7 @@ All constants are optional. Define them in `wp-config.php` or `queuety-config.ph
 | `wp queuety webhook add <event> <url>` | Register a webhook |
 | `wp queuety webhook list` | List webhooks |
 | `wp queuety webhook remove <id>` | Remove a webhook |
+
+## Dependency Rule
+
+- Never edit vendor-prefixed, vendored, or generated dependency copies directly. Fix the upstream source first, then rebuild or update the embedded artifact.
