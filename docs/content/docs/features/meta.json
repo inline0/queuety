@@ -1,3 +1,3 @@
 {
-  "pages": ["scheduling", "rate-limiting", "middleware", "batching", "artifacts", "testing", "queue-management", "workers", "resource-management", "standalone-use", "logging", "metrics", "webhooks", "attributes", "debug", "heartbeats", "state-pruning", "caching", "action-triggers", "wp-cron"]
+  "pages": ["scheduling", "rate-limiting", "middleware", "batching", "artifacts", "testing", "queue-management", "workers", "resource-management", "logging", "metrics", "webhooks", "attributes", "debug", "heartbeats", "state-pruning", "caching", "action-triggers", "wp-cron", "standalone-use"]
 }
