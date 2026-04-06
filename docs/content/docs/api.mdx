@@ -11,6 +11,51 @@ Everything in Queuety is accessible through the `Queuety\Queuety` static class. 
 use Queuety\Queuety;
 ```
 
+## Standalone core access
+
+Queuety's DB-backed runtime can be initialized outside WordPress.
+
+That standalone path is for the orchestration core:
+
+- jobs and workers
+- workflows and signals
+- state machines and events
+- artifacts, logs, metrics, and schedules
+
+It is not a replacement for the WordPress adapter. `Queuety::on_action()`,
+`replace_wp_cron()`, the plugin bootstrap, and the real `wp queuety ...`
+registration path still require WordPress.
+
+### `Queuety::init( Connection $conn )`
+
+Initialize Queuety with a direct PDO-backed connection.
+
+```php
+use Queuety\Connection;
+use Queuety\Queuety;
+
+$conn = new Connection(
+    host: '127.0.0.1:3306',
+    dbname: 'wordpress',
+    user: 'root',
+    password: 'secret',
+    prefix: 'wp_',
+);
+
+Queuety::init( $conn );
+```
+
+### `Queuety::ensure_schema()`
+
+Ensure the Queuety runtime tables exist for the active connection.
+
+```php
+Queuety::init( $conn );
+Queuety::ensure_schema();
+```
+
+For the full model and the WordPress boundary, see [Standalone Use](/docs/features/standalone-use).
+
 ## Jobs
 
 ### `Queuety::dispatch( $handler, $payload )`

@@ -4,7 +4,9 @@ namespace Queuety\Tests\Integration;
 
 use Queuety\Enums\JobStatus;
 use Queuety\Enums\WorkflowStatus;
+use Queuety\Config;
 use Queuety\Queuety;
+use Queuety\Schema;
 use Queuety\Tests\IntegrationTestCase;
 use Queuety\Tests\Integration\Fixtures\AccumulatingStep;
 use Queuety\Tests\Integration\Fixtures\SuccessHandler;
@@ -34,6 +36,17 @@ class QueuetyFacadeTest extends IntegrationTestCase {
 		$job = Queuety::queue()->find( $id );
 		$this->assertSame( JobStatus::Pending, $job->status );
 		$this->assertSame( 'success', $job->handler );
+	}
+
+	public function test_ensure_schema_recreates_tables(): void {
+		Schema::uninstall( $this->conn );
+
+		$this->assertFalse( Schema::table_exists( $this->conn, $this->conn->table( Config::table_jobs() ) ) );
+
+		Queuety::ensure_schema();
+
+		$this->assertTrue( Schema::table_exists( $this->conn, $this->conn->table( Config::table_jobs() ) ) );
+		$this->assertTrue( Schema::table_exists( $this->conn, $this->conn->table( Config::table_workflows() ) ) );
 	}
 
 	public function test_dispatch_with_options(): void {

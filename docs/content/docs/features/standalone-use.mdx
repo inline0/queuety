@@ -1,0 +1,110 @@
+---
+title: Standalone Use
+description: Use Queuety's DB-backed core outside WordPress.
+---
+
+# Standalone Use
+
+Queuety is packaged as a WordPress plugin, but most of the runtime does not
+actually need a live WordPress request.
+
+The queue, workflow engine, state machines, signals, artifacts, batching,
+scheduling, logging, metrics, and resource management all run against the same
+MySQL tables through PDO. If another PHP process can open the same database, it
+can use that core directly.
+
+That is the standalone boundary in Queuety. The database-backed orchestration
+engine is usable outside WordPress. The WordPress bridges still belong to
+WordPress.
+
+## What works outside WordPress
+
+With a direct `Connection`, a standalone process can initialize Queuety and use
+the same facade methods that the plugin uses for the core runtime:
+
+- dispatch jobs
+- run workers and worker pools
+- build and dispatch workflows
+- send signals, approvals, and workflow input
+- build and dispatch state machines
+- inspect workflow and machine status
+- store and read artifacts
+- drive batching, chaining, and recurring schedules
+- query logs, metrics, queues, and runtime status
+
+That means an external product can talk to the same orchestration state without
+booting WordPress first, as long as it uses the same database and table names.
+
+## What stays inside WordPress
+
+The WordPress-specific bridge layer still depends on WordPress being loaded.
+
+That includes:
+
+- plugin bootstrap and activation behavior in `queuety.php`
+- `Queuety::on_action()`, which requires `add_action()`
+- `Queuety::replace_wp_cron()` and `Queuety::restore_wp_cron()`, which depend on WordPress cron filters and `do_action()`
+- the real `wp queuety ...` command registration path, which depends on WP-CLI loading WordPress
+
+Those pieces are adapters around the core runtime. They are not the runtime
+itself.
+
+## Initialization
+
+The standalone path is deliberately small. Open a PDO-backed `Connection`,
+initialize the facade, and ensure the schema exists.
+
+```php
+use Queuety\Connection;
+use Queuety\Queuety;
+
+$conn = new Connection(
+    host: '127.0.0.1:3306',
+    dbname: 'wordpress',
+    user: 'root',
+    password: 'secret',
+    prefix: 'wp_',
+);
+
+Queuety::init( $conn );
+Queuety::ensure_schema();
+```
+
+After that, the normal runtime API is available:
+
+```php
+Queuety::dispatch( 'send_email', [ 'to' => 'user@example.com' ] );
+
+$workflow_id = Queuety::workflow( 'report' )
+    ->then( FetchReportData::class )
+    ->then( RenderReport::class )
+    ->dispatch( [ 'report_id' => 42 ] );
+
+$machine_id = Queuety::machine( 'agent_session' )
+    ->state( 'awaiting_input' )
+    ->on( 'message', 'planning' )
+    ->state( 'planning' )
+    ->action( PlanSessionAction::class )
+    ->dispatch();
+```
+
+## Table Naming
+
+Standalone use does not need WordPress table names specifically. It only needs a
+stable prefix strategy.
+
+If you point Queuety at a WordPress database, use the same prefix that the
+plugin uses there. If you use Queuety in a separate database, the connection
+prefix can be whatever your host application expects. The Queuety-specific table
+portion is still controlled by `QUEUETY_TABLE_PREFIX` and the per-table
+overrides.
+
+## Mental Model
+
+The clean way to think about the split is:
+
+- Queuety core = queue, workers, workflows, state machines, signals, artifacts, and runtime metadata
+- WordPress adapter = plugin bootstrap, hook bridges, WP-Cron replacement, and WP-CLI registration
+
+That keeps one orchestration engine while leaving WordPress-specific event and
+request integration where it belongs.

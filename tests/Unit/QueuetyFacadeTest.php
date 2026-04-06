@@ -108,6 +108,13 @@ class QueuetyFacadeTest extends TestCase {
 		Queuety::queue();
 	}
 
+	public function test_ensure_schema_throws_before_init(): void {
+		$this->expectException( \RuntimeException::class );
+		$this->expectExceptionMessage( 'Queuety not initialized' );
+
+		Queuety::ensure_schema();
+	}
+
 	public function test_logger_throws_before_init(): void {
 		$this->expectException( \RuntimeException::class );
 		$this->expectExceptionMessage( 'Queuety not initialized' );
@@ -173,6 +180,7 @@ class QueuetyFacadeTest extends TestCase {
 			fn() => Queuety::retry_workflow( 1 ),
 			fn() => Queuety::pause_workflow( 1 ),
 			fn() => Queuety::resume_workflow( 1 ),
+			fn() => Queuety::ensure_schema(),
 			fn() => Queuety::queue(),
 			fn() => Queuety::logger(),
 			fn() => Queuety::worker(),

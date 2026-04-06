@@ -248,6 +248,14 @@ class Queuety {
 	}
 
 	/**
+	 * Ensure the Queuety tables exist for the active connection.
+	 */
+	public static function ensure_schema(): void {
+		self::ensure_initialized();
+		Schema::install( self::$conn );
+	}
+
+	/**
 	 * Expose the serializable CLI command catalog for agent harnesses.
 	 *
 	 * @return array<int, array<string, mixed>>
