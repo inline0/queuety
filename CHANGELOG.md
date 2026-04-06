@@ -22,3 +22,34 @@ All notable changes to Queuety are documented in this file.
 ### Fixed
 
 - corrected the sliding rate-limit refresh window so facade-driven checks see recent executions correctly
+
+## [0.13.0] - 2026-04-04
+
+### Added
+
+- dynamic workflow fan-out with compensation
+- richer workflow waits, approvals, input handling, and agent workflow aliases
+- durable workflow artifacts and grouped workflow waits
+- WordPress action-to-workflow triggers
+- looping workflow primitives
+- durable state machines
+- resource-aware admission, workflow budgets, and adaptive worker controls
+- PHPStan static analysis and stronger E2E coverage
+
+### Changed
+
+- tightened queue claim, workflow inspection, and timeline query paths
+- aligned docs toward explanatory prose and expanded Neuron/agent examples
+- improved local and CI validation coverage across workflows and plugin runtime behavior
+
+## [0.12.0] - 2026-03-29
+
+### Added
+
+- initial public release
+- durable jobs, workflows, and WordPress worker runtime
+- dispatchable jobs with middleware, timers, and signals
+- batching, chaining, cancellation, heartbeats, and streaming steps
+- workflow event log, time travel, forking, and export/replay
+- WP-Cron fallback processing and WP-CLI worker control
+- documentation site and release packaging
