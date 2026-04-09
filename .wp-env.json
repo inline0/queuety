@@ -1,5 +1,7 @@
 {
 	"plugins": [ "." ],
+	"port": 8002,
+	"testsPort": 8003,
 	"config": {
 		"WP_DEBUG": true,
 		"WP_DEBUG_LOG": true

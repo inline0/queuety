@@ -13,6 +13,8 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EXPECTED_VERSION="$(sed -n "s/^define( 'QUEUETY_VERSION', '\\([^']*\\)' );$/\\1/p" "$PROJECT_DIR/queuety.php" | head -n 1)"
+WP_ENV_PORT="$(node -e "const config = require(process.argv[1]); console.log(config.port ?? 8888);" "$PROJECT_DIR/.wp-env.json")"
+WP_ENV_TESTS_PORT="$(node -e "const config = require(process.argv[1]); console.log(config.testsPort ?? 8889);" "$PROJECT_DIR/.wp-env.json")"
 PASS=0
 FAIL=0
 TOTAL=0
@@ -134,6 +136,7 @@ if ! command -v npx > /dev/null 2>&1; then
 fi
 
 echo "=== Queuety wp-env E2E Tests ==="
+echo "WordPress: http://localhost:${WP_ENV_PORT} | Tests: http://localhost:${WP_ENV_TESTS_PORT}"
 echo ""
 
 # Install dependencies if needed.
@@ -152,8 +155,8 @@ printf '%s\n' "$WP_ENV_START_OUT"
 
 # Wait for WordPress to be ready.
 echo "Waiting for WordPress..."
-if ! wait_for_wordpress 8888 30; then
-    fail "wp-env startup" "WordPress did not become ready on http://localhost:8888/"
+if ! wait_for_wordpress "$WP_ENV_PORT" 30; then
+    fail "wp-env startup" "WordPress did not become ready on http://localhost:${WP_ENV_PORT}/"
     exit 1
 fi
 
@@ -170,8 +173,8 @@ else
 fi
 
 echo "Waiting for WordPress after provisioning..."
-if ! wait_for_wordpress 8888 30; then
-    fail "wp-env restart after provisioning" "WordPress did not recover on http://localhost:8888/"
+if ! wait_for_wordpress "$WP_ENV_PORT" 30; then
+    fail "wp-env restart after provisioning" "WordPress did not recover on http://localhost:${WP_ENV_PORT}/"
     exit 1
 fi
 
