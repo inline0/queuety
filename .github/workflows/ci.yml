@@ -33,7 +33,7 @@ jobs:
           php-version: "8.4"
           tools: composer
       - run: composer install --no-interaction
-      - run: composer stan
+      - run: composer analyse
 
   docs:
     name: Docs
