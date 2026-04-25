@@ -45,6 +45,22 @@ $conn = new Connection(
 Queuety::init( $conn );
 ```
 
+The optional `table_prefix` argument changes the Queuety portion of runtime
+table names per connection:
+
+```php
+$conn = new Connection(
+    host: '127.0.0.1:3306',
+    dbname: 'wordpress',
+    user: 'root',
+    password: 'secret',
+    prefix: 'wp_',
+    table_prefix: 'themequeue_',
+);
+```
+
+That resolves tables such as `queuety_jobs` to `wp_themequeue_jobs`.
+
 ### `Queuety::ensure_schema()`
 
 Ensure the Queuety runtime tables exist for the active connection.

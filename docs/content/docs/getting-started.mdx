@@ -73,6 +73,22 @@ All constants are optional. Define them in `wp-config.php` before the plugin loa
 
 `QUEUETY_TABLE_PREFIX` changes only the Queuety portion of the table names. The WordPress database prefix still wraps the result, so `$wpdb->prefix = 'wp_'` and `QUEUETY_TABLE_PREFIX = 'themequeue_'` produce tables like `wp_themequeue_jobs`. Explicit `QUEUETY_TABLE_*` constants still win for individual tables.
 
+Standalone connections can also set the Queuety table prefix per connection:
+
+```php
+$conn = new Connection(
+    host: '127.0.0.1:3306',
+    dbname: 'wordpress',
+    user: 'root',
+    password: 'secret',
+    prefix: 'wp_',
+    table_prefix: 'themequeue_',
+);
+```
+
+That keeps the WordPress database prefix intact and changes only the Queuety
+table segment.
+
 ## Your first job
 
 Create a handler class that implements the `Handler` interface:

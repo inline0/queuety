@@ -182,7 +182,7 @@ class CronBridge {
 				return (object) array(
 					'hook'      => $hook,
 					'timestamp' => $schedule->next_run->getTimestamp(),
-					'schedule'  => $schedule->expression ?? 'custom',
+					'schedule'  => $schedule->expression,
 					'args'      => $args,
 				);
 			}

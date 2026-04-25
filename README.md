@@ -511,6 +511,22 @@ All constants are optional. Define them in `wp-config.php` or before Queuety boo
 
 `QUEUETY_TABLE_PREFIX` changes the shared Queuety portion of the table names while leaving the WordPress database prefix in place. For example, with `$wpdb->prefix = 'wp_'` and `QUEUETY_TABLE_PREFIX = 'themequeue_'`, the jobs table becomes `wp_themequeue_jobs`. Explicit `QUEUETY_TABLE_*` constants still override individual tables.
 
+Standalone connections can also set the Queuety table prefix per connection:
+
+```php
+$conn = new Connection(
+    host: '127.0.0.1:3306',
+    dbname: 'wordpress',
+    user: 'root',
+    password: 'secret',
+    prefix: 'wp_',
+    table_prefix: 'themequeue_',
+);
+```
+
+That keeps the WordPress database prefix intact and changes only the Queuety
+portion of the runtime table names, for example `wp_themequeue_jobs`.
+
 ## Development
 
 ```bash

@@ -99,6 +99,23 @@ prefix can be whatever your host application expects. The Queuety-specific table
 portion is still controlled by `QUEUETY_TABLE_PREFIX` and the per-table
 overrides.
 
+Embedded runtimes that share one database can set that Queuety-specific portion
+per connection:
+
+```php
+$conn = new Connection(
+    host: '127.0.0.1:3306',
+    dbname: 'wordpress',
+    user: 'root',
+    password: 'secret',
+    prefix: 'wp_',
+    table_prefix: 'themequeue_',
+);
+```
+
+That leaves the WordPress database prefix alone and resolves tables such as
+`queuety_jobs` to `wp_themequeue_jobs`.
+
 ## Mental Model
 
 The clean way to think about the split is:
