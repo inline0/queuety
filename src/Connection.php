@@ -16,7 +16,8 @@ use PDO;
  * @param string $dbname   Database name.
  * @param string $user     Database user.
  * @param string $password Database password.
- * @param string $prefix   Table prefix (e.g. 'wp_').
+ * @param string      $prefix       WordPress table prefix (e.g. 'wp_').
+ * @param string|null $table_prefix Queuety table prefix after the WordPress prefix.
  */
 class Connection {
 
@@ -30,11 +31,12 @@ class Connection {
 	/**
 	 * Constructor.
 	 *
-	 * @param string $host     Database host.
-	 * @param string $dbname   Database name.
-	 * @param string $user     Database user.
-	 * @param string $password Database password.
-	 * @param string $prefix   Table prefix.
+	 * @param string      $host     Database host.
+	 * @param string      $dbname   Database name.
+	 * @param string      $user     Database user.
+	 * @param string      $password Database password.
+	 * @param string      $prefix       WordPress table prefix.
+	 * @param string|null $table_prefix Queuety table prefix after the WordPress prefix. Defaults to Config::table_prefix().
 	 */
 	public function __construct(
 		private readonly string $host,
@@ -42,6 +44,7 @@ class Connection {
 		private readonly string $user,
 		private readonly string $password,
 		private readonly string $prefix = 'wp_',
+		private readonly ?string $table_prefix = null,
 	) {}
 
 	/**
@@ -146,12 +149,59 @@ class Connection {
 	}
 
 	/**
+	 * Get the Queuety table prefix used after the WordPress prefix.
+	 *
+	 * @return string
+	 */
+	public function table_prefix(): string {
+		if ( null === $this->table_prefix ) {
+			return Config::table_prefix();
+		}
+
+		return self::normalize_table_prefix( $this->table_prefix );
+	}
+
+	/**
 	 * Get a fully prefixed table name.
 	 *
 	 * @param string $name Base table name (e.g. 'queuety_jobs').
 	 * @return string Prefixed table name (e.g. 'wp_queuety_jobs').
 	 */
 	public function table( string $name ): string {
-		return $this->prefix . $name;
+		return $this->prefix . $this->resolve_table_name( $name );
+	}
+
+	/**
+	 * Resolve a Queuety base table name through the connection-level table prefix.
+	 *
+	 * @param string $name Base table name.
+	 * @return string
+	 */
+	private function resolve_table_name( string $name ): string {
+		if ( null === $this->table_prefix ) {
+			return $name;
+		}
+
+		$default_prefix = Config::table_prefix();
+		if ( '' !== $default_prefix && str_starts_with( $name, $default_prefix ) ) {
+			$name = substr( $name, strlen( $default_prefix ) );
+		}
+
+		return $this->table_prefix() . $name;
+	}
+
+	/**
+	 * Normalize one Queuety table prefix.
+	 *
+	 * @param string $prefix Table prefix.
+	 * @return string
+	 */
+	private static function normalize_table_prefix( string $prefix ): string {
+		$prefix = trim( $prefix );
+		if ( '' === $prefix ) {
+			return '';
+		}
+
+		return rtrim( $prefix, '_' ) . '_';
 	}
 }

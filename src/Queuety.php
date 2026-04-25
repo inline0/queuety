@@ -369,6 +369,8 @@ class Queuety {
 			DB_USER,
 			DB_PASSWORD,
 			self::$conn->prefix(),
+			null,
+			self::$conn->table_prefix(),
 		);
 		$pool->run( $queue );
 	}
@@ -392,6 +394,7 @@ class Queuety {
 			DB_PASSWORD,
 			self::$conn->prefix(),
 			$max_workers,
+			self::$conn->table_prefix(),
 		);
 		$pool->run( $queue );
 	}

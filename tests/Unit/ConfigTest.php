@@ -2,12 +2,16 @@
 
 namespace Queuety\Tests\Unit;
 
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use Queuety\Config;
 use Queuety\Enums\BackoffStrategy;
 
 class ConfigTest extends TestCase {
 
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
 	public function test_defaults(): void {
 		$this->assertSame( 'queuety_', Config::table_prefix() );
 		$this->assertSame( 'queuety_jobs', Config::table_jobs() );

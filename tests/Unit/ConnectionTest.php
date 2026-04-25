@@ -32,6 +32,33 @@ class ConnectionTest extends TestCase {
 		$this->assertSame( 'wp_', $conn->prefix() );
 	}
 
+	public function test_table_prefix_defaults_to_config_prefix(): void {
+		$conn = new Connection( 'localhost', 'testdb', 'root', 'pass', 'wp_' );
+		$this->assertSame( 'queuety_', $conn->table_prefix() );
+	}
+
+	public function test_table_prefix_can_be_set_per_connection(): void {
+		$conn = new Connection( 'localhost', 'testdb', 'root', 'pass', 'wp_', 'onumia_queuety' );
+
+		$this->assertSame( 'onumia_queuety_', $conn->table_prefix() );
+		$this->assertSame( 'wp_onumia_queuety_jobs', $conn->table( 'queuety_jobs' ) );
+		$this->assertSame( 'wp_onumia_queuety_workflows', $conn->table( 'queuety_workflows' ) );
+		$this->assertSame( 'wp_onumia_queuety_logs', $conn->table( 'queuety_logs' ) );
+	}
+
+	public function test_table_prefix_can_be_empty_per_connection(): void {
+		$conn = new Connection( 'localhost', 'testdb', 'root', 'pass', 'wp_', '' );
+
+		$this->assertSame( '', $conn->table_prefix() );
+		$this->assertSame( 'wp_jobs', $conn->table( 'queuety_jobs' ) );
+	}
+
+	public function test_connection_table_prefix_applies_to_unprefixed_names(): void {
+		$conn = new Connection( 'localhost', 'testdb', 'root', 'pass', 'wp_', 'tenant_queue' );
+
+		$this->assertSame( 'wp_tenant_queue_anything', $conn->table( 'anything' ) );
+	}
+
 	public function test_prefix_returns_custom_prefix(): void {
 		$conn = new Connection( 'localhost', 'testdb', 'root', 'pass', 'custom_prefix_' );
 		$this->assertSame( 'custom_prefix_', $conn->prefix() );

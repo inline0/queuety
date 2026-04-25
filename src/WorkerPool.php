@@ -63,13 +63,14 @@ class WorkerPool {
 	/**
 	 * Constructor.
 	 *
-	 * @param int      $worker_count Minimum worker count, or the fixed count when adaptive scaling is disabled.
-	 * @param string   $host         Database host.
-	 * @param string   $dbname       Database name.
-	 * @param string   $user         Database user.
-	 * @param string   $password     Database password.
-	 * @param string   $prefix       Table prefix.
-	 * @param int|null $max_worker_count Optional adaptive upper bound.
+	 * @param int         $worker_count Minimum worker count, or the fixed count when adaptive scaling is disabled.
+	 * @param string      $host         Database host.
+	 * @param string      $dbname       Database name.
+	 * @param string      $user         Database user.
+	 * @param string      $password     Database password.
+	 * @param string      $prefix       WordPress table prefix.
+	 * @param int|null    $max_worker_count Optional adaptive upper bound.
+	 * @param string|null $table_prefix Queuety table prefix after the WordPress prefix.
 	 *
 	 * @throws \RuntimeException If pcntl is not available or worker_count is invalid.
 	 */
@@ -81,6 +82,7 @@ class WorkerPool {
 		private readonly string $password,
 		private readonly string $prefix,
 		?int $max_worker_count = null,
+		private readonly ?string $table_prefix = null,
 	) {
 		if ( ! function_exists( 'pcntl_fork' ) ) {
 			throw new \RuntimeException( 'pcntl extension is required for --workers=N.' );
@@ -176,7 +178,7 @@ class WorkerPool {
 	 */
 	private function run_child_worker( string $queue ): void {
 		// Forked PDO handles are unsafe to reuse across processes.
-		$conn  = new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix );
+		$conn  = $this->connection();
 		$cache = null;
 
 		if ( null === Queuety::queue_fake() ) {
@@ -473,7 +475,7 @@ class WorkerPool {
 	 * @return Queue
 	 */
 	protected function scaling_queue(): Queue {
-		$conn = new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix );
+		$conn = $this->connection();
 		return new Queue( $conn );
 	}
 
@@ -483,7 +485,16 @@ class WorkerPool {
 	 * @return ResourceManager
 	 */
 	protected function scaling_resource_manager(): ResourceManager {
-		$conn = new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix );
+		$conn = $this->connection();
 		return new ResourceManager( $conn );
+	}
+
+	/**
+	 * Build a fresh connection for the current worker process.
+	 *
+	 * @return Connection
+	 */
+	private function connection(): Connection {
+		return new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix, $this->table_prefix );
 	}
 }

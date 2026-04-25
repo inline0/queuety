@@ -2,6 +2,16 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.14.1] - 2026-04-26
+
+### Added
+
+- per-connection Queuety table prefixes so multiple WordPress plugins can share Queuety code while using isolated table sets
+
+### Fixed
+
+- isolated the default configuration test from constants defined by integration tests
+
 ## [0.14.0] - 2026-04-06
 
 ### Added
