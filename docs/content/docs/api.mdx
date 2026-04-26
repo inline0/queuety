@@ -28,7 +28,7 @@ registration path still require WordPress.
 
 ### `Queuety::init( Connection $conn )`
 
-Initialize Queuety with a direct PDO-backed connection.
+Initialize Queuety with a direct DB-backed connection.
 
 ```php
 use Queuety\Connection;
@@ -996,7 +996,7 @@ These methods return internal instances for advanced use cases.
 | `Queuety::worker()` | `Worker` | Worker process control |
 | `Queuety::workflow_manager()` | `Workflow` | Workflow orchestration |
 | `Queuety::machines()` | `StateMachine` | State machine lifecycle management |
-| `Queuety::connection()` | `Connection` | PDO database connection |
+| `Queuety::connection()` | `Connection` | Database connection |
 | `Queuety::batch_manager()` | `BatchManager` | Batch lifecycle management (cancel, prune) |
 | `Queuety::chunk_store()` | `ChunkStore` | Chunk persistence for streaming steps |
 | `Queuety::workflow_events()` | `WorkflowEventLog` | Workflow event timeline and state snapshots |

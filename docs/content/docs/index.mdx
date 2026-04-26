@@ -5,7 +5,7 @@ description: Welcome to the Queuety documentation.
 
 # Introduction
 
-Queuety is a WordPress plugin that provides a fast job queue, durable workflow engine, and durable state machine runtime. Workers claim jobs directly from MySQL via PDO and process them inside a long-running WP-CLI process. The PHP runtime that loads WordPress and WP-CLI must have `pdo_mysql` enabled.
+Queuety is a WordPress plugin that provides a fast job queue, durable workflow engine, and durable state machine runtime. Workers claim jobs directly from MySQL and process them inside a long-running WP-CLI process. The PHP runtime that loads WordPress and WP-CLI needs either `mysqli` or `pdo_mysql`.
 
 ## Why Queuety?
 
@@ -127,7 +127,7 @@ If you want to use the DB-backed runtime outside WordPress, see [Standalone Use]
 
 ## How it works
 
-Workers run inside a long-lived WP-CLI process and claim jobs directly from MySQL via PDO. Queue rows, workflow state, logs, batches, signals, and streaming chunks all live in MySQL, so worker restarts do not lose orchestration state.
+Workers run inside a long-lived WP-CLI process and claim jobs directly from MySQL. Queue rows, workflow state, logs, batches, signals, and streaming chunks all live in MySQL, so worker restarts do not lose orchestration state.
 
 Workflows break long-running work into steps. Each step persists its output to a shared state bag in the database. If PHP dies mid-step, the worker retries that step with all prior state intact. The step boundary is a single MySQL transaction: state update, job completion, and next step enqueue all happen atomically.
 

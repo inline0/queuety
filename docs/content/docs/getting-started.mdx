@@ -7,9 +7,9 @@ description: Install Queuety, configure it, and run your first job and workflow.
 
 ## Installation
 
-Queuety requires the `pdo_mysql` extension in the PHP runtime that loads WordPress and WP-CLI. If that extension is missing, the plugin will stay loaded but will not initialize its runtime, and it will show an admin notice instead of fatally breaking the site.
+Queuety requires either `mysqli` or `pdo_mysql` in the PHP runtime that loads WordPress and WP-CLI. It chooses the driver automatically, preferring `mysqli` for WordPress runtimes and keeping `pdo_mysql` available for standalone/direct runtime use.
 
-If you want the DB-backed runtime without the WordPress plugin layer, see [Standalone Use](/docs/features/standalone-use). That path uses the same PDO connection and runtime tables, but it does not include the WordPress hook bridges or WP-CLI registration.
+If you want the DB-backed runtime without the WordPress plugin layer, see [Standalone Use](/docs/features/standalone-use). That path uses the same connection and runtime tables, but it does not include the WordPress hook bridges or WP-CLI registration.
 
 ### Via Composer for Composer-managed WordPress
 

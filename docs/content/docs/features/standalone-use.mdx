@@ -10,8 +10,8 @@ actually need a live WordPress request.
 
 The queue, workflow engine, state machines, signals, artifacts, batching,
 scheduling, logging, metrics, and resource management all run against the same
-MySQL tables through PDO. If another PHP process can open the same database, it
-can use that core directly.
+MySQL tables. If another PHP process can open the same database, it can use that
+core directly.
 
 That is the standalone boundary in Queuety. The database-backed orchestration
 engine is usable outside WordPress. The WordPress bridges still belong to
@@ -51,7 +51,7 @@ itself.
 
 ## Initialization
 
-The standalone path is deliberately small. Open a PDO-backed `Connection`,
+The standalone path is deliberately small. Open a DB-backed `Connection`,
 initialize the facade, and ensure the schema exists.
 
 ```php

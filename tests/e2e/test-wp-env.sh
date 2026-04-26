@@ -164,20 +164,6 @@ if [ "$WP_ENV_START_STATUS" -ne 0 ]; then
     echo "wp-env start exited with status $WP_ENV_START_STATUS after the environment became ready."
 fi
 
-echo "Provisioning wp-env PHP runtime..."
-if bash "$PROJECT_DIR/tests/e2e/provision-wp-env-pdo.sh"; then
-    pass "wp-env runtime provisioning succeeds"
-else
-    fail "wp-env runtime provisioning succeeds" "Could not provision pdo_mysql in the wp-env containers"
-    exit 1
-fi
-
-echo "Waiting for WordPress after provisioning..."
-if ! wait_for_wordpress "$WP_ENV_PORT" 30; then
-    fail "wp-env restart after provisioning" "WordPress did not recover on http://localhost:${WP_ENV_PORT}/"
-    exit 1
-fi
-
 echo ""
 echo "--- Plugin Activation ---"
 
@@ -189,11 +175,11 @@ assert_contains "$ACTIVE_PLUGINS" "queuety" "Plugin is active"
 VERSION=$(wp_cli eval "echo QUEUETY_VERSION;" 2>/dev/null || true)
 assert_equals "$EXPECTED_VERSION" "$VERSION" "QUEUETY_VERSION matches plugin constant"
 
-PDO_MYSQL_AVAILABLE=$(wp_cli eval "echo extension_loaded('pdo_mysql') ? 'yes' : 'no';" 2>/dev/null || true)
-assert_equals "yes" "$PDO_MYSQL_AVAILABLE" "wp-env CLI has pdo_mysql"
+MYSQLI_AVAILABLE=$(wp_cli eval "echo extension_loaded('mysqli') ? 'yes' : 'no';" 2>/dev/null || true)
+assert_equals "yes" "$MYSQLI_AVAILABLE" "wp-env CLI has mysqli"
 
-WORDPRESS_PDO_MYSQL=$(cd "$PROJECT_DIR" && npx wp-env run wordpress php -r "echo extension_loaded('pdo_mysql') ? 'yes' : 'no';" 2>/dev/null || true)
-assert_equals "yes" "$WORDPRESS_PDO_MYSQL" "wp-env WordPress runtime has pdo_mysql"
+CONNECTION_DRIVER=$(wp_cli eval "echo Queuety\\Queuety::connection()->driver();" 2>/dev/null || true)
+assert_equals "mysqli" "$CONNECTION_DRIVER" "Queuety uses mysqli in wp-env"
 
 echo ""
 echo "--- Table Creation ---"

@@ -26,7 +26,7 @@ export default defineConfig({
       {
         title: "Fast Execution",
         description:
-          "Workers skip the WordPress boot, connecting to MySQL directly via PDO. ~5ms overhead per batch.",
+          "Workers skip the WordPress boot and claim work directly from MySQL. ~5ms overhead per batch.",
         icon: <Zap className={iconClass} />,
       },
       {

@@ -18,7 +18,7 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.4"
-          extensions: mysqli, pdo_mysql
+          extensions: mysqli
           tools: composer
 
       - name: Install production dependencies
@@ -91,7 +91,7 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.4"
-          extensions: mysqli, pdo_mysql
+          extensions: mysqli
           tools: wp-cli
 
       - name: Download zip artifact

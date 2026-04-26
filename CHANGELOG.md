@@ -2,6 +2,17 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.19.0] - 2026-04-26
+
+### Added
+
+- mysqli-backed Queuety database driver for WordPress runtimes without `pdo_mysql`
+- automatic DB driver selection with optional `QUEUETY_DB_DRIVER` override
+
+### Changed
+
+- WordPress plugin bootstrap no longer requires `pdo_mysql` when `mysqli` is available
+
 ## [0.18.0] - 2026-04-26
 
 ### Added

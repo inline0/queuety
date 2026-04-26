@@ -19,7 +19,7 @@
 
 ## What is Queuety?
 
-Queuety is a WordPress plugin that provides a fast job queue, durable workflow engine, and durable state machine runtime. Workers claim jobs directly from MySQL via PDO and process them inside a long-running WP-CLI process.
+Queuety is a WordPress plugin that provides a fast job queue, durable workflow engine, and durable state machine runtime. Workers claim jobs directly from MySQL and process them inside a long-running WP-CLI process.
 
 **The problem:** WordPress has no real background job system. `wp_cron` only fires on page visits. Action Scheduler boots the entire WordPress stack for every batch. An LLM API call that takes 60 seconds gets killed by PHP's 30-second timeout. There's no way to run multi-step processes that survive crashes and resume where they left off.
 
@@ -35,7 +35,7 @@ Queuety is a WordPress plugin that provides a fast job queue, durable workflow e
 - PHP 8.2+
 - WordPress 6.4+
 - MySQL 5.7+ or MariaDB 10.3+
-- `pdo_mysql` enabled for the PHP runtime that loads WordPress and WP-CLI
+- `mysqli` or `pdo_mysql` enabled for the PHP runtime that loads WordPress and WP-CLI
 
 For Composer-managed WordPress installs (for example Bedrock):
 
@@ -57,7 +57,7 @@ composer install
 wp plugin activate queuety
 ```
 
-If `pdo_mysql` is missing, the plugin now stays loaded but inert and shows an admin notice instead of fataling during activation or bootstrap.
+Queuety chooses a MySQL driver automatically. WordPress runtimes use `mysqli` by default, while standalone runtimes can still use `pdo_mysql` when it is available or force a driver with `QUEUETY_DB_DRIVER`.
 
 Out of the box, the plugin schedules a one-shot worker through WordPress cron every minute for the `default` queue. That gives you a basic no-shell fallback for jobs and workflows that stay on `default`, as long as WordPress cron is firing. For custom queues, lower latency, or production reliability, run dedicated `wp queuety work` processes.
 
@@ -339,7 +339,7 @@ wp queuety work --queue=providers --min-workers=2 --max-workers=6
 
 ## How It Works
 
-Workers run inside a long-lived WP-CLI process and claim jobs directly from MySQL via PDO. The queue, workflow state, logs, batches, signals, and streaming chunks all live in MySQL, so worker restarts do not lose orchestration state.
+Workers run inside a long-lived WP-CLI process and claim jobs directly from MySQL. The queue, workflow state, logs, batches, signals, and streaming chunks all live in MySQL, so worker restarts do not lose orchestration state.
 
 Workflows break long-running work into steps. Each step persists its output to a shared state bag in the database. If PHP dies mid-step, the worker retries that step with all prior state intact. The step boundary is a single MySQL transaction: state update, job completion, and next step enqueue all happen atomically.
 
@@ -511,6 +511,7 @@ All constants are optional. Define them in `wp-config.php` or before Queuety boo
 | `QUEUETY_TABLE_CHUNKS` | `queuety_chunks` | Streaming chunks table name |
 | `QUEUETY_TABLE_QUEUE_STATES` | `queuety_queue_states` | Queue states table name |
 | `QUEUETY_TABLE_WEBHOOKS` | `queuety_webhooks` | Webhooks table name |
+| `QUEUETY_DB_DRIVER` | `auto` | MySQL driver: `auto`, `mysqli`, or `pdo` |
 
 `QUEUETY_TABLE_PREFIX` changes the shared Queuety portion of the table names while leaving the WordPress database prefix in place. For example, with `$wpdb->prefix = 'wp_'` and `QUEUETY_TABLE_PREFIX = 'themequeue_'`, the jobs table becomes `wp_themequeue_jobs`. Explicit `QUEUETY_TABLE_*` constants still override individual tables.
 

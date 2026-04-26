@@ -10,7 +10,7 @@ namespace Queuety;
 use PDO;
 
 /**
- * Direct PDO database connection that bypasses WordPress.
+ * Database connection that chooses the best available MySQL transport.
  *
  * @param string $host     Database host.
  * @param string $dbname   Database name.
@@ -18,6 +18,7 @@ use PDO;
  * @param string $password Database password.
  * @param string      $prefix       WordPress table prefix (e.g. 'wp_').
  * @param string|null $table_prefix Queuety table prefix after the WordPress prefix.
+ * @param string|null $driver       Optional driver override: auto, mysqli, or pdo.
  */
 class Connection {
 
@@ -37,6 +38,7 @@ class Connection {
 	 * @param string      $password Database password.
 	 * @param string      $prefix       WordPress table prefix.
 	 * @param string|null $table_prefix Queuety table prefix after the WordPress prefix. Defaults to Config::table_prefix().
+	 * @param string|null $driver       Optional driver override.
 	 */
 	public function __construct(
 		private readonly string $host,
@@ -45,6 +47,7 @@ class Connection {
 		private readonly string $password,
 		private readonly string $prefix = 'wp_',
 		private readonly ?string $table_prefix = null,
+		private readonly ?string $driver = null,
 	) {}
 
 	/**
@@ -54,18 +57,96 @@ class Connection {
 	 */
 	public function pdo(): PDO {
 		if ( null === $this->pdo ) {
-			$this->pdo = new PDO(
-				$this->build_dsn(),
-				$this->user,
-				$this->password,
-				array(
-					PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-					PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-					PDO::ATTR_EMULATE_PREPARES   => false,
-				)
-			);
+			$this->pdo = $this->create_pdo();
 		}
 		return $this->pdo;
+	}
+
+	/**
+	 * Active DB driver that will be used by this connection.
+	 *
+	 * @return string
+	 */
+	public function driver(): string {
+		return $this->resolve_driver();
+	}
+
+	/**
+	 * Whether this runtime has at least one supported DB driver.
+	 *
+	 * @return bool
+	 */
+	public static function has_available_driver(): bool {
+		return extension_loaded( 'pdo_mysql' ) || MysqliPdo::available();
+	}
+
+	/**
+	 * Build the PDO-compatible transport.
+	 *
+	 * @return PDO
+	 */
+	private function create_pdo(): PDO {
+		$driver = $this->resolve_driver();
+		if ( 'mysqli' === $driver ) {
+			return new MysqliPdo( $this->host, $this->dbname, $this->user, $this->password );
+		}
+
+		return new PDO(
+			$this->build_dsn(),
+			$this->user,
+			$this->password,
+			array(
+				PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+				PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+				PDO::ATTR_EMULATE_PREPARES   => false,
+			)
+		);
+	}
+
+	/**
+	 * Resolve the requested driver.
+	 *
+	 * @return string
+	 * @throws \RuntimeException When the requested DB driver is unavailable.
+	 * @throws \InvalidArgumentException When the requested DB driver is not supported.
+	 */
+	private function resolve_driver(): string {
+		$driver = strtolower( trim( (string) ( $this->driver ?? ( defined( 'QUEUETY_DB_DRIVER' ) ? constant( 'QUEUETY_DB_DRIVER' ) : 'auto' ) ) ) );
+		if ( '' === $driver ) {
+			$driver = 'auto';
+		}
+
+		if ( 'auto' === $driver ) {
+			if ( defined( 'ABSPATH' ) && MysqliPdo::available() ) {
+				return 'mysqli';
+			}
+
+			if ( extension_loaded( 'pdo_mysql' ) ) {
+				return 'pdo';
+			}
+
+			if ( MysqliPdo::available() ) {
+				return 'mysqli';
+			}
+
+			throw new \RuntimeException( 'Queuety requires either mysqli or pdo_mysql for MySQL access.' );
+		}
+
+		if ( 'pdo' === $driver ) {
+			if ( ! extension_loaded( 'pdo_mysql' ) ) {
+				throw new \RuntimeException( 'Queuety DB driver pdo requires the pdo_mysql PHP extension.' );
+			}
+			return 'pdo';
+		}
+
+		if ( 'mysqli' === $driver ) {
+			if ( ! MysqliPdo::available() ) {
+				throw new \RuntimeException( 'Queuety DB driver mysqli requires the mysqli PHP extension.' );
+			}
+			return 'mysqli';
+		}
+
+		throw new \InvalidArgumentException( sprintf( 'Unsupported Queuety DB driver "%s".', $driver ) );
 	}
 
 	/**

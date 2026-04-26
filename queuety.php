@@ -3,7 +3,7 @@
  * Plugin Name:  Queuety
  * Plugin URI:   https://github.com/inline0/queuety
  * Description:  A job queue and durable workflow engine for WordPress.
- * Version:      0.17.5
+ * Version:      0.19.0
  * Author:       Queuety
  * License:      GPL-2.0-or-later
  * Requires PHP: 8.2
@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'QUEUETY_VERSION', '0.17.5' );
+define( 'QUEUETY_VERSION', '0.19.0' );
 define( 'QUEUETY_PLUGIN_FILE', __FILE__ );
 define( 'QUEUETY_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 
@@ -31,8 +31,8 @@ if ( file_exists( $queuety_autoloader ) ) {
 
 $queuety_runtime_error = null;
 
-if ( ! extension_loaded( 'pdo_mysql' ) ) {
-	$queuety_runtime_error = 'Queuety requires the pdo_mysql PHP extension on the PHP runtime that loads WordPress and WP-CLI.';
+if ( ! class_exists( Queuety\Connection::class ) || ! Queuety\Connection::has_available_driver() ) {
+	$queuety_runtime_error = 'Queuety requires either mysqli or pdo_mysql on the PHP runtime that loads WordPress and WP-CLI.';
 }
 
 if ( null !== $queuety_runtime_error ) {
