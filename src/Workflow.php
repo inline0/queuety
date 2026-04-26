@@ -70,7 +70,7 @@ class Workflow {
 	 * Resolve the step type from a step definition.
 	 *
 	 * @param array|string $step_def Step definition.
-	 * @return string Step type: 'single', 'parallel', 'for_each', 'run_workflow', 'start_workflows', 'delay', 'signal', 'wait_for_workflows', or 'repeat'.
+	 * @return string Step type: 'single', 'parallel', 'for_each', 'run_workflow', 'start_workflows', 'delay', 'wait_for_signal', 'wait_for_workflows', or 'repeat'.
 	 */
 	private function resolve_step_type( array|string $step_def ): string {
 		if ( is_string( $step_def ) ) {

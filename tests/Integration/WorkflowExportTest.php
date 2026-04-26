@@ -246,7 +246,7 @@ class WorkflowExportTest extends IntegrationTestCase {
 
 		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 		$this->assertSame( 1, $status->current_step );
-		$this->assertSame( 'wait_for_signal', $status->wait_type );
+		$this->assertSame( 'signal', $status->wait_type );
 		$this->assertSame( array( 'approval' ), $status->waiting_for );
 		$this->assertNull( $this->queue->claim() );
 
