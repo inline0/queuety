@@ -2,6 +2,12 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.17.1] - 2026-04-26
+
+### Changed
+
+- stabilized structured repeat condition integration coverage for zero-delay worker claims
+
 ## [0.17.0] - 2026-04-26
 
 ### Added

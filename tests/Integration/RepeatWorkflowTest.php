@@ -53,6 +53,19 @@ class RepeatWorkflowTest extends IntegrationTestCase {
 		}
 	}
 
+	private function process_until_workflow_status( int $workflow_id, WorkflowStatus $expected_status ): void {
+		for ( $i = 0; $i < 10; ++$i ) {
+			$this->process_one();
+
+			$status = $this->workflow_mgr->status( $workflow_id );
+			if ( $expected_status === $status->status ) {
+				return;
+			}
+
+			usleep( 100_000 );
+		}
+	}
+
 	public function test_repeat_until_repeats_until_state_matches(): void {
 		$workflow_id = Queuety::workflow( 'repeat_until_counter' )
 			->then( AccumulatingStep::class, 'increment' )
@@ -147,13 +160,7 @@ class RepeatWorkflowTest extends IntegrationTestCase {
 				)
 			);
 
-		$this->process_one();
-		$this->process_one();
-		$this->process_one();
-		$this->process_one();
-		$this->process_one();
-		$this->process_one();
-		$this->process_one();
+		$this->process_until_workflow_status( $workflow_id, WorkflowStatus::Completed );
 
 		$status = $this->workflow_mgr->status( $workflow_id );
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
@@ -172,12 +179,7 @@ class RepeatWorkflowTest extends IntegrationTestCase {
 			->then( DataFetchStep::class, 'done' )
 			->dispatch();
 
-		$this->process_one();
-		$this->process_one();
-		$this->process_one();
-		$this->process_one();
-		$this->process_one();
-		$this->process_one();
+		$this->process_until_workflow_status( $workflow_id, WorkflowStatus::Failed );
 
 		$status = $this->workflow_mgr->status( $workflow_id );
 		$this->assertSame( WorkflowStatus::Failed, $status->status );
@@ -211,10 +213,7 @@ class RepeatWorkflowTest extends IntegrationTestCase {
 			)
 		);
 
-		$this->process_one();
-		$this->process_one();
-		$this->process_one();
-		$this->process_one();
+		$this->process_until_workflow_status( $workflow_id, WorkflowStatus::Completed );
 
 		$status = $this->workflow_mgr->status( $workflow_id );
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
