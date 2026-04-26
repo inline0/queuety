@@ -53,22 +53,22 @@ Use workflow budgets to fail runs that exceed the envelope you planned for:
 ```php
 Queuety::workflow( 'research_run' )
     ->max_transitions( 20 )
-    ->max_fan_out_items( 12 )
+    ->max_for_each_items( 12 )
     ->max_state_bytes( 32768 )
     ->max_cost_units( 40 )
-    ->max_spawned_workflows( 8 )
+    ->max_started_workflows( 8 )
     ->then( PlanResearchStep::class )
-    ->fan_out( 'tasks', ExecuteResearchTask::class, 'results' )
+    ->for_each( 'tasks', ExecuteResearchTask::class, 'results' )
     ->dispatch();
 ```
 
 ### `max_transitions()`
 
-Limits how many workflow steps may complete before the run fails. This is useful for protecting workflows that branch dynamically or can revisit the same area via `_goto`.
+Limits how many workflow steps may complete before the run fails. This is useful for protecting workflows that branch dynamically or can revisit the same area via `_next_step`.
 
-### `max_fan_out_items()`
+### `max_for_each_items()`
 
-Limits how many runtime-discovered items a single `fan_out()` step may expand. This is useful for planner/executor systems where an agent might discover far more branch work than intended.
+Limits how many runtime-discovered items a single `for_each()` step may expand. This is useful for planner/executor systems where an agent might discover far more branch work than intended.
 
 ### `max_state_bytes()`
 
@@ -76,13 +76,13 @@ Limits the encoded size of the public workflow state. This helps keep long-runni
 
 ### `max_cost_units()`
 
-Limits the total cost units consumed by completed steps. Cost units come from the step or job metadata that Queuety resolves when it enqueues work. Regular user work defaults to `1`, orchestration placeholders such as timers and waits use `0`, and handlers can raise or lower the value through `config()` or job properties.
+Limits the total cost units consumed by completed steps. Cost units come from the step or job metadata that Queuety resolves when it enqueues work. Regular user work defaults to `1`, orchestration placeholders such as delays and waits use `0`, and handlers can raise or lower the value through `config()` or job properties.
 
-This is useful when a workflow can revisit the same area or fan out into work that is expensive in ways that are not captured by step count alone. A planner that keeps re-running an expensive model call may stay within `max_transitions()` but still exceed the cost envelope you intended.
+This is useful when a workflow can revisit the same area or for each into work that is expensive in ways that are not captured by step count alone. A planner that keeps re-running an expensive model call may stay within `max_transitions()` but still exceed the cost envelope you intended.
 
-### `max_spawned_workflows()`
+### `max_started_workflows()`
 
-Limits how many top-level workflows a run may spawn through `spawn_workflows()` or `spawn_agents()`. The limit is checked before the child workflows are dispatched, so the parent fails without partially creating a group that already exceeds the budget.
+Limits how many top-level workflows a run may start through `start_workflows()` or `start_agents()`. The limit is checked before the child workflows are dispatched, so the parent fails without partially creating a group that already exceeds the budget.
 
 When a budget is exceeded, Queuety fails the workflow immediately instead of retrying the step.
 

@@ -9,9 +9,9 @@ Workflows can pause and wait for external input using signals. The `wait_for_sig
 
 For human-in-the-loop flows, Queuety also includes:
 
-- `await_approval()` for a namespaced approval payload
-- `await_input()` for structured human input
-- `await_decision()` for explicit approve/reject outcomes
+- `wait_for_approval()` for a namespaced approval payload
+- `wait_for_input()` for structured human input
+- `wait_for_decision()` for explicit approve/reject outcomes
 
 For a bigger end-to-end example that combines agent runs with human gates, see [Agent Orchestration](/docs/workflows/agent-orchestration).
 
@@ -29,7 +29,7 @@ $workflow_id = Queuety::workflow( 'content_approval' )
     ->dispatch( [ 'post_id' => 99 ] );
 ```
 
-When the workflow reaches the `wait_for_signal` step, it sets its status to `waiting_signal` and pauses. No jobs are running and no resources are consumed while waiting.
+When the workflow reaches the `wait_for_signal` step, it sets its status to `waiting_for_signal` and pauses. No jobs are running and no resources are consumed while waiting.
 
 By default, a single signal payload is merged into the top-level workflow state. If you want the payload namespaced instead, pass a `result_key`:
 
@@ -100,25 +100,25 @@ This is useful when several external systems or agents publish the same event na
 
 ## Human approval and input helpers
 
-`await_approval()` and `await_input()` are convenience wrappers around signal waits. They behave like `wait_for_signal()` but default to a namespaced result key.
+`wait_for_approval()` and `wait_for_input()` are convenience wrappers around signal waits. They behave like `wait_for_signal()` but default to a namespaced result key.
 
 ```php
 $workflow_id = Queuety::workflow( 'blog_review' )
     ->then( GenerateDraftHandler::class )
-    ->await_approval()
-    ->await_input()
+    ->wait_for_approval()
+    ->wait_for_input()
     ->then( HandleDecisionHandler::class )
     ->dispatch();
 ```
 
 After the `approval` signal, `$state['approval']` contains the approval payload. After the `input` signal, `$state['input']` contains the input payload.
 
-Use `await_decision()` when you want a single step to resume on either approval or rejection:
+Use `wait_for_decision()` when you want a single step to resume on either approval or rejection:
 
 ```php
 $workflow_id = Queuety::workflow( 'legal_review' )
     ->then( DraftContractHandler::class )
-    ->await_decision( result_key: 'review' )
+    ->wait_for_decision( result_key: 'review' )
     ->then( HandleReviewDecisionHandler::class )
     ->dispatch();
 ```
@@ -208,11 +208,11 @@ Queuety::signal( $workflow_id, 'payment_confirmed', [ 'transaction_id' => 'txn_a
 
 ## Workflow status during signal wait
 
-While waiting for a signal, the workflow status is `WorkflowStatus::WaitingSignal` (`waiting_signal`):
+While waiting for a signal, the workflow status is `WorkflowStatus::WaitingForSignal` (`waiting_for_signal`):
 
 ```php
 $state = Queuety::workflow_status( $workflow_id );
-echo $state->status->value; // 'waiting_signal'
+echo $state->status->value; // 'waiting_for_signal'
 echo $state->wait_type;     // 'signal'
 echo $state->wait_mode;     // 'all' or 'any'
 print_r( $state->waiting_for ); // ['approved']
@@ -227,7 +227,7 @@ Build an approval workflow where a human reviewer must approve content before it
 $workflow_id = Queuety::workflow( 'blog_review' )
     ->then( GenerateDraftHandler::class )
     ->then( NotifyReviewerHandler::class )
-    ->await_decision( result_key: 'review' )
+    ->wait_for_decision( result_key: 'review' )
     ->then( HandleDecisionHandler::class )
     ->dispatch( [ 'topic' => 'PHP middleware patterns' ] );
 ```
@@ -288,4 +288,4 @@ Queuety::workflow( 'multi_approval' )
     ->dispatch( [ 'proposal_id' => 7 ] );
 ```
 
-Each signal wait step is independent. You can mix `wait_for_signal()`, `wait_for_signals()`, `await_approval()`, `await_input()`, and `await_decision()` in the same workflow.
+Each signal wait step is independent. You can mix `wait_for_signal()`, `wait_for_signals()`, `wait_for_approval()`, `wait_for_input()`, and `wait_for_decision()` in the same workflow.

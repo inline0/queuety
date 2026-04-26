@@ -2,6 +2,18 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.15.0] - 2026-04-26
+
+### Changed
+
+- renamed workflow primitives to the Onumia-aligned canonical vocabulary: `for_each`, `run_workflow`, `start_workflows`, `wait_for_workflows`, `delay`, and `repeat`
+- replaced legacy for-each join naming with completion-mode terminology across PHP APIs, internals, tests, and docs
+- renamed workflow docs, contracts, enums, fixtures, and integration tests to match the new canonical API names
+
+### Fixed
+
+- corrected the WP-CLI test stub namespace declarations so the full PHP syntax sweep can parse every test file
+
 ## [0.14.1] - 2026-04-26
 
 ### Added
@@ -37,11 +49,11 @@ All notable changes to Queuety are documented in this file.
 
 ### Added
 
-- dynamic workflow fan-out with compensation
+- dynamic workflow for-each with compensation
 - richer workflow waits, approvals, input handling, and agent workflow aliases
 - durable workflow artifacts and grouped workflow waits
 - WordPress action-to-workflow triggers
-- looping workflow primitives
+- repeat workflow primitives
 - durable state machines
 - resource-aware admission, workflow budgets, and adaptive worker controls
 - PHPStan static analysis and stronger E2E coverage
@@ -58,7 +70,7 @@ All notable changes to Queuety are documented in this file.
 
 - initial public release
 - durable jobs, workflows, and WordPress worker runtime
-- dispatchable jobs with middleware, timers, and signals
+- dispatchable jobs with middleware, delays, and signals
 - batching, chaining, cancellation, heartbeats, and streaming steps
 - workflow event log, time travel, forking, and export/replay
 - WP-Cron fallback processing and WP-CLI worker control

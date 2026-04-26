@@ -156,7 +156,7 @@ class WorkflowEventLogTest extends TestCase {
 		$this->event_log->record_workflow_waiting(
 			workflow_id: $wf_id,
 			step_index: 1,
-			handler: '__queuety_signal',
+			handler: '__queuety_wait_for_signal',
 			state_snapshot: array( 'counter' => 1 ),
 			wait_type: 'signal',
 			waiting_for: array( 'approval' ),
@@ -164,7 +164,7 @@ class WorkflowEventLogTest extends TestCase {
 		$this->event_log->record_workflow_resumed(
 			workflow_id: $wf_id,
 			step_index: 1,
-			handler: '__queuety_signal',
+			handler: '__queuety_wait_for_signal',
 			state_snapshot: array( 'counter' => 1, 'approval' => array( 'approved' => true ) ),
 			step_output: array( 'approval' => array( 'approved' => true ) ),
 		);

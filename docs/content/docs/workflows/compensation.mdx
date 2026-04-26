@@ -71,13 +71,13 @@ Compensation can be attached to:
 
 - sequential `then()` steps
 - `parallel()` groups
-- `fan_out()` steps
-- `sub_workflow()` steps
-- `sleep()` timer steps
+- `for_each()` steps
+- `run_workflow()` steps
+- `delay()` delay steps
 - `wait_for_signal()` signal steps
-- `await_workflow()` workflow dependency steps
+- `wait_for_workflow()` workflow dependency steps
 
-For `sub_workflow()` and `fan_out()`, the compensation snapshot is recorded after the nested or branched work has fully settled.
+For `run_workflow()` and `for_each()`, the compensation snapshot is recorded after the nested or branched work has fully settled.
 
 ## `on_cancel()` vs. compensation
 

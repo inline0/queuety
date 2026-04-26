@@ -1,13 +1,13 @@
 ---
 title: Conditional Branching
-description: Using named steps and _goto to branch workflow execution.
+description: Using named steps and _next_step to branch workflow execution.
 ---
 
 # Conditional Branching
 
-Workflows can skip to a named step based on the output of a previous step. This is done by returning a special `_goto` key in the step's return value.
+Workflows can skip to a named step based on the output of a previous step. This is done by returning a special `_next_step` key in the step's return value.
 
-If you specifically want to jump back to an earlier step based on workflow state, see [Loops](/docs/workflows/loops). That keeps the back-edge explicit in the workflow definition instead of burying it inside a step class.
+If you specifically want to jump back to an earlier step based on workflow state, see [Repeats](/docs/workflows/repeats). That keeps the back-edge explicit in the workflow definition instead of burying it inside a step class.
 
 ## Named steps
 
@@ -27,9 +27,9 @@ Queuety::workflow( 'process_order' )
 
 Without an explicit name, steps are named by their index (`'0'`, `'1'`, `'2'`, etc.).
 
-## The `_goto` key
+## The `_next_step` key
 
-A step can return `_goto` to jump to a named step, skipping everything in between:
+A step can return `_next_step` to jump to a named step, skipping everything in between:
 
 ```php
 use Queuety\Step;
@@ -41,7 +41,7 @@ class ValidateOrderHandler implements Step {
         if ( ! $order || $order->get_status() === 'cancelled' ) {
             return [
                 'error'  => 'Order is invalid or cancelled',
-                '_goto'  => 'failure',
+                '_next_step'  => 'failure',
             ];
         }
 
@@ -57,7 +57,7 @@ class ValidateOrderHandler implements Step {
 }
 ```
 
-When `ValidateOrderHandler` returns `_goto => 'failure'`, the workflow skips `charge`, `fulfill`, and `confirm`, jumping directly to the `failure` step. The `_goto` key is consumed by the workflow engine and not persisted in the state.
+When `ValidateOrderHandler` returns `_next_step => 'failure'`, the workflow skips `charge`, `fulfill`, and `confirm`, jumping directly to the `failure` step. The `_next_step` key is consumed by the workflow engine and not persisted in the state.
 
 ## Branching patterns
 
@@ -71,7 +71,7 @@ class CheckInventoryHandler implements Step {
         if ( ! $in_stock ) {
             return [
                 'reason' => 'Out of stock',
-                '_goto'  => 'notify_backorder',
+                '_next_step'  => 'notify_backorder',
             ];
         }
 
@@ -96,7 +96,7 @@ class CheckCacheHandler implements Step {
         if ( $cached ) {
             return [
                 'report_url' => $cached,
-                '_goto'      => 'done',
+                '_next_step'      => 'done',
             ];
         }
 

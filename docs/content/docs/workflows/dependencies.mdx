@@ -7,26 +7,26 @@ description: Pause one workflow until other workflows complete.
 
 Use workflow dependency waits when one top-level workflow should continue only after other workflows have completed. This gives you cross-workflow coordination without forcing everything into one giant workflow definition.
 
-These waits pair especially well with [Async Handoffs](/docs/workflows/async-handoffs), where one workflow first spawns independent child workflows and then joins them later.
+These waits pair especially well with [Async Handoffs](/docs/workflows/async-handoffs), where one workflow first starts independent child workflows and then waits for them later.
 
 For fuller planner/executor examples, see [Agent Orchestration](/docs/workflows/agent-orchestration).
 
 Queuety provides two builder methods:
 
-- `await_workflow()` for one workflow
-- `await_workflows()` for several workflows with `all`, `any`, or `quorum` semantics
-- `await_workflow_group()` when the workflow IDs come from a previously spawned group
+- `wait_for_workflow()` for one workflow
+- `wait_for_workflows()` for several workflows with `all`, `any`, or `quorum` semantics
+- `wait_for_workflow_group()` when the workflow IDs come from a previously started group
 
 ## Wait for one workflow
 
 ```php
 $research_id = Queuety::workflow( 'research_run' )
     ->then( PlanResearchStep::class )
-    ->fan_out( 'tasks', ExecuteResearchTask::class, 'results' )
+    ->for_each( 'tasks', ExecuteResearchTask::class, 'results' )
     ->dispatch( [ 'brief_id' => 42 ] );
 
 $editorial_id = Queuety::workflow( 'editorial_run' )
-    ->await_workflow( $research_id, 'research' )
+    ->wait_for_workflow( $research_id, 'research' )
     ->then( DraftBriefStep::class )
     ->dispatch();
 ```
@@ -45,7 +45,7 @@ Without a `result_key`, the dependency workflow's public state is merged into th
 use Queuety\Enums\WaitMode;
 
 Queuety::workflow( 'synthesis_run' )
-    ->await_workflows(
+    ->wait_for_workflows(
         [ $research_id, $editorial_id, $legal_id ],
         WaitMode::All,
         'dependencies'
@@ -60,7 +60,7 @@ Queuety::workflow( 'synthesis_run' )
 
 ```php
 Queuety::workflow( 'synthesis_run' )
-    ->await_workflows(
+    ->wait_for_workflows(
         [ $research_id, $editorial_id, $legal_id ],
         WaitMode::Quorum,
         'dependencies',
@@ -87,7 +87,7 @@ You can defer the dependency list until runtime by reading workflow IDs from pub
 
 ```php
 Queuety::workflow( 'agent_follow_up' )
-    ->await_workflow( 'parent_workflow_id', 'parent' )
+    ->wait_for_workflow( 'parent_workflow_id', 'parent' )
     ->then( FinalizeAgentRunStep::class )
     ->dispatch( [ 'parent_workflow_id' => $workflow_id ] );
 ```
@@ -96,30 +96,30 @@ For several dependencies:
 
 ```php
 Queuety::workflow( 'aggregator' )
-    ->await_workflows( 'dependency_ids', WaitMode::Any, 'winner' )
+    ->wait_for_workflows( 'dependency_ids', WaitMode::Any, 'winner' )
     ->dispatch( [ 'dependency_ids' => [ 12, 18, 22 ] ] );
 ```
 
-## Wait on a spawned workflow group
+## Wait on a started workflow group
 
-If a previous `spawn_workflows()` or `spawn_agents()` step stored a durable group key, you can wait on that group directly instead of plumbing workflow IDs through public state yourself.
+If a previous `start_workflows()` or `start_agents()` step stored a durable group key, you can wait on that group directly instead of plumbing workflow IDs through public state yourself.
 
 ```php
 Queuety::workflow( 'brief_research' )
     ->then( PlanTopicsStep::class )
-    ->spawn_agents( 'agent_tasks', $agent_run, group_key: 'researchers' )
-    ->await_agent_group( 'researchers', WaitMode::Quorum, 2, 'agent_results' )
+    ->start_agents( 'agent_tasks', $agent_run, group_key: 'researchers' )
+    ->wait_for_agent_group( 'researchers', WaitMode::Quorum, 2, 'agent_results' )
     ->then( SynthesizeBriefStep::class )
     ->dispatch();
 ```
 
 ## What happens while waiting
 
-When a workflow reaches one of these steps it moves to `waiting_workflow` status. No worker stays attached to it while it waits.
+When a workflow reaches one of these steps it moves to `waiting_for_workflows` status. No worker stays attached to it while it waits.
 
 ```php
 $state = Queuety::workflow_status( $workflow_id );
-echo $state->status->value; // 'waiting_workflow'
+echo $state->status->value; // 'waiting_for_workflows'
 echo $state->wait_type;     // 'workflow'
 print_r( $state->waiting_for ); // ['42', '43']
 ```
@@ -130,8 +130,8 @@ If a dependency has already completed before the wait step is reached, the workf
 
 Workflow dependency waits are success-oriented:
 
-- `await_workflow()` and `WaitMode::All` fail if any required dependency fails or is cancelled.
+- `wait_for_workflow()` and `WaitMode::All` fail if any required dependency fails or is cancelled.
 - `WaitMode::Any` fails only when every dependency has reached a terminal state and none completed successfully.
 - `WaitMode::Quorum` fails when the remaining active workflows can no longer satisfy the required quorum.
 
-This makes workflow waits useful for planner/executor systems where one workflow can fan out work, and another can wait on `all` results or on the first successful branch that finishes.
+This makes workflow waits useful for planner/executor systems where one workflow can for each work, and another can wait on `all` results or on the first successful branch that finishes.

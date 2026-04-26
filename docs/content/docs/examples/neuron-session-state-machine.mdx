@@ -7,7 +7,7 @@ description: Govern a long-lived Neuron agent session with a Queuety state machi
 
 This pattern is useful when the thing you are building behaves more like a session than a one-off run.
 
-Queuety state machines own the session lifecycle, Queuety workflows do the background work that benefits from retries, fan-out, and joins, and Neuron handles the actual agent calls and conversation memory.
+Queuety state machines own the session lifecycle, Queuety workflows do the background work that benefits from retries, for-each completion modes, and aggregation, and Neuron handles the actual agent calls and conversation memory.
 
 That split is a good fit for support copilots, internal research assistants, editorial agents that may pause for human review, and chat threads that move between planning, waiting, and response phases.
 
@@ -72,8 +72,8 @@ final class DispatchResearchWorkflowAction implements StateAction
 
         $research_workflow = Queuety::workflow( 'support_research_packet' )
             ->then( PlanResearchTasksStep::class )
-            ->spawn_agents( 'agent_tasks', $agent_workflow )
-            ->await_agents( mode: WaitMode::All, result_key: 'agent_results' )
+            ->start_agents( 'agent_tasks', $agent_workflow )
+            ->wait_for_agents( mode: WaitMode::All, result_key: 'agent_results' )
             ->then( SynthesizeResearchPacketStep::class )
             ->then( NotifySessionResearchReadyStep::class );
 
@@ -168,7 +168,7 @@ After the response is generated, the machine transitions back to `awaiting_user`
 
 ## Why this is cleaner than one large workflow
 
-The heavy lifting is still workflow-shaped because the research side needs planning, specialist runs, joins, and synthesis. The long-lived support conversation is state-machine-shaped because the session must keep track of whether it is waiting for a user turn, waiting on research, or allowed to emit a response.
+The heavy lifting is still workflow-shaped because the research side needs planning, specialist runs, aggregation, and synthesis. The long-lived support conversation is state-machine-shaped because the session must keep track of whether it is waiting for a user turn, waiting on research, or allowed to emit a response.
 
 That split keeps the runtime readable and keeps the session model explicit.
 

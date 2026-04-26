@@ -79,22 +79,22 @@ php -r "
 
     echo \"Test 1: approval and input flow\\n\";
     \$approval_id = Queuety::workflow('approval_flow')
-        ->await_approval(result_key: 'approval')
-        ->await_input(result_key: 'revision_notes')
+        ->wait_for_approval(result_key: 'approval')
+        ->wait_for_input(result_key: 'revision_notes')
         ->then(ReviewFinalizeStep::class)
         ->dispatch(array('draft_id' => 7));
 
     \$process_one();
 
     \$status = Queuety::workflow_status(\$approval_id);
-    assert(\$status->status === WorkflowStatus::WaitingSignal, 'Workflow should wait for approval.');
+    assert(\$status->status === WorkflowStatus::WaitingForSignal, 'Workflow should wait for approval.');
     assert(\$status->waiting_for === array('approval'), 'Workflow should wait for approval signal.');
 
     Queuety::approve_workflow(\$approval_id, array('approved' => true, 'by' => 'editor'));
     \$process_one();
 
     \$status = Queuety::workflow_status(\$approval_id);
-    assert(\$status->status === WorkflowStatus::WaitingSignal, 'Workflow should wait for input after approval.');
+    assert(\$status->status === WorkflowStatus::WaitingForSignal, 'Workflow should wait for input after approval.');
     assert((\$status->state['approval']['by'] ?? null) === 'editor', 'Approval payload should be stored.');
 
     Queuety::submit_workflow_input(\$approval_id, array('note' => 'ship it'));
@@ -108,14 +108,14 @@ php -r "
 
     echo \"Test 2: decision reject flow\\n\";
     \$decision_id = Queuety::workflow('decision_flow')
-        ->await_decision(result_key: 'review')
+        ->wait_for_decision(result_key: 'review')
         ->then(DecisionFinalizeStep::class)
         ->dispatch();
 
     \$process_one();
 
     \$status = Queuety::workflow_status(\$decision_id);
-    assert(\$status->status === WorkflowStatus::WaitingSignal, 'Decision workflow should wait for a decision.');
+    assert(\$status->status === WorkflowStatus::WaitingForSignal, 'Decision workflow should wait for a decision.');
     assert(\$status->wait_mode === 'any', 'Decision workflow should wait for any matching signal.');
 
     Queuety::reject_workflow(\$decision_id, array('reason' => 'needs citations'));

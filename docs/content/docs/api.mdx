@@ -345,30 +345,30 @@ $workflow_id = Queuety::workflow( 'generate_report' )
 |---|---|
 | `then( string $class, ?string $name )` | Add a sequential step. Optional name for conditional branching. |
 | `parallel( array $classes )` | Add a parallel step group. |
-| `fan_out( string $items_key, string $handler_class, ?string $result_key = null, JoinMode $join_mode = JoinMode::All, ?int $quorum = null, ?string $reducer_class = null, ?string $name = null )` | Add a dynamic fan-out step that expands one branch job per item in workflow state. |
-| `repeat_while( string $target_step, ?string $state_key = null, mixed $expected = true, ?string $name = null, ?string $condition_class = null, ?int $max_iterations = null )` | Jump back to an earlier named step while a public state key or `LoopCondition` class matches. |
-| `repeat_until( string $target_step, ?string $state_key = null, mixed $expected = true, ?string $name = null, ?string $condition_class = null, ?int $max_iterations = null )` | Jump back to an earlier named step until a public state key or `LoopCondition` class matches. |
-| `sub_workflow( string $name, WorkflowBuilder $builder )` | Add a sub-workflow step. |
-| `sleep( int $seconds, int $minutes, int $hours, int $days )` | Add a durable timer step. All durations are summed. |
+| `for_each( string $items_key, string $handler_class, ?string $result_key = null, ForEachMode $mode = ForEachMode::All, ?int $quorum = null, ?string $reducer_class = null, ?string $name = null )` | Add a dynamic for-each step that expands one branch job per item in workflow state. |
+| `repeat_while( string $target_step, ?string $state_key = null, mixed $expected = true, ?string $name = null, ?string $condition_class = null, ?int $max_iterations = null )` | Jump back to an earlier named step while a public state key or `RepeatCondition` class matches. |
+| `repeat_until( string $target_step, ?string $state_key = null, mixed $expected = true, ?string $name = null, ?string $condition_class = null, ?int $max_iterations = null )` | Jump back to an earlier named step until a public state key or `RepeatCondition` class matches. |
+| `run_workflow( string $name, WorkflowBuilder $builder )` | Add a run-workflow step. |
+| `delay( int $seconds, int $minutes, int $hours, int $days )` | Add a durable delay step. All durations are summed. |
 | `wait_for_signal( string $name, ?string $result_key = null, ?string $step_name = null, array $match_payload = [], ?string $correlation_key = null )` | Add a signal wait step. Optional `match_payload` and `correlation_key` let you ignore unrelated events. |
 | `wait_for_signals( array $signal_names, WaitMode $mode = WaitMode::All, ?string $result_key = null, ?string $name = null, array $match_payload = [], ?string $correlation_key = null )` | Wait for all or any of several signals, with optional payload matching and correlation. |
-| `await_approval( string $signal_name = 'approval', ?string $result_key = 'approval', ?string $name = null, array $match_payload = [], ?string $correlation_key = null )` | Wait for a human approval signal. |
-| `await_decision( string $approve_signal = 'approved', string $reject_signal = 'rejected', ?string $result_key = 'decision', ?string $name = null, array $match_payload = [], ?string $correlation_key = null )` | Wait for either approval or rejection and store a structured decision payload. |
-| `await_input( string $signal_name = 'input', ?string $result_key = 'input', ?string $name = null, array $match_payload = [], ?string $correlation_key = null )` | Wait for a human input signal. |
-| `await_workflow( int|string $workflow, ?string $result_key = null, ?string $name = null )` | Wait for one workflow ID, or a workflow ID stored in public state, to complete. |
-| `await_workflows( array|string $workflows, WaitMode $mode = WaitMode::All, ?string $result_key = null, ?string $name = null, ?int $quorum = null )` | Wait for all, any, or a quorum of several workflows to complete. |
-| `await_workflow_group( string $group_key, WaitMode $mode = WaitMode::All, ?int $quorum = null, ?string $result_key = null, ?string $name = null )` | Wait on a previously spawned workflow group by internal group key. |
-| `spawn_workflows( string $items_key, WorkflowBuilder $workflow_builder, string $result_key = 'spawned_workflow_ids', string $payload_key = 'item', bool $inherit_state = true, ?string $name = null, ?string $group_key = null )` | Dispatch one top-level workflow per runtime item, optionally tagging the spawned set with a durable group key. |
-| `spawn_agents( string $items_key, WorkflowBuilder $workflow_builder, string $result_key = 'agent_workflow_ids', string $payload_key = 'agent_task', bool $inherit_state = true, ?string $name = null, ?string $group_key = null )` | Agent-oriented alias for `spawn_workflows()`. |
-| `await_agents( array|string $workflows = 'agent_workflow_ids', WaitMode $mode = WaitMode::All, ?string $result_key = 'agent_results', ?string $name = null, ?int $quorum = null )` | Agent-oriented alias for `await_workflows()`. |
-| `await_agent_group( string $group_key = 'agents', WaitMode $mode = WaitMode::All, ?int $quorum = null, ?string $result_key = 'agent_results', ?string $name = null )` | Agent-oriented alias for `await_workflow_group()`. |
+| `wait_for_approval( string $signal_name = 'approval', ?string $result_key = 'approval', ?string $name = null, array $match_payload = [], ?string $correlation_key = null )` | Wait for a human approval signal. |
+| `wait_for_decision( string $approve_signal = 'approved', string $reject_signal = 'rejected', ?string $result_key = 'decision', ?string $name = null, array $match_payload = [], ?string $correlation_key = null )` | Wait for either approval or rejection and store a structured decision payload. |
+| `wait_for_input( string $signal_name = 'input', ?string $result_key = 'input', ?string $name = null, array $match_payload = [], ?string $correlation_key = null )` | Wait for a human input signal. |
+| `wait_for_workflow( int|string $workflow, ?string $result_key = null, ?string $name = null )` | Wait for one workflow ID, or a workflow ID stored in public state, to complete. |
+| `wait_for_workflows( array|string $workflows, WaitMode $mode = WaitMode::All, ?string $result_key = null, ?string $name = null, ?int $quorum = null )` | Wait for all, any, or a quorum of several workflows to complete. |
+| `wait_for_workflow_group( string $group_key, WaitMode $mode = WaitMode::All, ?int $quorum = null, ?string $result_key = null, ?string $name = null )` | Wait on a previously started workflow group by internal group key. |
+| `start_workflows( string $items_key, WorkflowBuilder $workflow_builder, string $result_key = 'started_workflow_ids', string $payload_key = 'item', bool $inherit_state = true, ?string $name = null, ?string $group_key = null )` | Dispatch one top-level workflow per runtime item, optionally tagging the started set with a durable group key. |
+| `start_agents( string $items_key, WorkflowBuilder $workflow_builder, string $result_key = 'agent_workflow_ids', string $payload_key = 'agent_task', bool $inherit_state = true, ?string $name = null, ?string $group_key = null )` | Agent-oriented alias for `start_workflows()`. |
+| `wait_for_agents( array|string $workflows = 'agent_workflow_ids', WaitMode $mode = WaitMode::All, ?string $result_key = 'agent_results', ?string $name = null, ?int $quorum = null )` | Agent-oriented alias for `wait_for_workflows()`. |
+| `wait_for_agent_group( string $group_key = 'agents', WaitMode $mode = WaitMode::All, ?int $quorum = null, ?string $result_key = 'agent_results', ?string $name = null )` | Agent-oriented alias for `wait_for_workflow_group()`. |
 | `version( string $version )` | Tag the workflow definition with an application-level version for inspection and exports. |
 | `idempotency_key( string $key )` | Make workflow dispatch durable for a caller-supplied key. Dispatching again with the same key returns the original workflow ID. |
 | `max_transitions( int $max )` | Fail the workflow if more than `$max` step transitions complete. |
-| `max_fan_out_items( int $max )` | Fail the workflow if a `fan_out()` step tries to expand more than `$max` items. |
+| `max_for_each_items( int $max )` | Fail the workflow if a `for_each()` step tries to expand more than `$max` items. |
 | `max_state_bytes( int $bytes )` | Fail the workflow if the public state grows beyond `$bytes`. |
 | `max_cost_units( int $max )` | Fail the workflow if completed steps consume more than `$max` cost units. |
-| `max_spawned_workflows( int $max )` | Fail the workflow before dispatching more than `$max` child workflows. |
+| `max_started_workflows( int $max )` | Fail the workflow before dispatching more than `$max` child workflows. |
 | `compensate_with( string $class )` | Attach a compensation handler to the most recently added step. |
 | `compensate_on_failure()` | Run completed-step compensations automatically when the workflow fails. |
 | `on_queue( string $queue )` | Set the queue for all steps. |
@@ -1066,14 +1066,14 @@ interface Step {
 
 `config()` may return `max_attempts`, `backoff`, `concurrency_group`, `concurrency_limit`, and `cost_units`.
 
-### `Contracts\FanOutHandler`
+### `Contracts\ForEachHandler`
 
-Interface for dynamic fan-out branch handlers.
+Interface for dynamic for-each branch handlers.
 
 ```php
 namespace Queuety\Contracts;
 
-interface FanOutHandler {
+interface ForEachHandler {
     public function handle_item( array $state, mixed $item, int $index ): array;
     public function config(): array;
 }
@@ -1081,15 +1081,15 @@ interface FanOutHandler {
 
 `config()` may return `max_attempts`, `backoff`, `rate_limit`, `concurrency_group`, `concurrency_limit`, and `cost_units`.
 
-### `Contracts\JoinReducer`
+### `Contracts\ForEachReducer`
 
-Optional reducer for fan-out results.
+Optional reducer for for-each results.
 
 ```php
 namespace Queuety\Contracts;
 
-interface JoinReducer {
-    public function reduce( array $state, array $fan_out ): array;
+interface ForEachReducer {
+    public function reduce( array $state, array $for_each ): array;
 }
 ```
 
@@ -1105,14 +1105,14 @@ interface Compensation {
 }
 ```
 
-### `Contracts\LoopCondition`
+### `Contracts\RepeatCondition`
 
 Interface for loop predicates used by `repeat_until()` and `repeat_while()` when a state-key comparison is too limited.
 
 ```php
 namespace Queuety\Contracts;
 
-interface LoopCondition {
+interface RepeatCondition {
     public function matches( array $state ): bool;
 }
 ```
@@ -1370,8 +1370,8 @@ enum WorkflowStatus: string {
     case Completed      = 'completed';
     case Failed         = 'failed';
     case Paused         = 'paused';
-    case WaitingSignal  = 'waiting_signal';
-    case WaitingWorkflow = 'waiting_workflow';
+    case WaitingForSignal  = 'waiting_for_signal';
+    case WaitingForWorkflows = 'waiting_for_workflows';
     case Cancelled      = 'cancelled';
 }
 ```
@@ -1399,10 +1399,10 @@ enum BackoffStrategy: string {
 }
 ```
 
-### `JoinMode`
+### `ForEachMode`
 
 ```php
-enum JoinMode: string {
+enum ForEachMode: string {
     case All = 'all';
     case FirstSuccess = 'first_success';
     case Quorum = 'quorum';

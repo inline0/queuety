@@ -8,7 +8,7 @@
 namespace Queuety\Enums;
 
 enum WaitMode: string {
-	case All = 'all';
-	case Any = 'any';
+	case All    = 'all';
+	case Any    = 'any';
 	case Quorum = 'quorum';
 }

@@ -1,6 +1,6 @@
 <?php
 /**
- * Test fixture: conditional step that returns _goto based on state.
+ * Test fixture: conditional step that returns _next_step based on state.
  *
  * @package Queuety
  */
@@ -10,19 +10,19 @@ namespace Queuety\Tests\Integration\Fixtures;
 use Queuety\Step;
 
 /**
- * Returns a _goto directive based on the 'goto_target' key in the state.
- * If 'should_skip' is true, jumps to the step named in 'goto_target'.
+ * Returns a _next_step directive based on the 'next_step_target' key in the state.
+ * If 'should_skip' is true, jumps to the step named in 'next_step_target'.
  */
-class ConditionalGoToStep implements Step {
+class ConditionalBranchStep implements Step {
 
 	public function handle( array $state ): array {
 		$should_skip = $state['should_skip'] ?? false;
-		$target      = $state['goto_target'] ?? null;
+		$target      = $state['next_step_target'] ?? null;
 
 		$result = array( 'conditional_ran' => true );
 
 		if ( $should_skip && null !== $target ) {
-			$result['_goto'] = $target;
+			$result['_next_step'] = $target;
 		}
 
 		return $result;

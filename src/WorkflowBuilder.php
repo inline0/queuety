@@ -7,7 +7,7 @@
 
 namespace Queuety;
 
-use Queuety\Enums\JoinMode;
+use Queuety\Enums\ForEachMode;
 use Queuety\Enums\LogEvent;
 use Queuety\Enums\Priority;
 use Queuety\Enums\WaitMode;
@@ -28,7 +28,7 @@ class WorkflowBuilder {
 	 * Step definitions in order.
 	 *
 	 * Each entry is an array with keys: type, class (for single), handlers (for parallel),
-	 * name (optional), builder (for sub_workflow).
+	 * name (optional), builder (for run_workflow).
 	 *
 	 * @var array[]
 	 */
@@ -105,11 +105,11 @@ class WorkflowBuilder {
 	private ?int $max_transitions = null;
 
 	/**
-	 * Maximum number of runtime-discovered fan-out items allowed in a single step.
+	 * Maximum number of runtime-discovered for-each items allowed in a single step.
 	 *
 	 * @var int|null
 	 */
-	private ?int $max_fan_out_items = null;
+	private ?int $max_for_each_items = null;
 
 	/**
 	 * Maximum size in bytes of the public workflow state.
@@ -126,11 +126,11 @@ class WorkflowBuilder {
 	private ?int $max_cost_units = null;
 
 	/**
-	 * Maximum number of child workflows this workflow may spawn.
+	 * Maximum number of child workflows this workflow may start.
 	 *
 	 * @var int|null
 	 */
-	private ?int $max_spawned_workflows = null;
+	private ?int $max_started_workflows = null;
 
 	/**
 	 * Whether to automatically run compensations when the workflow fails.
@@ -207,38 +207,38 @@ class WorkflowBuilder {
 	}
 
 	/**
-	 * Add a dynamic fan-out step.
+	 * Add a dynamic for-each step.
 	 *
 	 * Reads an array of branch items from workflow state and dispatches one
 	 * branch job per item using the given handler. The step settles according
-	 * to the selected join mode and stores a structured aggregate in $result_key.
+	 * to the selected completion mode and stores a structured aggregate in $result_key.
 	 *
 	 * @param string      $items_key      Public state key containing the branch items array.
-	 * @param string      $handler_class  Handler class implementing Contracts\FanOutHandler.
+	 * @param string      $handler_class  Handler class implementing Contracts\ForEachHandler.
 	 * @param string|null $result_key     Public state key to store the settled aggregate under.
-	 * @param JoinMode    $join_mode      Join behaviour for the branches.
-	 * @param int|null    $quorum         Required successes when using JoinMode::Quorum.
-	 * @param string|null $reducer_class  Optional reducer class implementing Contracts\JoinReducer.
+	 * @param ForEachMode $mode Completion behaviour for the branches.
+	 * @param int|null    $quorum         Required successes when using ForEachMode::Quorum.
+	 * @param string|null $reducer_class  Optional reducer class implementing Contracts\ForEachReducer.
 	 * @param string|null $name           Optional step name.
 	 * @return self
 	 */
-	public function fan_out(
+	public function for_each(
 		string $items_key,
 		string $handler_class,
 		?string $result_key = null,
-		JoinMode $join_mode = JoinMode::All,
+		ForEachMode $mode = ForEachMode::All,
 		?int $quorum = null,
 		?string $reducer_class = null,
 		?string $name = null,
 	): self {
 		$index         = count( $this->steps );
 		$this->steps[] = array(
-			'type'          => 'fan_out',
+			'type'          => 'for_each',
 			'name'          => $name ?? (string) $index,
 			'items_key'     => $items_key,
 			'class'         => $handler_class,
 			'result_key'    => $result_key,
-			'join_mode'     => $join_mode,
+			'mode'          => $mode,
 			'quorum'        => $quorum,
 			'reducer_class' => $reducer_class,
 		);
@@ -246,21 +246,21 @@ class WorkflowBuilder {
 	}
 
 	/**
-	 * Add a loop control step that jumps back while a state key matches the expected value.
+	 * Add a repeat control step that jumps back while a state key matches the expected value.
 	 *
-	 * The loop target must reference a step that already exists in the workflow definition.
+	 * The repeat target must reference a step that already exists in the workflow definition.
 	 *
-	 * Provide either a public state key plus expected value, or a LoopCondition
+	 * Provide either a public state key plus expected value, or a RepeatCondition
 	 * class name via $condition_class for richer matching.
 	 *
-	 * @param string      $target_step     Step name to jump back to when the loop should continue.
+	 * @param string      $target_step     Step name to jump back to when the repeat should continue.
 	 * @param string|null $state_key       Public state key to inspect.
-	 * @param mixed       $expected        Value that keeps the loop running.
+	 * @param mixed       $expected        Value that keeps the repeat running.
 	 * @param string|null $name            Optional step name.
-	 * @param string|null $condition_class Optional LoopCondition class name.
-	 * @param int|null    $max_iterations  Optional hard cap on how many times this loop may jump back.
+	 * @param string|null $condition_class Optional RepeatCondition class name.
+	 * @param int|null    $max_iterations  Optional hard cap on how many times this repeat may jump back.
 	 * @return self
-	 * @throws \RuntimeException If the target step or loop condition is invalid.
+	 * @throws \RuntimeException If the target step or repeat condition is invalid.
 	 */
 	public function repeat_while(
 		string $target_step,
@@ -270,25 +270,25 @@ class WorkflowBuilder {
 		?string $condition_class = null,
 		?int $max_iterations = null,
 	): self {
-		return $this->add_loop_step( 'while', $target_step, $state_key, $expected, $name, $condition_class, $max_iterations );
+		return $this->add_repeat_step( 'while', $target_step, $state_key, $expected, $name, $condition_class, $max_iterations );
 	}
 
 	/**
-	 * Add a loop control step that jumps back until a state key matches the expected value.
+	 * Add a repeat control step that jumps back until a state key matches the expected value.
 	 *
-	 * The loop target must reference a step that already exists in the workflow definition.
+	 * The repeat target must reference a step that already exists in the workflow definition.
 	 *
-	 * Provide either a public state key plus expected value, or a LoopCondition
+	 * Provide either a public state key plus expected value, or a RepeatCondition
 	 * class name via $condition_class for richer matching.
 	 *
-	 * @param string      $target_step     Step name to jump back to when the loop should continue.
+	 * @param string      $target_step     Step name to jump back to when the repeat should continue.
 	 * @param string|null $state_key       Public state key to inspect.
-	 * @param mixed       $expected        Value that stops the loop once matched.
+	 * @param mixed       $expected        Value that stops the repeat once matched.
 	 * @param string|null $name            Optional step name.
-	 * @param string|null $condition_class Optional LoopCondition class name.
-	 * @param int|null    $max_iterations  Optional hard cap on how many times this loop may jump back.
+	 * @param string|null $condition_class Optional RepeatCondition class name.
+	 * @param int|null    $max_iterations  Optional hard cap on how many times this repeat may jump back.
 	 * @return self
-	 * @throws \RuntimeException If the target step or loop condition is invalid.
+	 * @throws \RuntimeException If the target step or repeat condition is invalid.
 	 */
 	public function repeat_until(
 		string $target_step,
@@ -298,23 +298,23 @@ class WorkflowBuilder {
 		?string $condition_class = null,
 		?int $max_iterations = null,
 	): self {
-		return $this->add_loop_step( 'until', $target_step, $state_key, $expected, $name, $condition_class, $max_iterations );
+		return $this->add_repeat_step( 'until', $target_step, $state_key, $expected, $name, $condition_class, $max_iterations );
 	}
 
 	/**
-	 * Add a serializable loop control step.
+	 * Add a serializable repeat control step.
 	 *
-	 * @param string      $mode            Loop mode: while or until.
+	 * @param string      $mode            Repeat mode: while or until.
 	 * @param string      $target_step     Step name to jump back to.
 	 * @param string|null $state_key       Public state key to inspect.
 	 * @param mixed       $expected        Comparison value.
 	 * @param string|null $name            Optional step name.
-	 * @param string|null $condition_class Optional LoopCondition class name.
-	 * @param int|null    $max_iterations  Optional hard cap on how many times this loop may jump back.
+	 * @param string|null $condition_class Optional RepeatCondition class name.
+	 * @param int|null    $max_iterations  Optional hard cap on how many times this repeat may jump back.
 	 * @return self
-	 * @throws \RuntimeException If the loop target is invalid.
+	 * @throws \RuntimeException If the repeat target is invalid.
 	 */
-	private function add_loop_step(
+	private function add_repeat_step(
 		string $mode,
 		string $target_step,
 		?string $state_key,
@@ -328,33 +328,33 @@ class WorkflowBuilder {
 		$condition_class = null !== $condition_class ? trim( $condition_class ) : null;
 
 		if ( '' === $target_step ) {
-			throw new \RuntimeException( 'Loop steps require a non-empty target step name.' );
+			throw new \RuntimeException( 'Repeat steps require a non-empty target step name.' );
 		}
 
 		if ( null !== $state_key && '' === $state_key ) {
-			throw new \RuntimeException( 'Loop steps require a non-empty state key.' );
+			throw new \RuntimeException( 'Repeat steps require a non-empty state key.' );
 		}
 
 		if ( null !== $condition_class && '' === $condition_class ) {
-			throw new \RuntimeException( 'Loop steps require a non-empty condition class.' );
+			throw new \RuntimeException( 'Repeat steps require a non-empty condition class.' );
 		}
 
 		if ( null === $state_key && null === $condition_class ) {
-			throw new \RuntimeException( 'Loop steps require either a state key or a condition class.' );
+			throw new \RuntimeException( 'Repeat steps require either a state key or a condition class.' );
 		}
 
 		if ( null !== $state_key && null !== $condition_class ) {
-			throw new \RuntimeException( 'Loop steps cannot define both a state key and a condition class.' );
+			throw new \RuntimeException( 'Repeat steps cannot define both a state key and a condition class.' );
 		}
 
 		if ( null !== $max_iterations && $max_iterations < 1 ) {
-			throw new \RuntimeException( 'Loop steps require max_iterations to be at least 1.' );
+			throw new \RuntimeException( 'Repeat steps require max_iterations to be at least 1.' );
 		}
 
 		if ( ! $this->has_prior_step_named( $target_step ) ) {
 			throw new \RuntimeException(
 				sprintf(
-					"Loop target '%s' must reference an earlier named step.",
+					"Repeat target '%s' must reference an earlier named step.",
 					$target_step
 				)
 			);
@@ -362,9 +362,9 @@ class WorkflowBuilder {
 
 		$index         = count( $this->steps );
 		$this->steps[] = array(
-			'type'            => 'loop',
+			'type'            => 'repeat',
 			'name'            => $name ?? 'repeat_' . $mode . '_' . $index,
-			'loop_mode'       => $mode,
+			'repeat_mode'     => $mode,
 			'target_step'     => $target_step,
 			'state_key'       => $state_key,
 			'expected'        => $expected,
@@ -376,28 +376,28 @@ class WorkflowBuilder {
 	}
 
 	/**
-	 * Add a sub-workflow step to the workflow.
+	 * Add a run-workflow step to the workflow.
 	 *
-	 * When this step is reached, the sub-workflow is dispatched and the parent
-	 * pauses until the sub-workflow completes.
+	 * When this step is reached, the run-workflow is dispatched and the parent
+	 * pauses until the run-workflow completes.
 	 *
-	 * @param string          $sub_name    Name for the sub-workflow.
-	 * @param WorkflowBuilder $sub_builder Builder defining the sub-workflow steps.
+	 * @param string          $workflow_name    Name for the run-workflow.
+	 * @param WorkflowBuilder $sub_builder Builder defining the run-workflow steps.
 	 * @return self
 	 */
-	public function sub_workflow( string $sub_name, WorkflowBuilder $sub_builder ): self {
+	public function run_workflow( string $workflow_name, WorkflowBuilder $sub_builder ): self {
 		$index         = count( $this->steps );
 		$this->steps[] = array(
-			'type'     => 'sub_workflow',
-			'name'     => (string) $index,
-			'builder'  => $sub_builder,
-			'sub_name' => $sub_name,
+			'type'          => 'run_workflow',
+			'name'          => (string) $index,
+			'builder'       => $sub_builder,
+			'workflow_name' => $workflow_name,
 		);
 		return $this;
 	}
 
 	/**
-	 * Add a durable timer step to the workflow.
+	 * Add a durable delay step to the workflow.
 	 *
 	 * The workflow will pause for the specified duration before continuing
 	 * to the next step. The delay is implemented via the job's available_at
@@ -409,18 +409,18 @@ class WorkflowBuilder {
 	 * @param int $days    Days to wait.
 	 * @return self
 	 */
-	public function sleep( int $seconds = 0, int $minutes = 0, int $hours = 0, int $days = 0 ): self {
+	public function delay( int $seconds = 0, int $minutes = 0, int $hours = 0, int $days = 0 ): self {
 		$total       = $seconds + ( $minutes * 60 ) + ( $hours * 3600 ) + ( $days * 86400 );
-		$timer_count = 0;
+		$delay_count = 0;
 		foreach ( $this->steps as $step ) {
-			if ( 'timer' === $step['type'] ) {
-				++$timer_count;
+			if ( 'delay' === $step['type'] ) {
+				++$delay_count;
 			}
 		}
 		$this->steps[] = array(
-			'type'          => 'timer',
+			'type'          => 'delay',
 			'delay_seconds' => $total,
-			'name'          => 'timer_' . $timer_count,
+			'name'          => 'delay_' . $delay_count,
 		);
 		return $this;
 	}
@@ -496,7 +496,7 @@ class WorkflowBuilder {
 
 		$index         = count( $this->steps );
 		$this->steps[] = array(
-			'type'            => 'signal',
+			'type'            => 'wait_for_signal',
 			'signal_names'    => $normalized,
 			'wait_mode'       => $mode,
 			'result_key'      => $result_key,
@@ -517,7 +517,7 @@ class WorkflowBuilder {
 	 * @param string|null $correlation_key Optional state/payload key that must match for a signal to count.
 	 * @return self
 	 */
-	public function await_approval(
+	public function wait_for_approval(
 		string $signal_name = 'approval',
 		?string $result_key = 'approval',
 		?string $name = null,
@@ -528,7 +528,7 @@ class WorkflowBuilder {
 			array( $signal_name ),
 			WaitMode::All,
 			$result_key,
-			$name ?? 'await_approval',
+			$name ?? 'wait_for_approval',
 			$match_payload,
 			$correlation_key,
 		);
@@ -552,7 +552,7 @@ class WorkflowBuilder {
 	 * @param string|null $correlation_key Optional state/payload key that must match for a signal to count.
 	 * @return self
 	 */
-	public function await_decision(
+	public function wait_for_decision(
 		string $approve_signal = 'approved',
 		string $reject_signal = 'rejected',
 		?string $result_key = 'decision',
@@ -564,7 +564,7 @@ class WorkflowBuilder {
 			array( $approve_signal, $reject_signal ),
 			WaitMode::Any,
 			$result_key,
-			$name ?? 'await_decision',
+			$name ?? 'wait_for_decision',
 			$match_payload,
 			$correlation_key,
 		);
@@ -589,7 +589,7 @@ class WorkflowBuilder {
 	 * @param string|null $correlation_key Optional state/payload key that must match for a signal to count.
 	 * @return self
 	 */
-	public function await_input(
+	public function wait_for_input(
 		string $signal_name = 'input',
 		?string $result_key = 'input',
 		?string $name = null,
@@ -600,7 +600,7 @@ class WorkflowBuilder {
 			array( $signal_name ),
 			WaitMode::All,
 			$result_key,
-			$name ?? 'await_input',
+			$name ?? 'wait_for_input',
 			$match_payload,
 			$correlation_key,
 		);
@@ -618,16 +618,16 @@ class WorkflowBuilder {
 	 * @param string|null $name       Optional step name.
 	 * @return self
 	 */
-	public function await_workflow(
+	public function wait_for_workflow(
 		int|string $workflow,
 		?string $result_key = null,
 		?string $name = null,
 	): self {
-		return $this->await_workflows(
+		return $this->wait_for_workflows(
 			is_int( $workflow ) ? array( $workflow ) : $workflow,
 			WaitMode::All,
 			$result_key,
-			$name ?? 'await_workflow'
+			$name ?? 'wait_for_workflow'
 		);
 	}
 
@@ -642,7 +642,7 @@ class WorkflowBuilder {
 	 * @return self
 	 * @throws \RuntimeException If the provided state key is empty or quorum is invalid.
 	 */
-	public function await_workflows(
+	public function wait_for_workflows(
 		array|string $workflows,
 		WaitMode $mode = WaitMode::All,
 		?string $result_key = null,
@@ -651,10 +651,10 @@ class WorkflowBuilder {
 	): self {
 		$index = count( $this->steps );
 		$step  = array(
-			'type'       => 'workflow_wait',
+			'type'       => 'wait_for_workflows',
 			'wait_mode'  => $mode,
 			'result_key' => $result_key,
-			'name'       => $name ?? 'await_workflows_' . $index,
+			'name'       => $name ?? 'wait_for_workflows_' . $index,
 		);
 
 		if ( WaitMode::Quorum === $mode ) {
@@ -690,9 +690,9 @@ class WorkflowBuilder {
 	}
 
 	/**
-	 * Add a workflow dependency wait that resolves spawned workflow IDs by group.
+	 * Add a workflow dependency wait that resolves started workflow IDs by group.
 	 *
-	 * @param string      $group_key  Internal workflow group key created by spawn_workflows().
+	 * @param string      $group_key  Internal workflow group key created by start_workflows().
 	 * @param WaitMode    $mode       Whether all workflows, any workflow, or a quorum should unblock the step.
 	 * @param int|null    $quorum     Required completed workflow count when using WaitMode::Quorum.
 	 * @param string|null $result_key Optional state key for completed workflow state.
@@ -700,7 +700,7 @@ class WorkflowBuilder {
 	 * @return self
 	 * @throws \RuntimeException If the group key is empty or quorum is invalid.
 	 */
-	public function await_workflow_group(
+	public function wait_for_workflow_group(
 		string $group_key,
 		WaitMode $mode = WaitMode::All,
 		?int $quorum = null,
@@ -718,8 +718,8 @@ class WorkflowBuilder {
 
 		$index         = count( $this->steps );
 		$this->steps[] = array(
-			'type'               => 'workflow_wait',
-			'name'               => $name ?? 'await_workflow_group_' . $index,
+			'type'               => 'wait_for_workflows',
+			'name'               => $name ?? 'wait_for_workflow_group_' . $index,
 			'workflow_group_key' => $group_key,
 			'wait_mode'          => $mode,
 			'quorum'             => WaitMode::Quorum === $mode ? $quorum : null,
@@ -730,11 +730,11 @@ class WorkflowBuilder {
 	}
 
 	/**
-	 * Spawn one top-level workflow per runtime item and store the workflow IDs.
+	 * Start one top-level workflow per runtime item and store the workflow IDs.
 	 *
 	 * @param string          $items_key        Public state key containing child payload items.
-	 * @param WorkflowBuilder $workflow_builder Builder defining each spawned workflow.
-	 * @param string          $result_key       Public state key to store spawned workflow IDs under.
+	 * @param WorkflowBuilder $workflow_builder Builder defining each started workflow.
+	 * @param string          $result_key       Public state key to store started workflow IDs under.
 	 * @param string          $payload_key      Key used when an item is scalar instead of an array.
 	 * @param bool            $inherit_state    Whether to merge parent public state into each child.
 	 * @param string|null     $name             Optional step name.
@@ -742,10 +742,10 @@ class WorkflowBuilder {
 	 * @return self
 	 * @throws \InvalidArgumentException If a required key is empty.
 	 */
-	public function spawn_workflows(
+	public function start_workflows(
 		string $items_key,
 		WorkflowBuilder $workflow_builder,
-		string $result_key = 'spawned_workflow_ids',
+		string $result_key = 'started_workflow_ids',
 		string $payload_key = 'item',
 		bool $inherit_state = true,
 		?string $name = null,
@@ -757,21 +757,21 @@ class WorkflowBuilder {
 		$group_key   = null !== $group_key ? trim( $group_key ) : null;
 
 		if ( '' === $items_key ) {
-			throw new \InvalidArgumentException( 'Workflow spawn steps require a non-empty items key.' );
+			throw new \InvalidArgumentException( 'Workflow start steps require a non-empty items key.' );
 		}
 
 		if ( '' === $result_key ) {
-			throw new \InvalidArgumentException( 'Workflow spawn steps require a non-empty result key.' );
+			throw new \InvalidArgumentException( 'Workflow start steps require a non-empty result key.' );
 		}
 
 		if ( '' === $payload_key ) {
-			throw new \InvalidArgumentException( 'Workflow spawn steps require a non-empty payload key.' );
+			throw new \InvalidArgumentException( 'Workflow start steps require a non-empty payload key.' );
 		}
 
 		$index         = count( $this->steps );
 		$this->steps[] = array(
-			'type'                => 'spawn_workflows',
-			'name'                => $name ?? 'spawn_workflows_' . $index,
+			'type'                => 'start_workflows',
+			'name'                => $name ?? 'start_workflows_' . $index,
 			'items_key'           => $items_key,
 			'result_key'          => $result_key,
 			'payload_key'         => $payload_key,
@@ -786,19 +786,19 @@ class WorkflowBuilder {
 	/**
 	 * Add an agent handoff step for runtime-discovered agent tasks.
 	 *
-	 * This is a semantic alias for spawn_workflows() with defaults geared toward
+	 * This is a semantic alias for start_workflows() with defaults geared toward
 	 * planner/executor flows.
 	 *
 	 * @param string          $items_key         Public state key containing agent task items.
-	 * @param WorkflowBuilder $workflow_builder  Workflow definition for each spawned agent run.
-	 * @param string          $result_key        Public state key to store spawned agent workflow IDs under.
+	 * @param WorkflowBuilder $workflow_builder  Workflow definition for each started agent run.
+	 * @param string          $result_key        Public state key to store started agent workflow IDs under.
 	 * @param string          $payload_key       Key used when scalar items are wrapped for the child workflow.
 	 * @param bool            $inherit_state     Whether the agent workflow inherits the parent public state.
 	 * @param string|null     $name              Optional step name.
 	 * @param string|null     $group_key         Optional internal group key for later agent-group waits.
 	 * @return self
 	 */
-	public function spawn_agents(
+	public function start_agents(
 		string $items_key,
 		WorkflowBuilder $workflow_builder,
 		string $result_key = 'agent_workflow_ids',
@@ -807,19 +807,19 @@ class WorkflowBuilder {
 		?string $name = null,
 		?string $group_key = null,
 	): self {
-		return $this->spawn_workflows(
+		return $this->start_workflows(
 			$items_key,
 			$workflow_builder,
 			$result_key,
 			$payload_key,
 			$inherit_state,
-			$name ?? 'spawn_agents',
+			$name ?? 'start_agents',
 			$group_key,
 		);
 	}
 
 	/**
-	 * Wait for one or more spawned agent workflows.
+	 * Wait for one or more started agent workflows.
 	 *
 	 * @param array|string $workflows  Agent workflow IDs or a public state key that resolves to IDs.
 	 * @param WaitMode     $mode       Whether all agent workflows or any agent workflow should unblock the step.
@@ -828,45 +828,45 @@ class WorkflowBuilder {
 	 * @param int|null     $quorum     Required completed workflow count when using WaitMode::Quorum.
 	 * @return self
 	 */
-	public function await_agents(
+	public function wait_for_agents(
 		array|string $workflows = 'agent_workflow_ids',
 		WaitMode $mode = WaitMode::All,
 		?string $result_key = 'agent_results',
 		?string $name = null,
 		?int $quorum = null,
 	): self {
-		return $this->await_workflows(
+		return $this->wait_for_workflows(
 			$workflows,
 			$mode,
 			$result_key,
-			$name ?? 'await_agents',
+			$name ?? 'wait_for_agents',
 			$quorum,
 		);
 	}
 
 	/**
-	 * Wait for a previously spawned agent group.
+	 * Wait for a previously started agent group.
 	 *
-	 * @param string      $group_key  Internal agent group key created by spawn_agents().
+	 * @param string      $group_key  Internal agent group key created by start_agents().
 	 * @param WaitMode    $mode       Whether all agents, any agent, or a quorum should unblock the step.
 	 * @param int|null    $quorum     Required completed workflow count when using WaitMode::Quorum.
 	 * @param string|null $result_key Optional state key for completed agent workflow state.
 	 * @param string|null $name       Optional step name.
 	 * @return self
 	 */
-	public function await_agent_group(
+	public function wait_for_agent_group(
 		string $group_key = 'agents',
 		WaitMode $mode = WaitMode::All,
 		?int $quorum = null,
 		?string $result_key = 'agent_results',
 		?string $name = null,
 	): self {
-		return $this->await_workflow_group(
+		return $this->wait_for_workflow_group(
 			$group_key,
 			$mode,
 			$quorum,
 			$result_key,
-			$name ?? 'await_agent_group',
+			$name ?? 'wait_for_agent_group',
 		);
 	}
 
@@ -1013,18 +1013,18 @@ class WorkflowBuilder {
 	}
 
 	/**
-	 * Limit how many fan-out items a single runtime expansion may create.
+	 * Limit how many for-each items a single runtime expansion may create.
 	 *
-	 * @param int $max Maximum fan-out items.
+	 * @param int $max Maximum for-each items.
 	 * @return self
 	 * @throws \InvalidArgumentException If the limit is less than 1.
 	 */
-	public function max_fan_out_items( int $max ): self {
+	public function max_for_each_items( int $max ): self {
 		if ( $max < 1 ) {
-			throw new \InvalidArgumentException( 'Workflow max_fan_out_items must be at least 1.' );
+			throw new \InvalidArgumentException( 'Workflow max_for_each_items must be at least 1.' );
 		}
 
-		$this->max_fan_out_items = $max;
+		$this->max_for_each_items = $max;
 		return $this;
 	}
 
@@ -1063,18 +1063,18 @@ class WorkflowBuilder {
 	}
 
 	/**
-	 * Limit how many child workflows a workflow may spawn in total.
+	 * Limit how many child workflows a workflow may start in total.
 	 *
-	 * @param int $max Maximum spawned workflows.
+	 * @param int $max Maximum started workflows.
 	 * @return self
 	 * @throws \InvalidArgumentException If the limit is less than 1.
 	 */
-	public function max_spawned_workflows( int $max ): self {
+	public function max_started_workflows( int $max ): self {
 		if ( $max < 1 ) {
-			throw new \InvalidArgumentException( 'Workflow max_spawned_workflows must be at least 1.' );
+			throw new \InvalidArgumentException( 'Workflow max_started_workflows must be at least 1.' );
 		}
 
-		$this->max_spawned_workflows = $max;
+		$this->max_started_workflows = $max;
 		return $this;
 	}
 
@@ -1150,7 +1150,7 @@ class WorkflowBuilder {
 	/**
 	 * Build the serialisable step definitions array.
 	 *
-	 * Sub-workflow builders are converted to their serialisable form.
+	 * Run-workflow builders are converted to their serialisable form.
 	 * The returned array is suitable for JSON-encoding in workflow state.
 	 *
 	 * @return array[]
@@ -1158,41 +1158,41 @@ class WorkflowBuilder {
 	public function build_steps(): array {
 		$result = array();
 		foreach ( $this->steps as $step ) {
-			if ( 'sub_workflow' === $step['type'] ) {
-				/* @var WorkflowBuilder $builder Sub-workflow builder instance. */
+			if ( 'run_workflow' === $step['type'] ) {
+				/* @var WorkflowBuilder $builder Run-workflow builder instance. */
 				$builder  = $step['builder'];
 				$result[] = array(
-					'type'             => 'sub_workflow',
-					'name'             => $step['name'],
-					'sub_name'         => $step['sub_name'],
-					'sub_steps'        => $builder->build_steps(),
-					'sub_queue'        => $builder->get_queue(),
-					'sub_priority'     => $builder->get_priority()->value,
-					'sub_max_attempts' => $builder->get_max_attempts(),
-					'compensation'     => $step['compensation'] ?? null,
+					'type'                  => 'run_workflow',
+					'name'                  => $step['name'],
+					'workflow_name'         => $step['workflow_name'],
+					'workflow_steps'        => $builder->build_steps(),
+					'workflow_queue'        => $builder->get_queue(),
+					'workflow_priority'     => $builder->get_priority()->value,
+					'workflow_max_attempts' => $builder->get_max_attempts(),
+					'compensation'          => $step['compensation'] ?? null,
 				);
-			} elseif ( 'timer' === $step['type'] ) {
+			} elseif ( 'delay' === $step['type'] ) {
 				$result[] = array(
-					'type'          => 'timer',
+					'type'          => 'delay',
 					'name'          => $step['name'],
 					'delay_seconds' => $step['delay_seconds'],
 					'compensation'  => $step['compensation'] ?? null,
 				);
-			} elseif ( 'fan_out' === $step['type'] ) {
+			} elseif ( 'for_each' === $step['type'] ) {
 				$result[] = array(
-					'type'          => 'fan_out',
+					'type'          => 'for_each',
 					'name'          => $step['name'],
 					'items_key'     => $step['items_key'],
 					'class'         => $step['class'],
 					'result_key'    => $step['result_key'],
-					'join_mode'     => $step['join_mode']->value,
+					'mode'          => $step['mode']->value,
 					'quorum'        => $step['quorum'],
 					'reducer_class' => $step['reducer_class'],
 					'compensation'  => $step['compensation'] ?? null,
 				);
-			} elseif ( 'signal' === $step['type'] ) {
+			} elseif ( 'wait_for_signal' === $step['type'] ) {
 				$result[] = array(
-					'type'            => 'signal',
+					'type'            => 'wait_for_signal',
 					'name'            => $step['name'],
 					'signal_name'     => $step['signal_names'][0],
 					'signal_names'    => $step['signal_names'],
@@ -1204,9 +1204,9 @@ class WorkflowBuilder {
 					'decision_map'    => $step['decision_map'] ?? null,
 					'compensation'    => $step['compensation'] ?? null,
 				);
-			} elseif ( 'workflow_wait' === $step['type'] ) {
+			} elseif ( 'wait_for_workflows' === $step['type'] ) {
 				$result[] = array(
-					'type'               => 'workflow_wait',
+					'type'               => 'wait_for_workflows',
 					'name'               => $step['name'],
 					'workflow_ids'       => $step['workflow_ids'] ?? null,
 					'workflow_id_key'    => $step['workflow_id_key'] ?? null,
@@ -1216,11 +1216,11 @@ class WorkflowBuilder {
 					'result_key'         => $step['result_key'],
 					'compensation'       => $step['compensation'] ?? null,
 				);
-			} elseif ( 'loop' === $step['type'] ) {
+			} elseif ( 'repeat' === $step['type'] ) {
 				$result[] = array(
-					'type'            => 'loop',
+					'type'            => 'repeat',
 					'name'            => $step['name'],
-					'loop_mode'       => $step['loop_mode'],
+					'repeat_mode'     => $step['repeat_mode'],
 					'target_step'     => $step['target_step'],
 					'state_key'       => $step['state_key'],
 					'expected'        => $step['expected'],
@@ -1228,9 +1228,9 @@ class WorkflowBuilder {
 					'max_iterations'  => $step['max_iterations'] ?? null,
 					'compensation'    => $step['compensation'] ?? null,
 				);
-			} elseif ( 'spawn_workflows' === $step['type'] ) {
+			} elseif ( 'start_workflows' === $step['type'] ) {
 				$result[] = array(
-					'type'                => 'spawn_workflows',
+					'type'                => 'start_workflows',
 					'name'                => $step['name'],
 					'items_key'           => $step['items_key'],
 					'result_key'          => $step['result_key'],
@@ -1281,7 +1281,7 @@ class WorkflowBuilder {
 			'deadline_handler'      => $this->deadline_handler,
 			'definition_version'    => $this->definition_version,
 			'max_transitions'       => $this->max_transitions,
-			'max_fan_out_items'     => $this->max_fan_out_items,
+			'max_for_each_items'    => $this->max_for_each_items,
 			'max_state_bytes'       => $this->max_state_bytes,
 			'compensate_on_failure' => $this->compensate_on_failure,
 		);
@@ -1298,10 +1298,10 @@ class WorkflowBuilder {
 		return array_filter(
 			array(
 				'max_transitions'       => $this->max_transitions,
-				'max_fan_out_items'     => $this->max_fan_out_items,
+				'max_for_each_items'    => $this->max_for_each_items,
 				'max_state_bytes'       => $this->max_state_bytes,
 				'max_cost_units'        => $this->max_cost_units,
-				'max_spawned_workflows' => $this->max_spawned_workflows,
+				'max_started_workflows' => $this->max_started_workflows,
 			),
 			static fn( mixed $value ): bool => null !== $value
 		);
@@ -1389,7 +1389,7 @@ class WorkflowBuilder {
 			$state['_workflow_counters'] = array(
 				'transitions'       => 0,
 				'cost_units'        => 0,
-				'spawned_workflows' => 0,
+				'started_workflows' => 0,
 			);
 		}
 
@@ -1544,10 +1544,10 @@ class WorkflowBuilder {
 					cost_units: $handler_defaults['cost_units'] ?? 1,
 				);
 			}
-		} elseif ( 'sub_workflow' === $step_def['type'] ) {
+		} elseif ( 'run_workflow' === $step_def['type'] ) {
 			// The parent must stay parked on this step until the child workflow completes.
 			$this->queue_ops->dispatch(
-				handler: '__queuety_sub_workflow',
+				handler: '__queuety_run_workflow',
 				payload: array( 'step_index' => $step_index ),
 				queue: $this->queue,
 				priority: $this->priority,
@@ -1556,9 +1556,9 @@ class WorkflowBuilder {
 				step_index: $step_index,
 				cost_units: 0,
 			);
-		} elseif ( 'timer' === $step_def['type'] ) {
+		} elseif ( 'delay' === $step_def['type'] ) {
 			$this->queue_ops->dispatch(
-				handler: '__queuety_timer',
+				handler: '__queuety_delay',
 				payload: array( 'step_index' => $step_index ),
 				queue: $this->queue,
 				priority: $this->priority,
@@ -1568,9 +1568,9 @@ class WorkflowBuilder {
 				step_index: $step_index,
 				cost_units: 0,
 			);
-		} elseif ( 'fan_out' === $step_def['type'] ) {
+		} elseif ( 'for_each' === $step_def['type'] ) {
 			$this->queue_ops->dispatch(
-				handler: '__queuety_fan_out',
+				handler: '__queuety_for_each',
 				payload: array( 'step_index' => $step_index ),
 				queue: $this->queue,
 				priority: $this->priority,
@@ -1579,10 +1579,10 @@ class WorkflowBuilder {
 				step_index: $step_index,
 				cost_units: 0,
 			);
-		} elseif ( 'signal' === $step_def['type'] ) {
+		} elseif ( 'wait_for_signal' === $step_def['type'] ) {
 			// Signal steps must round-trip through the workflow runtime so pre-sent signals can resume immediately.
 			$this->queue_ops->dispatch(
-				handler: '__queuety_signal',
+				handler: '__queuety_wait_for_signal',
 				payload: array( 'step_index' => $step_index ),
 				queue: $this->queue,
 				priority: $this->priority,
@@ -1591,9 +1591,9 @@ class WorkflowBuilder {
 				step_index: $step_index,
 				cost_units: 0,
 			);
-		} elseif ( 'workflow_wait' === $step_def['type'] ) {
+		} elseif ( 'wait_for_workflows' === $step_def['type'] ) {
 			$this->queue_ops->dispatch(
-				handler: '__queuety_workflow_wait',
+				handler: '__queuety_wait_for_workflows',
 				payload: array( 'step_index' => $step_index ),
 				queue: $this->queue,
 				priority: $this->priority,
@@ -1602,9 +1602,9 @@ class WorkflowBuilder {
 				step_index: $step_index,
 				cost_units: 0,
 			);
-		} elseif ( 'loop' === $step_def['type'] ) {
+		} elseif ( 'repeat' === $step_def['type'] ) {
 			$this->queue_ops->dispatch(
-				handler: '__queuety_loop',
+				handler: '__queuety_repeat',
 				payload: array( 'step_index' => $step_index ),
 				queue: $this->queue,
 				priority: $this->priority,
@@ -1613,9 +1613,9 @@ class WorkflowBuilder {
 				step_index: $step_index,
 				cost_units: 0,
 			);
-		} elseif ( 'spawn_workflows' === $step_def['type'] ) {
+		} elseif ( 'start_workflows' === $step_def['type'] ) {
 			$this->queue_ops->dispatch(
-				handler: '__queuety_spawn_workflows',
+				handler: '__queuety_start_workflows',
 				payload: array( 'step_index' => $step_index ),
 				queue: $this->queue,
 				priority: $this->priority,

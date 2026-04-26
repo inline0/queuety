@@ -86,9 +86,9 @@ class SignalTest extends IntegrationTestCase {
 		// Process step 1: signal placeholder. The placeholder settles the wait.
 		$this->process_one();
 
-		// Workflow should now be in waiting_signal status.
+		// Workflow should now be in waiting_for_signal status.
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 		$this->assertSame( 1, $status->current_step );
 
 		// No more jobs should be available.
@@ -110,7 +110,7 @@ class SignalTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 
 		// Send the signal with data.
 		Queuety::signal( $wf_id, 'approval', array(
@@ -186,14 +186,14 @@ class SignalTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 
 		// Send a signal with the WRONG name.
 		Queuety::signal( $wf_id, 'wrong_signal', array( 'data' => 'ignored' ) );
 
 		// Workflow should still be waiting.
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 		$this->assertSame( 1, $status->current_step );
 
 		// The wrong signal should be stored in the signals table though.
@@ -225,7 +225,7 @@ class SignalTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 
 		// Send the signal. This resumes the workflow and enqueues step 2.
 		Queuety::signal( $wf_id, 'review', array(
@@ -266,7 +266,7 @@ class SignalTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 
 		// Send first signal.
 		Queuety::signal( $wf_id, 'first_approval', array( 'first' => 'data' ) );
@@ -282,7 +282,7 @@ class SignalTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 		$this->assertSame( 3, $status->current_step );
 
 		// Send second signal.
@@ -315,7 +315,7 @@ class SignalTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 
 		// Send signal - should complete the workflow since it's the last step.
 		Queuety::signal( $wf_id, 'final_approval', array( 'approved' => true ) );
@@ -364,7 +364,7 @@ class SignalTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 		$this->assertSame( 0, $status->current_step );
 
 		// Send signal.
@@ -394,7 +394,7 @@ class SignalTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 		$this->assertSame( array( 'approved', 'reviewed' ), $status->waiting_for );
 		$this->assertSame( 'all', $status->wait_mode );
 		$this->assertSame( array(), $status->wait_details['matched'] );
@@ -402,7 +402,7 @@ class SignalTest extends IntegrationTestCase {
 
 		Queuety::signal( $wf_id, 'approved', array( 'decision' => 'approved' ) );
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 		$this->assertSame( array( 'approved' ), $status->wait_details['matched'] );
 		$this->assertSame( array( 'reviewed' ), $status->wait_details['remaining'] );
 
@@ -440,10 +440,10 @@ class SignalTest extends IntegrationTestCase {
 		);
 	}
 
-	public function test_await_approval_and_input_store_namespaced_payloads(): void {
+	public function test_wait_for_approval_and_input_store_namespaced_payloads(): void {
 		$wf_id = Queuety::workflow( 'approval_input' )
-			->await_approval()
-			->await_input()
+			->wait_for_approval()
+			->wait_for_input()
 			->dispatch();
 
 		$this->process_one();
@@ -452,7 +452,7 @@ class SignalTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 		$this->assertSame(
 			array(
 				'approved' => true,
@@ -474,7 +474,7 @@ class SignalTest extends IntegrationTestCase {
 			->wait_for_signal(
 				name: 'review_ready',
 				result_key: 'review',
-				step_name: 'await_review',
+				step_name: 'wait_for_review',
 				correlation_key: 'task_id',
 			)
 			->dispatch( array( 'task_id' => 'task-42' ) );
@@ -482,8 +482,8 @@ class SignalTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
-		$this->assertSame( 'await_review', $status->current_step_name );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
+		$this->assertSame( 'wait_for_review', $status->current_step_name );
 		$this->assertSame( 'all', $status->wait_mode );
 		$this->assertSame( 'task_id', $status->wait_details['correlation_key'] );
 		$this->assertSame( 'task-42', $status->wait_details['correlation_value'] );
@@ -493,7 +493,7 @@ class SignalTest extends IntegrationTestCase {
 		Queuety::signal( $wf_id, 'review_ready', array( 'task_id' => 'task-99', 'result' => 'ignore' ) );
 
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 		$this->assertSame( array(), $status->wait_details['matched'] );
 
 		Queuety::signal( $wf_id, 'review_ready', array( 'task_id' => 'task-42', 'result' => 'ship' ) );
@@ -509,15 +509,15 @@ class SignalTest extends IntegrationTestCase {
 		);
 	}
 
-	public function test_await_decision_and_helpers_capture_outcome(): void {
+	public function test_wait_for_decision_and_helpers_capture_outcome(): void {
 		$wf_id = Queuety::workflow( 'decision_gate' )
-			->await_decision( result_key: 'review' )
+			->wait_for_decision( result_key: 'review' )
 			->dispatch();
 
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 		$this->assertSame( 'any', $status->wait_mode );
 		$this->assertSame( array( 'approved', 'rejected' ), $status->waiting_for );
 

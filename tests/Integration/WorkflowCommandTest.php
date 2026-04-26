@@ -135,12 +135,12 @@ class WorkflowCommandTest extends TestCase {
 
 		$dependency_id = $this->create_test_workflow();
 		$wf_id         = $this->create_test_workflow(
-			'waiting_workflow',
+			'waiting_for_workflows',
 			array(
 				'_steps' => array(
 					array(
-						'type'       => 'workflow_wait',
-						'name'       => 'await_dependency',
+						'type'       => 'wait_for_workflows',
+						'name'       => 'wait_for_dependency',
 						'workflows'  => array( $dependency_id ),
 						'wait_mode'  => 'all',
 						'result_key' => 'dependency',
@@ -162,9 +162,9 @@ class WorkflowCommandTest extends TestCase {
 		$this->cmd->status( array( $wf_id ), array() );
 
 		$this->assert_logged_contains( "Workflow: test_workflow (#{$wf_id})" );
-		$this->assert_logged_contains( 'Status:   waiting_workflow' );
+		$this->assert_logged_contains( 'Status:   waiting_for_workflows' );
 		$this->assert_logged_contains( 'Step:     0/1' );
-		$this->assert_logged_contains( 'StepName: await_dependency' );
+		$this->assert_logged_contains( 'StepName: wait_for_dependency' );
 		$this->assert_logged_contains( "Waiting:  workflow => {$dependency_id}" );
 		$this->assert_logged_contains( 'WaitMode: all' );
 		$this->assert_logged_contains( 'Artifacts: 1' );

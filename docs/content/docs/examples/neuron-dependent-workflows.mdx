@@ -9,12 +9,12 @@ This example answers a common agentic question:
 
 > Can one workflow decide that another workflow should only continue after an earlier workflow finishes?
 
-Yes. The important nuance is that Queuety already supports this with `await_workflow()` and `await_workflows()`.
+Yes. The important nuance is that Queuety already supports this with `wait_for_workflow()` and `wait_for_workflows()`.
 
 That means:
 
 - workflow `X` can be dispatched now
-- `X` can park in `waiting_workflow`
+- `X` can park in `waiting_for_workflows`
 - `X` only resumes when workflow `Y` completes
 
 ## Example: research first, writing second
@@ -32,8 +32,8 @@ $research_agent = Queuety::workflow('research_agent')
 
 $research_id = Queuety::workflow('research_packet')
     ->then(PlanResearchTasksStep::class)
-    ->spawn_agents('agent_tasks', $research_agent)
-    ->await_agents(mode: WaitMode::All, result_key: 'agent_results')
+    ->start_agents('agent_tasks', $research_agent)
+    ->wait_for_agents(mode: WaitMode::All, result_key: 'agent_results')
     ->then(SynthesizeResearchPacketStep::class)
     ->dispatch([
         'brief_id' => 42,
@@ -45,9 +45,9 @@ $research_id = Queuety::workflow('research_packet')
 
 ```php
 Queuety::workflow('write_brief')
-    ->await_workflow('research_workflow_id', 'research')
+    ->wait_for_workflow('research_workflow_id', 'research')
     ->then(WriteBriefWithNeuronStep::class)
-    ->await_decision(result_key: 'editor_review')
+    ->wait_for_decision(result_key: 'editor_review')
     ->then(PublishBriefStep::class)
     ->dispatch([
         'brief_id' => 42,
@@ -56,7 +56,7 @@ Queuety::workflow('write_brief')
     ]);
 ```
 
-When the writing workflow starts, it immediately pauses in `waiting_workflow` until the research workflow has completed successfully.
+When the writing workflow starts, it immediately pauses in `waiting_for_workflows` until the research workflow has completed successfully.
 
 ## The Neuron writing step
 
@@ -95,7 +95,7 @@ final class WriteBriefWithNeuronStep implements Step
 }
 ```
 
-`$state['research']` is available because `await_workflow()` copied the completed public state from the dependency workflow into the current workflow under the `research` key.
+`$state['research']` is available because `wait_for_workflow()` copied the completed public state from the dependency workflow into the current workflow under the `research` key.
 
 ## When to use this instead of one giant workflow
 
@@ -124,7 +124,7 @@ It does **not** mean:
 
 - `X` is not created until `Y` is done
 
-If you want the second behavior, have a parent workflow wait for `Y` and only then call `spawn_workflows()` or `spawn_agents()` for `X`.
+If you want the second behavior, have a parent workflow wait for `Y` and only then call `start_workflows()` or `start_agents()` for `X`.
 
 ## Related docs
 

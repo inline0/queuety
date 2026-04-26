@@ -343,8 +343,8 @@ reset_queuety_runtime
 
 REVIEW_WF_ID=$(wp_eval "
     \$wf_id = Queuety\Queuety::workflow('review_gate')
-        ->await_approval(result_key: 'approval')
-        ->await_input(result_key: 'revision_notes')
+        ->wait_for_approval(result_key: 'approval')
+        ->wait_for_input(result_key: 'revision_notes')
         ->then('WpEnvReviewFinalizeStep')
         ->dispatch(['draft_id' => 9]);
     echo \$wf_id;
@@ -356,7 +356,7 @@ if [ -n "$REVIEW_WF_ID" ] && [ "$REVIEW_WF_ID" != "0" ]; then
     wp_process_one > /dev/null 2>&1 || true
 
     REVIEW_WAIT=$(wp_cli queuety workflow status "$REVIEW_WF_ID" 2>/dev/null || true)
-    assert_contains "$REVIEW_WAIT" "waiting_signal" "review workflow waits for approval"
+    assert_contains "$REVIEW_WAIT" "waiting_for_signal" "review workflow waits for approval"
     assert_contains "$REVIEW_WAIT" "approval" "review workflow status shows approval wait"
 
     REVIEW_APPROVE=$(wp_cli queuety workflow approve "$REVIEW_WF_ID" --data='{"approved":true,"by":"editor"}' 2>/dev/null || true)
@@ -365,7 +365,7 @@ if [ -n "$REVIEW_WF_ID" ] && [ "$REVIEW_WF_ID" != "0" ]; then
     wp_process_one > /dev/null 2>&1 || true
 
     REVIEW_INPUT_WAIT=$(wp_cli queuety workflow status "$REVIEW_WF_ID" 2>/dev/null || true)
-    assert_contains "$REVIEW_INPUT_WAIT" "waiting_signal" "review workflow waits for input after approval"
+    assert_contains "$REVIEW_INPUT_WAIT" "waiting_for_signal" "review workflow waits for input after approval"
     assert_contains "$REVIEW_INPUT_WAIT" "editor" "approval payload is visible in workflow state"
 
     REVIEW_INPUT=$(wp_cli queuety workflow input "$REVIEW_WF_ID" --data='{"note":"ship it"}' 2>/dev/null || true)
@@ -392,8 +392,8 @@ AGENT_WF_ID=$(wp_eval "
         ->max_attempts(1);
 
     \$wf_id = Queuety\Queuety::workflow('wp_env_agent_parent')
-        ->spawn_agents('agent_tasks', \$child, group_key: 'researchers')
-        ->await_agent_group('researchers', \Queuety\Enums\WaitMode::Quorum, 2, 'agent_results')
+        ->start_agents('agent_tasks', \$child, group_key: 'researchers')
+        ->wait_for_agent_group('researchers', \Queuety\Enums\WaitMode::Quorum, 2, 'agent_results')
         ->then('WpEnvAgentSummaryStep')
         ->dispatch([
             'agent_tasks' => [
@@ -412,7 +412,7 @@ if [ -n "$AGENT_WF_ID" ] && [ "$AGENT_WF_ID" != "0" ]; then
     wp_process_one > /dev/null 2>&1 || true
 
     AGENT_RUNNING=$(wp_cli queuety workflow status "$AGENT_WF_ID" 2>/dev/null || true)
-    assert_contains "$AGENT_RUNNING" "running" "agent workflow continues after spawning children"
+    assert_contains "$AGENT_RUNNING" "running" "agent workflow continues after starting children"
 
     wp_process_one > /dev/null 2>&1 || true
     wp_process_one > /dev/null 2>&1 || true

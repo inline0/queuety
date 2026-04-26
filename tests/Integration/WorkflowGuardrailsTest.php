@@ -11,8 +11,8 @@ use Queuety\Queue;
 use Queuety\Tests\Integration\Fixtures\AccumulatingStep;
 use Queuety\Tests\Integration\Fixtures\CostlyAccumulatingStep;
 use Queuety\Tests\Integration\Fixtures\DataFetchStep;
-use Queuety\Tests\Integration\Fixtures\FanOutItemStep;
-use Queuety\Tests\Integration\Fixtures\FanOutPlanningStep;
+use Queuety\Tests\Integration\Fixtures\ForEachItemStep;
+use Queuety\Tests\Integration\Fixtures\ForEachPlanningStep;
 use Queuety\Worker;
 use Queuety\Workflow;
 use Queuety\WorkflowBuilder;
@@ -86,13 +86,13 @@ class WorkflowGuardrailsTest extends IntegrationTestCase {
 		$this->assertSame( 1, (int) $stmt->fetchColumn() );
 	}
 
-	public function test_max_fan_out_items_fails_workflow_immediately(): void {
-		$workflow_id = ( new WorkflowBuilder( 'fan_out_budget', $this->conn, $this->queue, $this->logger ) )
-			->max_fan_out_items( 2 )
-			->then( FanOutPlanningStep::class )
-			->fan_out(
+	public function test_max_for_each_items_fails_workflow_immediately(): void {
+		$workflow_id = ( new WorkflowBuilder( 'for_each_budget', $this->conn, $this->queue, $this->logger ) )
+			->max_for_each_items( 2 )
+			->then( ForEachPlanningStep::class )
+			->for_each(
 				items_key: 'tasks',
-				handler_class: FanOutItemStep::class,
+				handler_class: ForEachItemStep::class,
 				result_key: 'task_results',
 				name: 'expand_tasks',
 			)
@@ -132,8 +132,8 @@ class WorkflowGuardrailsTest extends IntegrationTestCase {
 		$this->assertSame( WorkflowStatus::Failed, $status->status );
 	}
 
-	public function test_max_transitions_fails_repeating_workflow_when_loop_runs_too_long(): void {
-		$workflow_id = ( new WorkflowBuilder( 'loop_transition_budget', $this->conn, $this->queue, $this->logger ) )
+	public function test_max_transitions_fails_repeating_workflow_when_repeat_runs_too_long(): void {
+		$workflow_id = ( new WorkflowBuilder( 'repeat_transition_budget', $this->conn, $this->queue, $this->logger ) )
 			->max_transitions( 3 )
 			->then( AccumulatingStep::class, 'increment' )
 			->repeat_until( 'increment', 'counter', 99, 'keep_counting' )
@@ -180,13 +180,13 @@ class WorkflowGuardrailsTest extends IntegrationTestCase {
 		$this->assertSame( WorkflowStatus::Failed, $status->status );
 	}
 
-	public function test_max_spawned_workflows_fails_before_spawn_step_dispatches_children(): void {
+	public function test_max_started_workflows_fails_before_start_step_dispatches_children(): void {
 		$child = ( new WorkflowBuilder( 'child_agent', $this->conn, $this->queue, $this->logger ) )
 			->then( AccumulatingStep::class );
 
-		$workflow_id = ( new WorkflowBuilder( 'spawn_budget', $this->conn, $this->queue, $this->logger ) )
-			->max_spawned_workflows( 1 )
-			->spawn_workflows( 'tasks', $child, 'child_workflow_ids' )
+		$workflow_id = ( new WorkflowBuilder( 'start_budget', $this->conn, $this->queue, $this->logger ) )
+			->max_started_workflows( 1 )
+			->start_workflows( 'tasks', $child, 'child_workflow_ids' )
 			->dispatch(
 				array(
 					'tasks' => array(

@@ -7,11 +7,11 @@ description: Use Neuron agents inside Queuety planner/executor workflows with pr
 
 This example uses Queuety for orchestration and Neuron for the actual agent execution.
 
-The pattern is straightforward. A Queuety planner step decides what work exists, `spawn_agents()` turns those tasks into independent top-level workflows, each child workflow runs a Neuron agent, and `await_agents()` joins the results back into the parent workflow.
+The pattern is straightforward. A Queuety planner step decides what work exists, `start_agents()` turns those tasks into independent top-level workflows, each child workflow runs a Neuron agent, and `wait_for_agents()` aggregates the results back into the parent workflow.
 
 ## Why this split works well
 
-Neuron is good at switching providers with minimal code changes and encapsulating the prompt, tools, and memory for a specialist agent. Queuety is good at durable fan-out and joining, retries, resumability, and the inspection or human-review surfaces around the run.
+Neuron is good at switching providers with minimal code changes and encapsulating the prompt, tools, and memory for a specialist agent. Queuety is good at durable for-each and completion modes, retries, resumability, and the inspection or human-review surfaces around the run.
 
 ## Step 1: create a provider-switchable Neuron agent
 
@@ -102,7 +102,7 @@ final class ResearchTopicStep implements Step
 
 This is the key integration point: Neuron handles the LLM call, but Queuety still owns the step boundary and persisted workflow state.
 
-## Step 3: let the planner spawn agent runs
+## Step 3: let the planner start agent runs
 
 ```php
 use Queuety\Enums\WaitMode;
@@ -114,8 +114,8 @@ $agent_workflow = Queuety::workflow('research_agent_run')
 Queuety::workflow('brief_research')
     ->version('brief-research.v1')
     ->then(PlanResearchTasksStep::class) // writes $state['agent_tasks']
-    ->spawn_agents('agent_tasks', $agent_workflow)
-    ->await_agents(mode: WaitMode::All, result_key: 'agent_results')
+    ->start_agents('agent_tasks', $agent_workflow)
+    ->wait_for_agents(mode: WaitMode::All, result_key: 'agent_results')
     ->then(SynthesizeBriefStep::class)
     ->dispatch([
         'brief_id' => 42,
@@ -141,7 +141,7 @@ Queuety will create one top-level workflow per task, wait until they are all com
 
 You could do that, but you would lose the orchestration advantages:
 
-Each agent run would stop being individually inspectable, a partial crash would likely restart the whole batch, and there would be no clean join point for later stages.
+Each agent run would stop being individually inspectable, a partial crash would likely restart the whole batch, and there would be no clean completion point for later stages.
 
 This pattern keeps the agent code simple while letting Queuety own the durable orchestration.
 

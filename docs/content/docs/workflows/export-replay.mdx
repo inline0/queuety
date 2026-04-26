@@ -148,11 +148,11 @@ When you replay an exported workflow:
 3. Historical workflow events and logs are re-inserted into the new environment
 4. Stored signals and workflow-wait dependency rows are replayed as historical state
 5. If the original workflow was still `running`, the current step is enqueued for processing
-6. If the original workflow was `waiting_signal`, `waiting_workflow`, `paused`, `failed`, or `completed`, that status is preserved on the replayed workflow
+6. If the original workflow was `waiting_for_signal`, `waiting_for_workflows`, `paused`, `failed`, or `completed`, that status is preserved on the replayed workflow
 
 The replayed workflow gets a new ID and operates independently. It does not affect the original.
 
-For `waiting_workflow` replays, the exported dependency rows are recreated with the same workflow IDs. That is useful for auditing and for environments where those dependency workflows also exist, but it does not automatically remap dependency IDs across environments.
+For `waiting_for_workflows` replays, the exported dependency rows are recreated with the same workflow IDs. That is useful for auditing and for environments where those dependency workflows also exist, but it does not automatically remap dependency IDs across environments.
 
 ## Use cases
 

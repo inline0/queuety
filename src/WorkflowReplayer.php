@@ -47,32 +47,32 @@ class WorkflowReplayer {
 			throw new \RuntimeException( 'Invalid export data: missing workflow key.' );
 		}
 
-		$wf_data = $export_data['workflow'];
-		$events  = $export_data['events'] ?? array();
-		$logs    = $export_data['logs'] ?? array();
-		$signals = $export_data['signals'] ?? array();
-		$waits   = $export_data['wait_dependencies'] ?? array();
+		$wf_data   = $export_data['workflow'];
+		$events    = $export_data['events'] ?? array();
+		$logs      = $export_data['logs'] ?? array();
+		$signals   = $export_data['signals'] ?? array();
+		$waits     = $export_data['wait_dependencies'] ?? array();
 		$artifacts = $export_data['artifacts'] ?? array();
 
-		$pdo    = $conn->pdo();
-		$wf_tbl = $conn->table( Config::table_workflows() );
-		$ev_tbl = $conn->table( Config::table_workflow_events() );
-		$lg_tbl = $conn->table( Config::table_logs() );
+		$pdo     = $conn->pdo();
+		$wf_tbl  = $conn->table( Config::table_workflows() );
+		$ev_tbl  = $conn->table( Config::table_workflow_events() );
+		$lg_tbl  = $conn->table( Config::table_logs() );
 		$sig_tbl = $conn->table( Config::table_signals() );
 		$dep_tbl = $conn->table( Config::table_workflow_dependencies() );
 		$art_tbl = $conn->table( Config::table_artifacts() );
 
-		$state        = $wf_data['state'] ?? array();
-		$current_step = (int) ( $wf_data['current_step'] ?? 0 );
-		$total_steps  = (int) ( $wf_data['total_steps'] ?? 0 );
-		$steps        = $state['_steps'] ?? array();
-		$queue_name   = $state['_queue'] ?? 'default';
-		$priority_val = $state['_priority'] ?? 0;
-		$max_attempts = $state['_max_attempts'] ?? 3;
+		$state         = $wf_data['state'] ?? array();
+		$current_step  = (int) ( $wf_data['current_step'] ?? 0 );
+		$total_steps   = (int) ( $wf_data['total_steps'] ?? 0 );
+		$steps         = $state['_steps'] ?? array();
+		$queue_name    = $state['_queue'] ?? 'default';
+		$priority_val  = $state['_priority'] ?? 0;
+		$max_attempts  = $state['_max_attempts'] ?? 3;
 		$source_status = (string) ( $wf_data['status'] ?? 'running' );
 		$replay_status = in_array(
 			$source_status,
-			array( 'running', 'completed', 'failed', 'paused', 'waiting_signal', 'waiting_workflow', 'cancelled' ),
+			array( 'running', 'completed', 'failed', 'paused', 'waiting_for_signal', 'waiting_for_workflows', 'cancelled' ),
 			true
 		) ? $source_status : 'running';
 		$replay_step   = 'completed' === $replay_status ? $total_steps : $current_step;
@@ -311,9 +311,9 @@ class WorkflowReplayer {
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 			);
-		} elseif ( 'timer' === $type ) {
+		} elseif ( 'delay' === $type ) {
 			$queue->dispatch(
-				handler: '__queuety_timer',
+				handler: '__queuety_delay',
 				payload: array( 'step_index' => $step_index ),
 				queue: $queue_name,
 				priority: $priority,
@@ -322,9 +322,9 @@ class WorkflowReplayer {
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 			);
-		} elseif ( 'sub_workflow' === $type ) {
+		} elseif ( 'run_workflow' === $type ) {
 			$queue->dispatch(
-				handler: '__queuety_sub_workflow',
+				handler: '__queuety_run_workflow',
 				payload: array( 'step_index' => $step_index ),
 				queue: $queue_name,
 				priority: $priority,
@@ -332,9 +332,9 @@ class WorkflowReplayer {
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 			);
-		} elseif ( 'fan_out' === $type ) {
+		} elseif ( 'for_each' === $type ) {
 			$queue->dispatch(
-				handler: '__queuety_fan_out',
+				handler: '__queuety_for_each',
 				payload: array( 'step_index' => $step_index ),
 				queue: $queue_name,
 				priority: $priority,
@@ -342,9 +342,9 @@ class WorkflowReplayer {
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 			);
-		} elseif ( 'signal' === $type ) {
+		} elseif ( 'wait_for_signal' === $type ) {
 			$queue->dispatch(
-				handler: '__queuety_signal',
+				handler: '__queuety_wait_for_signal',
 				payload: array( 'step_index' => $step_index ),
 				queue: $queue_name,
 				priority: $priority,
@@ -352,9 +352,9 @@ class WorkflowReplayer {
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 			);
-		} elseif ( 'workflow_wait' === $type ) {
+		} elseif ( 'wait_for_workflows' === $type ) {
 			$queue->dispatch(
-				handler: '__queuety_workflow_wait',
+				handler: '__queuety_wait_for_workflows',
 				payload: array( 'step_index' => $step_index ),
 				queue: $queue_name,
 				priority: $priority,

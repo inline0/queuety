@@ -4,7 +4,7 @@ namespace Queuety\Tests\Integration\Fixtures;
 
 use Queuety\Step;
 
-class FanOutPlanningStep implements Step {
+class ForEachPlanningStep implements Step {
 
 	public function handle( array $state ): array {
 		return array(

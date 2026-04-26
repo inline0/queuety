@@ -34,7 +34,7 @@ use Queuety\Workflow;
  * End-to-end scenario tests for the modern Queuety API.
  *
  * Each test exercises a realistic use case across multiple subsystems:
- * Dispatchable jobs, batches, chains, workflows, middleware, signals, and timers.
+ * Dispatchable jobs, batches, chains, workflows, middleware, signals, and delays.
  */
 class ModernApiScenarioTest extends IntegrationTestCase {
 
@@ -497,13 +497,13 @@ class ModernApiScenarioTest extends IntegrationTestCase {
 	}
 
 	// -------------------------------------------------------------------------
-	// 11. Workflow with timer and signal
+	// 11. Workflow with delay and signal
 	// -------------------------------------------------------------------------
 
-	public function test_workflow_with_timer_and_signal(): void {
-		$wf_id = Queuety::workflow( 'timer_signal_flow' )
+	public function test_workflow_with_delay_and_signal(): void {
+		$wf_id = Queuety::workflow( 'delay_signal_flow' )
 			->then( FetchUserDataStep::class )
-			->sleep( seconds: 60 )
+			->delay( seconds: 60 )
 			->wait_for_signal( 'approval' )
 			->then( ApprovalStep::class )
 			->dispatch( array( 'user_id' => 50 ) );
@@ -515,28 +515,28 @@ class ModernApiScenarioTest extends IntegrationTestCase {
 		$this->assertSame( 1, $status->current_step );
 		$this->assertTrue( $status->state['fetched'] );
 
-		// Step 1 is a timer with 60s delay. The job exists but is not yet claimable.
-		$timer_job = $this->queue->claim();
-		$this->assertNull( $timer_job, 'Timer job should not be claimable before delay expires.' );
+		// Step 1 is a delay with 60s delay. The job exists but is not yet claimable.
+		$delay_job = $this->queue->claim();
+		$this->assertNull( $delay_job, 'Delay job should not be claimable before delay expires.' );
 
-		// Look up the timer job and reset its available_at to now.
+		// Look up the delay job and reset its available_at to now.
 		$jb_tbl = $this->conn->table( Config::table_jobs() );
 		$stmt   = $this->conn->pdo()->prepare(
 			"SELECT id FROM {$jb_tbl}
-			WHERE workflow_id = :wf_id AND handler = '__queuety_timer'
+			WHERE workflow_id = :wf_id AND handler = '__queuety_delay'
 			LIMIT 1"
 		);
 		$stmt->execute( array( 'wf_id' => $wf_id ) );
-		$timer_row = $stmt->fetch();
-		$this->assertNotFalse( $timer_row );
+		$delay_row = $stmt->fetch();
+		$this->assertNotFalse( $delay_row );
 
 		$this->raw_update(
 			Config::table_jobs(),
 			array( 'available_at' => gmdate( 'Y-m-d H:i:s', time() - 10 ) ),
-			array( 'id' => $timer_row['id'] ),
+			array( 'id' => $delay_row['id'] ),
 		);
 
-		// Process the timer job.
+		// Process the delay job.
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
@@ -546,7 +546,7 @@ class ModernApiScenarioTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 
 		// Send the approval signal.
 		Queuety::signal( $wf_id, 'approval', array(

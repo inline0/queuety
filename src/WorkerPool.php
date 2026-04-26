@@ -12,7 +12,7 @@ use Queuety\Cache\CacheFactory;
 /**
  * Forks multiple worker processes and monitors them.
  *
- * Uses pcntl_fork() to spawn N child workers. The parent process
+ * Uses pcntl_fork() to start N child workers. The parent process
  * monitors children, restarts crashed ones, and handles graceful
  * shutdown on SIGTERM/SIGINT.
  */
@@ -246,7 +246,7 @@ class WorkerPool {
 	 *
 	 * @param int    $pid    Exited child PID.
 	 * @param int    $status Exit status.
-	 * @param string $queue  Queue name for respawning.
+	 * @param string $queue  Queue name for restarting.
 	 */
 	private function handle_child_exit( int $pid, int $status, string $queue ): void {
 		$meta = $this->children[ $pid ] ?? array(

@@ -51,7 +51,7 @@ If the entered state has an `action()`, Queuety enqueues a state-entry job. That
 
 ## Choosing between workflows and state machines
 
-Use a workflow when the run is fundamentally step-oriented. Fetch data, fan out work, wait, synthesize, finish. That model is a good fit when there is a clear start and finish and the main question is what work should execute next.
+Use a workflow when the run is fundamentally step-oriented. Fetch data, for each work, wait, synthesize, finish. That model is a good fit when there is a clear start and finish and the main question is what work should execute next.
 
 Use a state machine when valid behavior depends on the current lifecycle phase. That is the better fit when events may arrive in different orders, when the entity may live for a long time, or when you need explicit lifecycle inspection with states like `awaiting_user`, `planning`, `running_agents`, `awaiting_review`, and `completed`.
 
@@ -114,6 +114,6 @@ State machines are especially useful for agent systems that behave more like ses
 - [Agent Orchestration](/docs/workflows/agent-orchestration)
 - [Workflow Signals](/docs/workflows/signals)
 - [Workflow Dependencies](/docs/workflows/dependencies)
-- [Loops](/docs/workflows/loops)
+- [Repeats](/docs/workflows/repeats)
 - [Artifacts](/docs/features/artifacts)
 - [PHP API](/docs/api)

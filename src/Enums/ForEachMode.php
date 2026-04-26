@@ -1,13 +1,13 @@
 <?php
 /**
- * Fan-out join modes.
+ * For-each completion modes.
  *
  * @package Queuety
  */
 
 namespace Queuety\Enums;
 
-enum JoinMode: string {
+enum ForEachMode: string {
 	case All          = 'all';
 	case FirstSuccess = 'first_success';
 	case Quorum       = 'quorum';

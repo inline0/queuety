@@ -1,6 +1,6 @@
 <?php
 /**
- * Fan-out branch handler contract.
+ * For-each branch handler contract.
  *
  * @package Queuety
  */
@@ -8,9 +8,9 @@
 namespace Queuety\Contracts;
 
 /**
- * Handles one dynamically generated branch item inside a fan-out workflow step.
+ * Handles one dynamically generated branch item inside a for-each workflow step.
  */
-interface FanOutHandler {
+interface ForEachHandler {
 
 	/**
 	 * Process a single branch item.
@@ -18,7 +18,7 @@ interface FanOutHandler {
 	 * @param array $state Accumulated workflow state.
 	 * @param mixed $item  The branch item payload for this branch.
 	 * @param int   $index Zero-based branch index.
-	 * @return array Data to contribute to the fan-out aggregate.
+	 * @return array Data to contribute to the for-each aggregate.
 	 */
 	public function handle_item( array $state, mixed $item, int $index ): array;
 

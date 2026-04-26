@@ -4,7 +4,7 @@ namespace Queuety\Tests\Integration\Fixtures;
 
 use Queuety\Step;
 
-class LoopFlagStep implements Step {
+class RepeatFlagStep implements Step {
 
 	public function handle( array $state ): array {
 		$counter = (int) ( $state['counter'] ?? 0 ) + 1;

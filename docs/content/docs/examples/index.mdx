@@ -9,7 +9,7 @@ This section focuses on complete patterns rather than isolated primitives.
 
 The first examples here use [Neuron](https://docs.neuron-ai.dev/overview/getting-started) as the agent runtime, while Queuety stays responsible for orchestration:
 
-- Queuety owns workflow durability, state-machine lifecycle, retries, fan-out, cross-workflow waits, and human gates
+- Queuety owns workflow durability, state-machine lifecycle, retries, for-each, cross-workflow waits, and human gates
 - Neuron owns model/provider selection, agent execution, streaming, and chat memory
 
 That split is deliberate. Neuron has its own workflow concepts, but these examples intentionally keep Queuety as the orchestration engine and use Neuron only for agent execution concerns.

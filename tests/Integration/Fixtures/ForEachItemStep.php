@@ -2,15 +2,15 @@
 
 namespace Queuety\Tests\Integration\Fixtures;
 
-use Queuety\Contracts\FanOutHandler;
+use Queuety\Contracts\ForEachHandler;
 
-class FanOutItemStep implements FanOutHandler {
+class ForEachItemStep implements ForEachHandler {
 
 	public function handle_item( array $state, mixed $item, int $index ): array {
 		$item = is_array( $item ) ? $item : array( 'value' => $item );
 
 		if ( ( $item['action'] ?? 'success' ) === 'fail' ) {
-			throw new \RuntimeException( 'Fan-out branch failed' );
+			throw new \RuntimeException( 'For-each branch failed' );
 		}
 
 		return array(

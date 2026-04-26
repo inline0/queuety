@@ -1,3 +1,3 @@
 {
-  "pages": ["index", "chains", "parallel", "fan-out", "async-handoffs", "agent-orchestration", "dependencies", "conditional", "loops", "sub-workflows", "templates", "file-workflows", "timers", "signals", "guardrails", "compensation", "streaming", "cancellation", "event-log", "time-travel", "forking", "deadlines", "export-replay"]
+  "pages": ["index", "chains", "parallel", "for-each", "async-handoffs", "agent-orchestration", "dependencies", "conditional", "repeats", "run-workflows", "templates", "file-workflows", "delays", "signals", "guardrails", "compensation", "streaming", "cancellation", "event-log", "time-travel", "forking", "deadlines", "export-replay"]
 }

@@ -1,24 +1,24 @@
 ---
-title: Durable Timers
-description: Pause a workflow for a fixed duration using durable timer steps.
+title: Durable Delays
+description: Pause a workflow for a fixed duration using durable delay steps.
 ---
 
-# Durable Timers
+# Durable Delays
 
-Workflows can pause for a fixed duration between steps using the `sleep()` builder method. Timer steps are durable: the delay is stored in the database, so it survives worker restarts, deploys, and server reboots.
+Workflows can pause for a fixed duration between steps using the `delay()` builder method. Delay steps are durable: the delay is stored in the database, so it survives worker restarts, deploys, and server reboots.
 
-## The `->sleep()` method
+## The `->delay()` method
 
-Add a timer step anywhere in the workflow chain:
+Add a delay step anywhere in the workflow chain:
 
 ```php
 use Queuety\Queuety;
 
 Queuety::workflow( 'drip_campaign' )
     ->then( SendWelcomeEmailHandler::class )
-    ->sleep( days: 1 )
+    ->delay( days: 1 )
     ->then( SendFollowUpEmailHandler::class )
-    ->sleep( days: 3 )
+    ->delay( days: 3 )
     ->then( SendFinalEmailHandler::class )
     ->dispatch( [ 'user_id' => 42 ] );
 ```
@@ -33,7 +33,7 @@ The workflow will:
 
 ## Duration parameters
 
-The `sleep()` method accepts any combination of named duration parameters:
+The `delay()` method accepts any combination of named duration parameters:
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -45,28 +45,28 @@ The `sleep()` method accepts any combination of named duration parameters:
 All values are summed together. These are equivalent:
 
 ```php
-->sleep( seconds: 3600 )
-->sleep( minutes: 60 )
-->sleep( hours: 1 )
+->delay( seconds: 3600 )
+->delay( minutes: 60 )
+->delay( hours: 1 )
 ```
 
 You can combine them:
 
 ```php
-->sleep( hours: 1, minutes: 30 ) // 90 minutes total
+->delay( hours: 1, minutes: 30 ) // 90 minutes total
 ```
 
-## How timer steps work
+## How delay steps work
 
-When a workflow reaches a timer step, Queuety dispatches an internal `__queuety_timer` job with its `available_at` column set to the current time plus the delay duration. The job sits in the database and is not claimed by any worker until the delay has elapsed.
+When a workflow reaches a delay step, Queuety dispatches an internal `__queuety_delay` job with its `available_at` column set to the current time plus the delay duration. The job sits in the database and is not claimed by any worker until the delay has elapsed.
 
 This means:
 
-- **No polling.** Workers do not repeatedly check the timer. The job simply becomes available when the time comes.
-- **No memory usage.** Nothing is running during the wait. The timer exists only as a database row.
-- **Survives restarts.** If the worker restarts, the timer job is still in the queue with the correct `available_at` timestamp.
+- **No polling.** Workers do not repeatedly check the delay. The job simply becomes available when the time comes.
+- **No memory usage.** Nothing is running during the wait. The delay exists only as a database row.
+- **Survives restarts.** If the worker restarts, the delay job is still in the queue with the correct `available_at` timestamp.
 
-When the timer job is claimed after the delay, the workflow advances to the next step automatically.
+When the delay job is claimed after the delay, the workflow advances to the next step automatically.
 
 ## Example: delayed notifications
 
@@ -75,7 +75,7 @@ Send a reminder 1 hour after a user signs up, but only if they have not complete
 ```php
 Queuety::workflow( 'onboarding_reminder' )
     ->then( CreateAccountHandler::class )
-    ->sleep( hours: 1 )
+    ->delay( hours: 1 )
     ->then( CheckOnboardingHandler::class )
     ->then( SendReminderHandler::class )
     ->dispatch( [ 'email' => 'user@example.com' ] );
@@ -90,26 +90,26 @@ Insert deliberate delays between retry-like steps:
 ```php
 Queuety::workflow( 'poll_external_api' )
     ->then( CheckStatusHandler::class, 'check' )
-    ->sleep( minutes: 5 )
+    ->delay( minutes: 5 )
     ->then( CheckStatusHandler::class, 'recheck' )
-    ->sleep( minutes: 15 )
+    ->delay( minutes: 15 )
     ->then( CheckStatusHandler::class, 'final_check' )
     ->then( ProcessResultHandler::class )
     ->dispatch( [ 'external_id' => 'abc-123' ] );
 ```
 
-## Multiple timers
+## Multiple delays
 
-A workflow can contain any number of timer steps. Each timer is independent and tracked by a sequential name (`timer_0`, `timer_1`, etc.) in the workflow state.
+A workflow can contain any number of delay steps. Each delay is independent and tracked by a sequential name (`delay_0`, `delay_1`, etc.) in the workflow state.
 
 ```php
 Queuety::workflow( 'multi_step_drip' )
     ->then( StepA::class )
-    ->sleep( hours: 2 )
+    ->delay( hours: 2 )
     ->then( StepB::class )
-    ->sleep( days: 1 )
+    ->delay( days: 1 )
     ->then( StepC::class )
-    ->sleep( minutes: 30 )
+    ->delay( minutes: 30 )
     ->then( StepD::class )
     ->dispatch( $payload );
 ```

@@ -54,8 +54,8 @@ class WorkflowExportTest extends IntegrationTestCase {
 		return $wf_id;
 	}
 
-	private function create_waiting_signal_workflow(): int {
-		$builder = new WorkflowBuilder( 'test_waiting_signal_export', $this->conn, $this->queue, $this->logger );
+	private function create_waiting_for_signal_workflow(): int {
+		$builder = new WorkflowBuilder( 'test_waiting_for_signal_export', $this->conn, $this->queue, $this->logger );
 		$builder->version( 'signals.v1' )
 			->then( 'StepA' )
 			->wait_for_signal( 'approval', 'approval_payload' )
@@ -79,13 +79,13 @@ class WorkflowExportTest extends IntegrationTestCase {
 		return $wf_id;
 	}
 
-	private function create_waiting_workflow_dependency(): array {
+	private function create_waiting_for_workflows_dependency(): array {
 		$dependency_id = ( new WorkflowBuilder( 'dependency_export', $this->conn, $this->queue, $this->logger ) )
 			->then( 'StepA' )
 			->dispatch();
 
 		$parent_id = ( new WorkflowBuilder( 'parent_export', $this->conn, $this->queue, $this->logger ) )
-			->await_workflow( $dependency_id, 'dependency' )
+			->wait_for_workflow( $dependency_id, 'dependency' )
 			->then( 'StepB' )
 			->dispatch();
 
@@ -94,7 +94,7 @@ class WorkflowExportTest extends IntegrationTestCase {
 		$job = $this->queue->claim();
 		$this->assertNotNull( $job );
 		$this->queue->complete( $job->id );
-		$this->workflow->handle_workflow_wait_step(
+		$this->workflow->handle_wait_for_workflows_step(
 			$parent_id,
 			$state['_steps'][0],
 			0,
@@ -150,7 +150,7 @@ class WorkflowExportTest extends IntegrationTestCase {
 	}
 
 	public function test_export_includes_signals_and_wait_dependencies(): void {
-		$signal_workflow_id = $this->create_waiting_signal_workflow();
+		$signal_workflow_id = $this->create_waiting_for_signal_workflow();
 		$this->workflow->handle_signal( $signal_workflow_id, 'approval', array( 'approved' => false ) );
 		$signal_export = WorkflowExporter::export( $signal_workflow_id, $this->conn );
 
@@ -158,7 +158,7 @@ class WorkflowExportTest extends IntegrationTestCase {
 		$this->assertCount( 1, $signal_export['signals'] );
 		$this->assertSame( 'approval', $signal_export['signals'][0]['signal_name'] );
 
-		[ $waiting_workflow_id ] = $this->create_waiting_workflow_dependency();
+		[ $waiting_workflow_id ] = $this->create_waiting_for_workflows_dependency();
 		$wait_export             = WorkflowExporter::export( $waiting_workflow_id, $this->conn );
 
 		$this->assertArrayHasKey( 'wait_dependencies', $wait_export );
@@ -235,18 +235,18 @@ class WorkflowExportTest extends IntegrationTestCase {
 		$this->assertCount( 2, $completed );
 	}
 
-	public function test_replay_preserves_waiting_signal_status_and_history(): void {
-		$wf_id = $this->create_waiting_signal_workflow();
+	public function test_replay_preserves_waiting_for_signal_status_and_history(): void {
+		$wf_id = $this->create_waiting_for_signal_workflow();
 		$data  = WorkflowExporter::export( $wf_id, $this->conn );
 
-		$this->assertSame( 'waiting_signal', $data['workflow']['status'] );
+		$this->assertSame( 'waiting_for_signal', $data['workflow']['status'] );
 
 		$new_id = WorkflowReplayer::replay( $data, $this->conn );
 		$status = $this->workflow->status( $new_id );
 
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 		$this->assertSame( 1, $status->current_step );
-		$this->assertSame( 'signal', $status->wait_type );
+		$this->assertSame( 'wait_for_signal', $status->wait_type );
 		$this->assertSame( array( 'approval' ), $status->waiting_for );
 		$this->assertNull( $this->queue->claim() );
 

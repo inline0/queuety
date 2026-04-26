@@ -2,9 +2,9 @@
 
 namespace Queuety\Tests\Integration\Fixtures;
 
-use Queuety\Contracts\LoopCondition;
+use Queuety\Contracts\RepeatCondition;
 
-class CounterAtLeastCondition implements LoopCondition {
+class CounterAtLeastCondition implements RepeatCondition {
 
 	public function matches( array $state ): bool {
 		$threshold = max( 0, (int) ( $state['threshold'] ?? 0 ) );

@@ -7,7 +7,7 @@
 
 namespace Queuety;
 
-use Queuety\Contracts\FanOutHandler;
+use Queuety\Contracts\ForEachHandler;
 use Queuety\Contracts\Job as JobContract;
 use Queuety\Contracts\StreamingStep;
 use Queuety\Enums\BackoffStrategy;
@@ -171,9 +171,9 @@ class Worker {
 	public function run( string|array $queue_name = 'default', bool $once = false ): void {
 		$queues               = $this->parse_queue_names( $queue_name );
 		$jobs_processed       = 0;
-		$stale_check_timer    = time();
-		$schedule_check_timer = time();
-		$deadline_check_timer = time();
+		$stale_check_delay    = time();
+		$schedule_check_delay = time();
+		$deadline_check_delay = time();
 		$primary_queue        = $queues[0];
 		$run_started_at       = hrtime( true );
 
@@ -186,20 +186,20 @@ class Worker {
 				}
 				sleep( Config::worker_sleep() );
 
-				if ( time() - $stale_check_timer >= 60 ) {
+				if ( time() - $stale_check_delay >= 60 ) {
 					$this->recover_stale();
-					$stale_check_timer = time();
+					$stale_check_delay = time();
 				}
 
-				if ( null !== $this->scheduler && time() - $schedule_check_timer >= 60 ) {
+				if ( null !== $this->scheduler && time() - $schedule_check_delay >= 60 ) {
 					$this->debug_log( 'Running scheduler tick.', $primary_queue );
 					$this->scheduler->tick();
-					$schedule_check_timer = time();
+					$schedule_check_delay = time();
 				}
 
-				if ( time() - $deadline_check_timer >= 60 ) {
+				if ( time() - $deadline_check_delay >= 60 ) {
 					$this->workflow->check_deadlines();
-					$deadline_check_timer = time();
+					$deadline_check_delay = time();
 				}
 
 				continue;
@@ -244,19 +244,19 @@ class Worker {
 				break;
 			}
 
-			if ( time() - $stale_check_timer >= 60 ) {
+			if ( time() - $stale_check_delay >= 60 ) {
 				$this->recover_stale();
-				$stale_check_timer = time();
+				$stale_check_delay = time();
 			}
 
-			if ( null !== $this->scheduler && time() - $schedule_check_timer >= 60 ) {
+			if ( null !== $this->scheduler && time() - $schedule_check_delay >= 60 ) {
 				$this->scheduler->tick();
-				$schedule_check_timer = time();
+				$schedule_check_delay = time();
 			}
 
-			if ( time() - $deadline_check_timer >= 60 ) {
+			if ( time() - $deadline_check_delay >= 60 ) {
 				$this->workflow->check_deadlines();
-				$deadline_check_timer = time();
+				$deadline_check_delay = time();
 			}
 		}
 	}
@@ -429,10 +429,10 @@ class Worker {
 						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
 					)
 				);
-			} elseif ( $job->is_workflow_step() && '__queuety_sub_workflow' === $job->handler ) {
+			} elseif ( $job->is_workflow_step() && '__queuety_run_workflow' === $job->handler ) {
 				$state = $this->workflow->get_state( $job->workflow_id ) ?? array();
 
-				$this->workflow->handle_sub_workflow_step(
+				$this->workflow->handle_run_workflow_step(
 					workflow_id: $job->workflow_id,
 					job_id: $job->id,
 					step_index: $job->step_index,
@@ -453,10 +453,10 @@ class Worker {
 						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
 					)
 				);
-			} elseif ( $job->is_workflow_step() && '__queuety_fan_out' === $job->handler ) {
+			} elseif ( $job->is_workflow_step() && '__queuety_for_each' === $job->handler ) {
 				$state = $this->workflow->get_state( $job->workflow_id ) ?? array();
 
-				$placeholder_completed = $this->workflow->handle_fan_out_step(
+				$placeholder_completed = $this->workflow->handle_for_each_step(
 					workflow_id: $job->workflow_id,
 					job_id: $job->id,
 					step_index: $job->step_index,
@@ -479,16 +479,16 @@ class Worker {
 						)
 					);
 				}
-			} elseif ( $job->is_workflow_step() && '__queuety_loop' === $job->handler ) {
+			} elseif ( $job->is_workflow_step() && '__queuety_repeat' === $job->handler ) {
 				$wf_state = $this->workflow->get_state( $job->workflow_id ) ?? array();
 				$steps    = $wf_state['_steps'] ?? array();
 				$step_def = $steps[ $job->step_index ] ?? null;
 
-				if ( ! $step_def || 'loop' !== ( $step_def['type'] ?? '' ) ) {
-					throw new \RuntimeException( "Workflow loop step {$job->step_index} is missing or invalid." );
+				if ( ! $step_def || 'repeat' !== ( $step_def['type'] ?? '' ) ) {
+					throw new \RuntimeException( "Workflow repeat step {$job->step_index} is missing or invalid." );
 				}
 
-				$step_output = $this->workflow->handle_loop_step(
+				$step_output = $this->workflow->handle_repeat_step(
 					workflow_id: $job->workflow_id,
 					step_def: $step_def,
 					step_index: $job->step_index,
@@ -503,7 +503,7 @@ class Worker {
 					step_output: $step_output,
 					duration_ms: $duration_ms,
 				);
-			} elseif ( $job->is_workflow_step() && '__queuety_timer' === $job->handler ) {
+			} elseif ( $job->is_workflow_step() && '__queuety_delay' === $job->handler ) {
 				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
 				$this->workflow->advance_step(
@@ -525,14 +525,14 @@ class Worker {
 						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
 					)
 				);
-			} elseif ( $job->is_workflow_step() && '__queuety_signal' === $job->handler ) {
+			} elseif ( $job->is_workflow_step() && '__queuety_wait_for_signal' === $job->handler ) {
 				$wf_state = $this->workflow->get_state( $job->workflow_id ) ?? array();
 				$steps    = $wf_state['_steps'] ?? array();
 				$step_def = $steps[ $job->step_index ] ?? null;
 
 				$this->queue->complete( $job->id );
 
-				if ( $step_def && 'signal' === ( $step_def['type'] ?? '' ) ) {
+				if ( $step_def && 'wait_for_signal' === ( $step_def['type'] ?? '' ) ) {
 					$this->workflow->handle_signal_step(
 						workflow_id: $job->workflow_id,
 						step_def: $step_def,
@@ -554,15 +554,15 @@ class Worker {
 						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
 					)
 				);
-			} elseif ( $job->is_workflow_step() && '__queuety_workflow_wait' === $job->handler ) {
+			} elseif ( $job->is_workflow_step() && '__queuety_wait_for_workflows' === $job->handler ) {
 				$wf_state = $this->workflow->get_state( $job->workflow_id ) ?? array();
 				$steps    = $wf_state['_steps'] ?? array();
 				$step_def = $steps[ $job->step_index ] ?? null;
 
 				$this->queue->complete( $job->id );
 
-				if ( $step_def && 'workflow_wait' === ( $step_def['type'] ?? '' ) ) {
-					$this->workflow->handle_workflow_wait_step(
+				if ( $step_def && 'wait_for_workflows' === ( $step_def['type'] ?? '' ) ) {
+					$this->workflow->handle_wait_for_workflows_step(
 						workflow_id: $job->workflow_id,
 						step_def: $step_def,
 						step_index: $job->step_index,
@@ -584,9 +584,9 @@ class Worker {
 						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
 					)
 				);
-			} elseif ( $job->is_workflow_step() && '__queuety_spawn_workflows' === $job->handler ) {
+			} elseif ( $job->is_workflow_step() && '__queuety_start_workflows' === $job->handler ) {
 				$wf_state    = $this->workflow->get_state( $job->workflow_id ) ?? array();
-				$step_output = $this->workflow->handle_spawn_workflows_step(
+				$step_output = $this->workflow->handle_start_workflows_step(
 					workflow_id: $job->workflow_id,
 					step_index: $job->step_index,
 					workflow_state: $wf_state,
@@ -685,9 +685,9 @@ class Worker {
 
 				if ( $job->is_workflow_step() && $handler instanceof StreamingStep ) {
 					$this->process_streaming_step( $job, $handler, $start_time );
-				} elseif ( $job->is_workflow_step() && $handler instanceof FanOutHandler && $this->is_fan_out_workflow_job( $job ) ) {
+				} elseif ( $job->is_workflow_step() && $handler instanceof ForEachHandler && $this->is_for_each_workflow_job( $job ) ) {
 					$state       = $this->workflow->get_state( $job->workflow_id ) ?? array();
-					$branch_meta = $job->payload['__fan_out'] ?? array();
+					$branch_meta = $job->payload['__for_each'] ?? array();
 					$output      = $handler->handle_item(
 						$state,
 						$branch_meta['item'] ?? null,
@@ -773,9 +773,9 @@ class Worker {
 			$workflow_constraint_violation = $job->is_workflow_step() && $e instanceof WorkflowConstraintViolationException;
 
 			if ( $workflow_constraint_violation || $job->attempts >= $effective_max ) {
-				$is_fan_out_terminal = $job->is_workflow_step() && $this->is_fan_out_workflow_job( $job );
+				$is_for_each_terminal = $job->is_workflow_step() && $this->is_for_each_workflow_job( $job );
 
-				if ( ! $is_fan_out_terminal ) {
+				if ( ! $is_for_each_terminal ) {
 					$this->queue->bury( $job->id, $e->getMessage() );
 				}
 
@@ -811,8 +811,8 @@ class Worker {
 				if ( $job->is_workflow_step() ) {
 					$workflow_failed = false;
 
-					if ( $is_fan_out_terminal ) {
-						$workflow_failed = $this->workflow->handle_fan_out_terminal_failure(
+					if ( $is_for_each_terminal ) {
+						$workflow_failed = $this->workflow->handle_for_each_terminal_failure(
 							$job->workflow_id,
 							$job->id,
 							$e->getMessage(),
@@ -934,8 +934,8 @@ class Worker {
 			}
 
 			if ( $job->attempts >= $effective_max ) {
-					$is_fan_out_terminal = $job->is_workflow_step() && $this->is_fan_out_workflow_job( $job );
-				if ( ! $is_fan_out_terminal ) {
+					$is_for_each_terminal = $job->is_workflow_step() && $this->is_for_each_workflow_job( $job );
+				if ( ! $is_for_each_terminal ) {
 					$this->queue->bury( $job->id, 'Stale: worker died without completing.' );
 				}
 
@@ -952,8 +952,8 @@ class Worker {
 				);
 
 				if ( $job->is_workflow_step() ) {
-					if ( $is_fan_out_terminal ) {
-						$this->workflow->handle_fan_out_terminal_failure(
+					if ( $is_for_each_terminal ) {
+						$this->workflow->handle_for_each_terminal_failure(
 							$job->workflow_id,
 							$job->id,
 							'Stale: worker died without completing.',
@@ -1198,12 +1198,12 @@ class Worker {
 	}
 
 	/**
-	 * Whether the job belongs to a fan-out workflow step.
+	 * Whether the job belongs to a for-each workflow step.
 	 *
 	 * @param Job $job Workflow job.
 	 * @return bool
 	 */
-	private function is_fan_out_workflow_job( Job $job ): bool {
+	private function is_for_each_workflow_job( Job $job ): bool {
 		if ( ! $job->is_workflow_step() || null === $job->step_index ) {
 			return false;
 		}
@@ -1212,7 +1212,7 @@ class Worker {
 		$steps = $state['_steps'] ?? array();
 		$step  = $steps[ $job->step_index ] ?? null;
 
-		return is_array( $step ) && 'fan_out' === ( $step['type'] ?? '' );
+		return is_array( $step ) && 'for_each' === ( $step['type'] ?? '' );
 	}
 
 	/**

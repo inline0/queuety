@@ -2,9 +2,9 @@
 
 namespace Queuety\Tests\Integration\Fixtures;
 
-use Queuety\Contracts\FanOutHandler;
+use Queuety\Contracts\ForEachHandler;
 
-class FlakyFanOutItemStep implements FanOutHandler {
+class FlakyForEachItemStep implements ForEachHandler {
 
 	/** @var array<string,int> */
 	public static array $attempts = array();
@@ -20,7 +20,7 @@ class FlakyFanOutItemStep implements FanOutHandler {
 		self::$attempts[ $key ] = ( self::$attempts[ $key ] ?? 0 ) + 1;
 
 		if ( ( $item['action'] ?? 'success' ) === 'fail_once' && 1 === self::$attempts[ $key ] ) {
-			throw new \RuntimeException( 'Fan-out branch failed once' );
+			throw new \RuntimeException( 'For-each branch failed once' );
 		}
 
 		return array(

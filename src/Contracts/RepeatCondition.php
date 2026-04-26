@@ -1,6 +1,6 @@
 <?php
 /**
- * Workflow loop condition contract.
+ * Workflow repeat condition contract.
  *
  * @package Queuety
  */
@@ -8,9 +8,9 @@
 namespace Queuety\Contracts;
 
 /**
- * Evaluates whether a loop control step should treat the current state as matched.
+ * Evaluates whether a repeat control step should treat the current state as matched.
  */
-interface LoopCondition {
+interface RepeatCondition {
 
 	/**
 	 * Decide whether the current public workflow state satisfies the condition.

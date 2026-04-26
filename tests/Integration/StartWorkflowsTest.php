@@ -1,6 +1,6 @@
 <?php
 /**
- * Workflow spawn integration tests.
+ * Workflow start integration tests.
  *
  * @package Queuety
  */
@@ -22,7 +22,7 @@ use Queuety\Workflow;
 use Queuety\WorkflowBuilder;
 use Queuety\Tests\IntegrationTestCase;
 
-class WorkflowSpawnTest extends IntegrationTestCase {
+class StartWorkflowsTest extends IntegrationTestCase {
 
 	private Queue $queue;
 	private Logger $logger;
@@ -57,13 +57,13 @@ class WorkflowSpawnTest extends IntegrationTestCase {
 		return $job;
 	}
 
-	public function test_spawn_workflows_dispatches_independent_child_workflows_and_stores_ids(): void {
+	public function test_start_workflows_dispatches_independent_child_workflows_and_stores_ids(): void {
 		$child = ( new WorkflowBuilder( 'agent_task', $this->conn, $this->queue, $this->logger ) )
 			->version( 'agent-task.v1' )
 			->then( AccumulatingStep::class );
 
 		$parent_id = ( new WorkflowBuilder( 'planner', $this->conn, $this->queue, $this->logger ) )
-			->spawn_workflows( 'tasks', $child, 'child_workflow_ids', 'topic', true, 'spawn_agents' )
+			->start_workflows( 'tasks', $child, 'child_workflow_ids', 'topic', true, 'start_agents' )
 			->then( AccumulatingStep::class )
 			->dispatch(
 				array(
@@ -96,14 +96,14 @@ class WorkflowSpawnTest extends IntegrationTestCase {
 		$this->assertSame( array( 'pricing', 'reviews' ), $topics );
 	}
 
-	public function test_spawned_workflows_can_be_joined_later_with_await_workflows(): void {
+	public function test_started_workflows_can_be_waited_on_later_with_wait_for_workflows(): void {
 		$child = ( new WorkflowBuilder( 'agent_task', $this->conn, $this->queue, $this->logger ) )
 			->then( AccumulatingStep::class );
 
 		$parent_id = ( new WorkflowBuilder( 'planner_waiter', $this->conn, $this->queue, $this->logger ) )
 			->with_priority( Priority::Urgent )
-			->spawn_workflows( 'tasks', $child, 'child_workflow_ids' )
-			->await_workflows( 'child_workflow_ids', WaitMode::All, 'child_results' )
+			->start_workflows( 'tasks', $child, 'child_workflow_ids' )
+			->wait_for_workflows( 'child_workflow_ids', WaitMode::All, 'child_results' )
 			->then( AccumulatingStep::class )
 			->dispatch(
 				array(
@@ -124,12 +124,12 @@ class WorkflowSpawnTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $parent_id );
-		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForWorkflows, $status->status );
 		$this->assertCount( 2, $status->waiting_for );
 
 		$this->process_one();
 		$status = $this->workflow_mgr->status( $parent_id );
-		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForWorkflows, $status->status );
 
 		$this->process_one();
 		$status = $this->workflow_mgr->status( $parent_id );
@@ -142,12 +142,12 @@ class WorkflowSpawnTest extends IntegrationTestCase {
 
 		$this->assertSame( 'spring', $first_result['campaign'] );
 		$this->assertSame( 'pricing', $first_result['topic'] );
-		$this->assertSame( 0, $first_result['spawn_item_index'] );
+		$this->assertSame( 0, $first_result['start_item_index'] );
 		$this->assertSame( 1, $first_result['counter'] );
 
 		$this->assertSame( 'spring', $second_result['campaign'] );
 		$this->assertSame( 'reviews', $second_result['topic'] );
-		$this->assertSame( 1, $second_result['spawn_item_index'] );
+		$this->assertSame( 1, $second_result['start_item_index'] );
 		$this->assertSame( 1, $second_result['counter'] );
 
 		$this->process_one();
@@ -157,13 +157,13 @@ class WorkflowSpawnTest extends IntegrationTestCase {
 		$this->assertSame( 1, $status->state['counter'] );
 	}
 
-	public function test_agent_aliases_wrap_spawn_and_wait_primitives(): void {
+	public function test_agent_aliases_wrap_start_and_wait_primitives(): void {
 		$child = ( new WorkflowBuilder( 'agent_worker', $this->conn, $this->queue, $this->logger ) )
 			->then( AccumulatingStep::class );
 
 		$parent_id = ( new WorkflowBuilder( 'planner_aliases', $this->conn, $this->queue, $this->logger ) )
-			->spawn_agents( 'agent_tasks', $child )
-			->await_agents()
+			->start_agents( 'agent_tasks', $child )
+			->wait_for_agents()
 			->dispatch(
 				array(
 					'campaign'    => 'summer',
@@ -191,14 +191,14 @@ class WorkflowSpawnTest extends IntegrationTestCase {
 		$this->assertCount( 2, $status->state['agent_results'] );
 	}
 
-	public function test_spawned_workflow_groups_can_be_waited_with_quorum(): void {
+	public function test_started_workflow_groups_can_be_waited_with_quorum(): void {
 		$child = ( new WorkflowBuilder( 'agent_task', $this->conn, $this->queue, $this->logger ) )
 			->then( AccumulatingStep::class );
 
 		$parent_id = ( new WorkflowBuilder( 'planner_group_wait', $this->conn, $this->queue, $this->logger ) )
 			->with_priority( Priority::Urgent )
-			->spawn_workflows( 'tasks', $child, 'child_workflow_ids', 'topic', true, 'spawn_agents', 'researchers' )
-			->await_workflow_group( 'researchers', WaitMode::Quorum, 2, 'selected_results' )
+			->start_workflows( 'tasks', $child, 'child_workflow_ids', 'topic', true, 'start_agents', 'researchers' )
+			->wait_for_workflow_group( 'researchers', WaitMode::Quorum, 2, 'selected_results' )
 			->then( AccumulatingStep::class )
 			->dispatch(
 				array(
@@ -220,14 +220,14 @@ class WorkflowSpawnTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $parent_id );
-		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForWorkflows, $status->status );
 		$this->assertSame( 'quorum', $status->wait_mode );
 		$this->assertSame( 'researchers', $status->wait_details['group_key'] );
 		$this->assertSame( 2, $status->wait_details['quorum'] );
 
 		$this->process_one();
 		$status = $this->workflow_mgr->status( $parent_id );
-		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForWorkflows, $status->status );
 		$this->assertCount( 1, $status->wait_details['matched'] );
 
 		$this->process_one();
@@ -242,15 +242,15 @@ class WorkflowSpawnTest extends IntegrationTestCase {
 		$this->assertSame( 1, $status->state['counter'] );
 	}
 
-	public function test_spawned_workflow_group_quorum_fails_when_not_enough_children_can_still_succeed(): void {
+	public function test_started_workflow_group_quorum_fails_when_not_enough_children_can_still_succeed(): void {
 		$child = ( new WorkflowBuilder( 'agent_task', $this->conn, $this->queue, $this->logger ) )
 			->then( ConditionalFailingStep::class )
 			->max_attempts( 1 );
 
 		$parent_id = ( new WorkflowBuilder( 'planner_group_failure', $this->conn, $this->queue, $this->logger ) )
 			->with_priority( Priority::Urgent )
-			->spawn_agents( 'agent_tasks', $child, group_key: 'researchers' )
-			->await_agent_group( 'researchers', WaitMode::Quorum, 2, 'selected_results' )
+			->start_agents( 'agent_tasks', $child, group_key: 'researchers' )
+			->wait_for_agent_group( 'researchers', WaitMode::Quorum, 2, 'selected_results' )
 			->then( AccumulatingStep::class )
 			->dispatch(
 				array(
@@ -276,18 +276,18 @@ class WorkflowSpawnTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $parent_id );
-		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForWorkflows, $status->status );
 		$this->assertSame( 'researchers', $status->wait_details['group_key'] );
 		$this->assertSame( 2, $status->wait_details['quorum'] );
 
 		$this->process_one();
 		$status = $this->workflow_mgr->status( $parent_id );
-		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForWorkflows, $status->status );
 		$this->assertCount( 1, $status->wait_details['matched'] );
 
 		$this->process_one();
 		$status = $this->workflow_mgr->status( $parent_id );
-		$this->assertSame( WorkflowStatus::WaitingWorkflow, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForWorkflows, $status->status );
 		$this->assertCount( 1, $status->wait_details['failed'] );
 		$this->assertCount( 1, $status->wait_details['remaining'] );
 

@@ -133,7 +133,7 @@ class WorkflowCompensationTest extends IntegrationTestCase {
 		$this->process_one();
 
 		$status = $this->workflow->status( $wf_id );
-		$this->assertSame( WorkflowStatus::WaitingSignal, $status->status );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, $status->status );
 
 		$this->workflow->handle_signal(
 			$wf_id,
@@ -153,18 +153,18 @@ class WorkflowCompensationTest extends IntegrationTestCase {
 		$this->assertSame( 'ops@example.com', CompensationLog::$entries[0]['state']['approved_by'] );
 	}
 
-	public function test_sub_workflow_step_compensation_runs_after_child_completion(): void {
+	public function test_run_workflow_step_compensation_runs_after_child_completion(): void {
 		$sub_builder = new WorkflowBuilder( 'comp_child', $this->conn, $this->queue, $this->logger );
 		$sub_builder->then( AccumulatingStep::class );
 
 		$builder = new WorkflowBuilder( 'comp_parent', $this->conn, $this->queue, $this->logger );
 		$wf_id   = $builder
-			->sub_workflow( 'child', $sub_builder )
+			->run_workflow( 'child', $sub_builder )
 			->compensate_with( AlphaCompensation::class )
 			->then( AccumulatingStep::class )
 			->dispatch( array( 'workflow_ref' => 'sub' ) );
 
-		$this->process_one(); // parent placeholder dispatches sub-workflow
+		$this->process_one(); // parent placeholder dispatches run-workflow
 		$this->process_one(); // child completes and advances parent
 
 		$status = $this->workflow->status( $wf_id );

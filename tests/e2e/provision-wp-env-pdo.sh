@@ -27,7 +27,10 @@ if [ ! -f "$COMPOSE_FILE" ]; then
     exit 1
 fi
 
-mapfile -t SERVICES < <(
+SERVICES=()
+while IFS= read -r service; do
+    SERVICES+=("$service")
+done < <(
     docker compose -f "$COMPOSE_FILE" config --services \
         | grep -E '^(wordpress|cli|tests-wordpress|tests-cli)$' || true
 )

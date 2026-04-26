@@ -18,23 +18,23 @@ class Schema {
 	 * @param Connection $conn Database connection.
 	 */
 	public static function install( Connection $conn ): void {
-		$pdo                  = $conn->pdo();
-		$jobs                 = $conn->table( Config::table_jobs() );
-		$wf                   = $conn->table( Config::table_workflows() );
-		$logs                 = $conn->table( Config::table_logs() );
-		$schedules            = $conn->table( Config::table_schedules() );
-		$queue_states         = $conn->table( Config::table_queue_states() );
-		$webhooks             = $conn->table( Config::table_webhooks() );
-		$signals              = $conn->table( Config::table_signals() );
-		$workflow_waits       = $conn->table( Config::table_workflow_dependencies() );
-		$workflow_keys        = $conn->table( Config::table_workflow_dispatch_keys() );
-		$locks                = $conn->table( Config::table_locks() );
-		$batches              = $conn->table( Config::table_batches() );
-		$chunks               = $conn->table( Config::table_chunks() );
-		$workflow_events      = $conn->table( Config::table_workflow_events() );
-		$artifacts            = $conn->table( Config::table_artifacts() );
-		$state_machines       = $conn->table( Config::table_state_machines() );
-		$state_machine_events = $conn->table( Config::table_state_machine_events() );
+		$pdo                   = $conn->pdo();
+		$jobs                  = $conn->table( Config::table_jobs() );
+		$wf                    = $conn->table( Config::table_workflows() );
+		$logs                  = $conn->table( Config::table_logs() );
+		$schedules             = $conn->table( Config::table_schedules() );
+		$queue_states          = $conn->table( Config::table_queue_states() );
+		$webhooks              = $conn->table( Config::table_webhooks() );
+		$signals               = $conn->table( Config::table_signals() );
+		$workflow_dependencies = $conn->table( Config::table_workflow_dependencies() );
+		$workflow_keys         = $conn->table( Config::table_workflow_dispatch_keys() );
+		$locks                 = $conn->table( Config::table_locks() );
+		$batches               = $conn->table( Config::table_batches() );
+		$chunks                = $conn->table( Config::table_chunks() );
+		$workflow_events       = $conn->table( Config::table_workflow_events() );
+		$artifacts             = $conn->table( Config::table_artifacts() );
+		$state_machines        = $conn->table( Config::table_state_machines() );
+		$state_machine_events  = $conn->table( Config::table_state_machine_events() );
 
 		$pdo->exec(
 			"CREATE TABLE IF NOT EXISTS {$jobs} (
@@ -79,7 +79,7 @@ class Schema {
 			"CREATE TABLE IF NOT EXISTS {$wf} (
 				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 				name VARCHAR(255) NOT NULL,
-				status ENUM('running', 'completed', 'failed', 'paused', 'waiting_signal', 'waiting_workflow', 'cancelled') NOT NULL DEFAULT 'running',
+				status ENUM('running', 'completed', 'failed', 'paused', 'waiting_for_signal', 'waiting_for_workflows', 'cancelled') NOT NULL DEFAULT 'running',
 				state LONGTEXT NOT NULL,
 				current_step TINYINT UNSIGNED NOT NULL DEFAULT 0,
 				total_steps TINYINT UNSIGNED NOT NULL,
@@ -170,7 +170,7 @@ class Schema {
 		);
 
 		$pdo->exec(
-			"CREATE TABLE IF NOT EXISTS {$workflow_waits} (
+			"CREATE TABLE IF NOT EXISTS {$workflow_dependencies} (
 				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 				waiting_workflow_id BIGINT UNSIGNED NOT NULL,
 				step_index TINYINT UNSIGNED NOT NULL,
@@ -314,23 +314,23 @@ class Schema {
 	 * @param Connection $conn Database connection.
 	 */
 	public static function uninstall( Connection $conn ): void {
-		$pdo                  = $conn->pdo();
-		$jobs                 = $conn->table( Config::table_jobs() );
-		$wf                   = $conn->table( Config::table_workflows() );
-		$logs                 = $conn->table( Config::table_logs() );
-		$schedules            = $conn->table( Config::table_schedules() );
-		$queue_states         = $conn->table( Config::table_queue_states() );
-		$webhooks             = $conn->table( Config::table_webhooks() );
-		$signals              = $conn->table( Config::table_signals() );
-		$workflow_waits       = $conn->table( Config::table_workflow_dependencies() );
-		$workflow_keys        = $conn->table( Config::table_workflow_dispatch_keys() );
-		$locks                = $conn->table( Config::table_locks() );
-		$batches              = $conn->table( Config::table_batches() );
-		$chunks               = $conn->table( Config::table_chunks() );
-		$workflow_events      = $conn->table( Config::table_workflow_events() );
-		$artifacts            = $conn->table( Config::table_artifacts() );
-		$state_machines       = $conn->table( Config::table_state_machines() );
-		$state_machine_events = $conn->table( Config::table_state_machine_events() );
+		$pdo                   = $conn->pdo();
+		$jobs                  = $conn->table( Config::table_jobs() );
+		$wf                    = $conn->table( Config::table_workflows() );
+		$logs                  = $conn->table( Config::table_logs() );
+		$schedules             = $conn->table( Config::table_schedules() );
+		$queue_states          = $conn->table( Config::table_queue_states() );
+		$webhooks              = $conn->table( Config::table_webhooks() );
+		$signals               = $conn->table( Config::table_signals() );
+		$workflow_dependencies = $conn->table( Config::table_workflow_dependencies() );
+		$workflow_keys         = $conn->table( Config::table_workflow_dispatch_keys() );
+		$locks                 = $conn->table( Config::table_locks() );
+		$batches               = $conn->table( Config::table_batches() );
+		$chunks                = $conn->table( Config::table_chunks() );
+		$workflow_events       = $conn->table( Config::table_workflow_events() );
+		$artifacts             = $conn->table( Config::table_artifacts() );
+		$state_machines        = $conn->table( Config::table_state_machines() );
+		$state_machine_events  = $conn->table( Config::table_state_machine_events() );
 
 		$pdo->exec( "DROP TABLE IF EXISTS {$state_machine_events}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$state_machines}" );
@@ -340,7 +340,7 @@ class Schema {
 		$pdo->exec( "DROP TABLE IF EXISTS {$batches}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$workflow_keys}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$locks}" );
-		$pdo->exec( "DROP TABLE IF EXISTS {$workflow_waits}" );
+		$pdo->exec( "DROP TABLE IF EXISTS {$workflow_dependencies}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$signals}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$webhooks}" );
 		$pdo->exec( "DROP TABLE IF EXISTS {$logs}" );

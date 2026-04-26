@@ -102,5 +102,5 @@ foreach ( $logs as $entry ) {
 ## Limitations
 
 - The forked workflow does not inherit the event log history from the original. It starts with a clean event log.
-- Sub-workflow relationships are not duplicated. If the original workflow had a running sub-workflow, the fork does not get a copy of it.
+- Run-workflow relationships are not duplicated. If the original workflow had a running run-workflow, the fork does not get a copy of it.
 - The fork is a snapshot of the current state. Any in-flight jobs for the original workflow are not duplicated.

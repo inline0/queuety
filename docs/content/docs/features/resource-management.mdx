@@ -70,23 +70,23 @@ That gives you a different control than `concurrency_limit`. A provider can allo
 
 Workflow budgets exist for cases where the problem is not one heavy job, but a run that keeps discovering more work than intended.
 
-That is common in agentic systems. A planner may revisit the same expensive branch, fan out into too many subtasks, or keep spawning child workflows while technically staying inside a normal retry model.
+That is common in agentic systems. A planner may revisit the same expensive branch, for each into too many subtasks, or keep starting child workflows while technically staying inside a normal retry model.
 
 Queuety exposes workflow-level limits for that:
 
 ```php
 Queuety::workflow( 'research_run' )
     ->max_transitions( 20 )
-    ->max_fan_out_items( 12 )
+    ->max_for_each_items( 12 )
     ->max_state_bytes( 32768 )
     ->max_cost_units( 40 )
-    ->max_spawned_workflows( 8 )
+    ->max_started_workflows( 8 )
     ->then( PlanResearchStep::class )
-    ->fan_out( 'tasks', ExecuteResearchTask::class, 'results' )
+    ->for_each( 'tasks', ExecuteResearchTask::class, 'results' )
     ->dispatch();
 ```
 
-`max_cost_units()` keeps the run from consuming more weighted work than intended. `max_spawned_workflows()` stops a parent from turning into an unbounded tree of top-level child runs. The other guardrails still matter because not every runaway workflow is expensive in the same way.
+`max_cost_units()` keeps the run from consuming more weighted work than intended. `max_started_workflows()` stops a parent from turning into an unbounded tree of top-level child runs. The other guardrails still matter because not every runaway workflow is expensive in the same way.
 
 Workflow status exposes the configured limits and the current usage through the public `budget` payload, so the run stays inspectable while those limits are active.
 
@@ -121,13 +121,13 @@ wp queuety work --queue=providers --min-workers=2 --max-workers=6
 
 The parent process keeps at least the minimum number of children alive, grows toward the maximum when claimable backlog rises, and scales back down after the queue has been quiet for the configured idle grace window.
 
-Scale-up still respects available capacity. If system-memory awareness is enabled and the parent cannot see enough remaining memory for another full worker envelope, it keeps the pool at its current size instead of spawning more children.
+Scale-up still respects available capacity. If system-memory awareness is enabled and the parent cannot see enough remaining memory for another full worker envelope, it keeps the pool at its current size instead of starting more children.
 
 ## A realistic way to combine the layers
 
-Imagine a research workflow that plans provider calls, spawns specialist workflows, and then synthesizes the result.
+Imagine a research workflow that plans provider calls, starts specialist workflows, and then synthesizes the result.
 
-The provider-facing step can publish `cost_units` and a shared `concurrency_group` so multiple workers do not stampede the same model provider. The queue can reserve a weighted budget for that provider traffic. The parent workflow can cap `max_cost_units()` and `max_spawned_workflows()` so a planner cannot grow the run forever. Then the worker can still defer a newly claimed provider call if recent peak-memory data says the process or container is already too close to its ceiling.
+The provider-facing step can publish `cost_units` and a shared `concurrency_group` so multiple workers do not stampede the same model provider. The queue can reserve a weighted budget for that provider traffic. The parent workflow can cap `max_cost_units()` and `max_started_workflows()` so a planner cannot grow the run forever. Then the worker can still defer a newly claimed provider call if recent peak-memory data says the process or container is already too close to its ceiling.
 
 That gives you four separate controls:
 

@@ -12,8 +12,8 @@ class WorkflowStatusTest extends TestCase {
 		$this->assertSame( 'completed', WorkflowStatus::Completed->value );
 		$this->assertSame( 'failed', WorkflowStatus::Failed->value );
 		$this->assertSame( 'paused', WorkflowStatus::Paused->value );
-		$this->assertSame( 'waiting_signal', WorkflowStatus::WaitingSignal->value );
-		$this->assertSame( 'waiting_workflow', WorkflowStatus::WaitingWorkflow->value );
+		$this->assertSame( 'waiting_for_signal', WorkflowStatus::WaitingForSignal->value );
+		$this->assertSame( 'waiting_for_workflows', WorkflowStatus::WaitingForWorkflows->value );
 		$this->assertSame( 'cancelled', WorkflowStatus::Cancelled->value );
 	}
 
@@ -26,8 +26,8 @@ class WorkflowStatusTest extends TestCase {
 		$this->assertSame( WorkflowStatus::Completed, WorkflowStatus::from( 'completed' ) );
 		$this->assertSame( WorkflowStatus::Failed, WorkflowStatus::from( 'failed' ) );
 		$this->assertSame( WorkflowStatus::Paused, WorkflowStatus::from( 'paused' ) );
-		$this->assertSame( WorkflowStatus::WaitingSignal, WorkflowStatus::from( 'waiting_signal' ) );
-		$this->assertSame( WorkflowStatus::WaitingWorkflow, WorkflowStatus::from( 'waiting_workflow' ) );
+		$this->assertSame( WorkflowStatus::WaitingForSignal, WorkflowStatus::from( 'waiting_for_signal' ) );
+		$this->assertSame( WorkflowStatus::WaitingForWorkflows, WorkflowStatus::from( 'waiting_for_workflows' ) );
 		$this->assertSame( WorkflowStatus::Cancelled, WorkflowStatus::from( 'cancelled' ) );
 	}
 
@@ -60,8 +60,8 @@ class WorkflowStatusTest extends TestCase {
 		$this->assertContains( 'Completed', $names );
 		$this->assertContains( 'Failed', $names );
 		$this->assertContains( 'Paused', $names );
-		$this->assertContains( 'WaitingSignal', $names );
-		$this->assertContains( 'WaitingWorkflow', $names );
+		$this->assertContains( 'WaitingForSignal', $names );
+		$this->assertContains( 'WaitingForWorkflows', $names );
 		$this->assertContains( 'Cancelled', $names );
 	}
 }

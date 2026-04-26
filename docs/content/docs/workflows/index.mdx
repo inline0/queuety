@@ -60,9 +60,9 @@ dispatch() -> running -> step 0 -> step 1 -> ... -> step N -> completed
                   |
                   +-> paused -> resumed -> running
                   |
-                  +-> waiting_signal -> signal received -> running
+                  +-> waiting_for_signal -> signal received -> running
                   |
-                  +-> waiting_workflow -> dependency settles -> running
+                  +-> waiting_for_workflows -> dependency settles -> running
                   |
                   +-> cancelled (via cancel_workflow)
 ```
@@ -73,8 +73,8 @@ dispatch() -> running -> step 0 -> step 1 -> ... -> step N -> completed
 | `completed` | All steps finished successfully |
 | `failed` | A step failed after exhausting retries |
 | `paused` | Manually paused. Current in-flight work may finish, but later steps are not enqueued until resumed |
-| `waiting_signal` | Waiting for an external signal via `Queuety::signal()` |
-| `waiting_workflow` | Waiting for one or more other workflows to complete via `await_workflow()` or `await_workflows()` |
+| `waiting_for_signal` | Waiting for an external signal via `Queuety::signal()` |
+| `waiting_for_workflows` | Waiting for one or more other workflows to complete via `wait_for_workflow()` or `wait_for_workflows()` |
 | `cancelled` | Explicitly cancelled via `Queuety::cancel_workflow()`. Pending jobs are buried and an optional cleanup handler runs. |
 
 ## Managing workflows
@@ -135,7 +135,7 @@ The `prune_state_after()` method enables automatic removal of old step outputs t
 
 Use `compensate_with()` to attach a per-step compensation handler. Use `compensate_on_failure()` when you want completed step compensations to run automatically after a workflow failure, not just on explicit cancellation. See [Compensation](/docs/workflows/compensation).
 
-Use workflow guardrails when you need safer long-running orchestration: `version()` tags a definition with an application-level version, Queuety also stores a deterministic definition hash for each run, `idempotency_key()` makes dispatch durable across retries or duplicate requests, and `max_transitions()`, `max_fan_out_items()`, and `max_state_bytes()` fail runaway runs before they spiral. See [Guardrails](/docs/workflows/guardrails).
+Use workflow guardrails when you need safer long-running orchestration: `version()` tags a definition with an application-level version, Queuety also stores a deterministic definition hash for each run, `idempotency_key()` makes dispatch durable across retries or duplicate requests, and `max_transitions()`, `max_for_each_items()`, and `max_state_bytes()` fail runaway runs before they spiral. See [Guardrails](/docs/workflows/guardrails).
 
 ## Step types
 
@@ -143,16 +143,16 @@ Queuety supports eleven types of steps within a workflow:
 
 - [Sequential chains](/docs/workflows/chains) using `->then()` for one-at-a-time execution
 - [Parallel groups](/docs/workflows/parallel) using `->parallel()` for concurrent execution
-- [Dynamic fan-out](/docs/workflows/fan-out) using `->fan_out()` for runtime-discovered branch work and explicit join semantics
-- [Async handoffs](/docs/workflows/async-handoffs) using `->spawn_workflows()` or `->spawn_agents()` to dispatch independent child workflows from runtime-discovered items
-- [Conditional branching](/docs/workflows/conditional) using named steps and `_goto`
-- [Loops](/docs/workflows/loops) using `->repeat_until()` and `->repeat_while()` for durable back-edges to earlier named steps
-- [Sub-workflows](/docs/workflows/sub-workflows) using `->sub_workflow()` for nested composition
-- [Durable timers](/docs/workflows/timers) using `->sleep()` for time-based delays
-- [Signals](/docs/workflows/signals) using `->wait_for_signal()`, `->wait_for_signals()`, `->await_approval()`, `->await_input()`, and `->await_decision()` for external event triggers
-- [Workflow dependencies](/docs/workflows/dependencies) using `->await_workflow()`, `->await_workflows()`, and `->await_agents()` for cross-workflow coordination
+- [Dynamic for-each](/docs/workflows/for-each) using `->for_each()` for runtime-discovered branch work and explicit completion semantics
+- [Async handoffs](/docs/workflows/async-handoffs) using `->start_workflows()` or `->start_agents()` to dispatch independent child workflows from runtime-discovered items
+- [Conditional branching](/docs/workflows/conditional) using named steps and `_next_step`
+- [Repeats](/docs/workflows/repeats) using `->repeat_until()` and `->repeat_while()` for durable back-edges to earlier named steps
+- [Run Workflows](/docs/workflows/run-workflows) using `->run_workflow()` for nested composition
+- [Durable delays](/docs/workflows/delays) using `->delay()` for time-based delays
+- [Signals](/docs/workflows/signals) using `->wait_for_signal()`, `->wait_for_signals()`, `->wait_for_approval()`, `->wait_for_input()`, and `->wait_for_decision()` for external event triggers
+- [Workflow dependencies](/docs/workflows/dependencies) using `->wait_for_workflow()`, `->wait_for_workflows()`, and `->wait_for_agents()` for cross-workflow coordination
 - [Streaming steps](/docs/workflows/streaming) using the `StreamingStep` interface for durable chunk-based output
 
 ## Common patterns
 
-If you are building autonomous or semi-autonomous systems, start with [Agent Orchestration](/docs/workflows/agent-orchestration). It shows how `fan_out()`, `spawn_agents()`, `await_agents()`, `await_workflow()`, and `await_decision()` fit together in real planner/executor and human-review flows.
+If you are building autonomous or semi-autonomous systems, start with [Agent Orchestration](/docs/workflows/agent-orchestration). It shows how `for_each()`, `start_agents()`, `wait_for_agents()`, `wait_for_workflow()`, and `wait_for_decision()` fit together in real planner/executor and human-review flows.

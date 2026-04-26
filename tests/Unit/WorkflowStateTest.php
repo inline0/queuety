@@ -44,13 +44,13 @@ class WorkflowStateTest extends TestCase {
 		$state = new WorkflowState(
 			workflow_id: 7,
 			name: 'awaiting_review',
-			status: WorkflowStatus::WaitingWorkflow,
+			status: WorkflowStatus::WaitingForWorkflows,
 			current_step: 2,
 			total_steps: 4,
 			state: array(),
 			wait_type: 'workflow',
 			waiting_for: array( '12', '18' ),
-			current_step_name: 'await_review',
+			current_step_name: 'wait_for_review',
 			wait_mode: 'all',
 			wait_details: array(
 				'matched' => array(),
@@ -60,7 +60,7 @@ class WorkflowStateTest extends TestCase {
 
 		$this->assertSame( 'workflow', $state->wait_type );
 		$this->assertSame( array( '12', '18' ), $state->waiting_for );
-		$this->assertSame( 'await_review', $state->current_step_name );
+		$this->assertSame( 'wait_for_review', $state->current_step_name );
 		$this->assertSame( 'all', $state->wait_mode );
 		$this->assertSame( array( '12', '18' ), $state->wait_details['remaining'] );
 	}

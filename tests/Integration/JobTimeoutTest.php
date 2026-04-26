@@ -58,7 +58,7 @@ class JobTimeoutTest extends IntegrationTestCase {
 			$this->markTestSkipped( 'pcntl extension is not available.' );
 		}
 
-		// Enable async signal dispatch so SIGALRM interrupts sleep().
+		// Enable async signal dispatch so SIGALRM interrupts delay().
 		$prev_async = pcntl_async_signals( true );
 
 		// Override the max execution time for this test.
@@ -88,7 +88,7 @@ class JobTimeoutTest extends IntegrationTestCase {
 			$this->markTestSkipped( 'pcntl extension is not available.' );
 		}
 
-		// Enable async signal dispatch so SIGALRM interrupts sleep().
+		// Enable async signal dispatch so SIGALRM interrupts delay().
 		$prev_async = pcntl_async_signals( true );
 
 		// Ensure the constant is defined (may already be from previous test).

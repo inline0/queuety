@@ -92,13 +92,13 @@ use Queuety\Queuety;
 Queuety::dispatch( 'send_email', [ 'to' => 'user@example.com' ] );
 ```
 
-Run a durable workflow with timers and signals:
+Run a durable workflow with delays and signals:
 
 ```php
 $workflow_id = Queuety::workflow( 'approval_flow' )
     ->then( SubmitRequestHandler::class )
-    ->sleep( hours: 24 )
-    ->await_approval()
+    ->delay( hours: 24 )
+    ->wait_for_approval()
     ->then( ProcessApprovalHandler::class )
     ->on_cancel( CleanupHandler::class )
     ->dispatch( [ 'request_id' => 99 ] );
@@ -110,15 +110,15 @@ Queuety::signal( $workflow_id, 'approval', [ 'approved_by' => 'admin@example.com
 Build runtime-discovered branch work with compensation:
 
 ```php
-use Queuety\Enums\JoinMode;
+use Queuety\Enums\ForEachMode;
 
 Queuety::workflow( 'agent_run' )
     ->then( PlanTasksStep::class )
-    ->fan_out(
+    ->for_each(
         items_key: 'tasks',
         handler_class: ExecuteTaskStep::class,
         result_key: 'task_results',
-        join_mode: JoinMode::Quorum,
+        mode: ForEachMode::Quorum,
         quorum: 2,
         reducer_class: SummarizeTaskResults::class,
     )
@@ -135,11 +135,11 @@ use Queuety\Enums\WaitMode;
 
 $research_id = Queuety::workflow( 'research_run' )
     ->then( PlanResearchStep::class )
-    ->fan_out( 'tasks', ExecuteResearchTask::class, 'results' )
+    ->for_each( 'tasks', ExecuteResearchTask::class, 'results' )
     ->dispatch( [ 'brief_id' => 42 ] );
 
 Queuety::workflow( 'editorial_run' )
-    ->await_workflow( $research_id, 'research' )
+    ->wait_for_workflow( $research_id, 'research' )
     ->then( DraftBriefStep::class )
     ->dispatch();
 ```
@@ -150,7 +150,7 @@ Repeat an earlier step until review state says the run can continue:
 Queuety::workflow( 'brief_review_loop' )
     ->max_transitions( 10 )
     ->then( DraftBriefStep::class, 'draft' )
-    ->await_decision( result_key: 'review' )
+    ->wait_for_decision( result_key: 'review' )
     ->repeat_until(
         target_step: 'draft',
         condition_class: ReviewApprovedCondition::class,
@@ -199,7 +199,7 @@ Queuety::on_action(
 );
 ```
 
-Hand work off to independent child workflows and join later:
+Hand work off to independent child workflows and wait later:
 
 ```php
 use Queuety\Enums\WaitMode;
@@ -210,8 +210,8 @@ $agent_task = Queuety::workflow( 'agent_task' )
 
 Queuety::workflow( 'brief_research' )
     ->then( PlanTopicsStep::class )
-    ->spawn_workflows( 'topics', $agent_task, 'child_workflow_ids' )
-    ->await_workflows( 'child_workflow_ids', WaitMode::All, 'child_results' )
+    ->start_workflows( 'topics', $agent_task, 'child_workflow_ids' )
+    ->wait_for_workflows( 'child_workflow_ids', WaitMode::All, 'child_results' )
     ->then( SynthesizeBriefStep::class )
     ->dispatch( [ 'brief_id' => 42 ] );
 ```
@@ -226,10 +226,10 @@ Queuety::workflow( 'agent_research' )
     ->version( 'research.v2' )
     ->idempotency_key( 'brief:42:research' )
     ->max_transitions( 20 )
-    ->max_fan_out_items( 12 )
+    ->max_for_each_items( 12 )
     ->max_state_bytes( 32768 )
     ->then( PlanResearchStep::class )
-    ->fan_out( 'tasks', ExecuteResearchTask::class, 'results' )
+    ->for_each( 'tasks', ExecuteResearchTask::class, 'results' )
     ->dispatch( [ 'brief_id' => 42 ] );
 ```
 
@@ -294,14 +294,14 @@ wp queuety work --queue=providers --min-workers=2 --max-workers=6
 - **Middleware pipeline** -- onion-style middleware for rate limiting, throttling, uniqueness, and custom logic
 - **Batching** -- dispatch groups of jobs with `then`, `catch`, and `finally` callbacks plus progress tracking
 - **Job chaining** -- sequential job execution where each job depends on the previous one completing
-- **Durable timers** -- `sleep()` steps that survive process restarts and resume at the right time
-- **Signals and human gates** -- `wait_for_signal()`, `wait_for_signals()`, `await_approval()`, and `await_input()` pause workflows until external input arrives
-- **Workflow dependencies** -- `await_workflow()` and `await_workflows()` coordinate top-level workflows without forcing them into one workflow definition
-- **Async workflow handoffs** -- `spawn_workflows()` turns runtime-discovered items into independent top-level workflows that can be awaited later, including named spawned groups
-- **Dynamic fan-out** -- `fan_out()` expands runtime-discovered work with `All`, `FirstSuccess`, and `Quorum` join modes
-- **Durable loops** -- `repeat_until()` and `repeat_while()` revisit earlier named steps without hiding the back-edge inside arbitrary step code
+- **Durable delays** -- `delay()` steps that survive process restarts and resume at the right time
+- **Signals and human gates** -- `wait_for_signal()`, `wait_for_signals()`, `wait_for_approval()`, and `wait_for_input()` pause workflows until external input arrives
+- **Workflow dependencies** -- `wait_for_workflow()` and `wait_for_workflows()` coordinate top-level workflows without forcing them into one workflow definition
+- **Async workflow handoffs** -- `start_workflows()` turns runtime-discovered items into independent top-level workflows that can be waited on later, including named started groups
+- **Dynamic for-each** -- `for_each()` expands runtime-discovered work with `All`, `FirstSuccess`, and `Quorum` completion modes
+- **Durable repeats** -- `repeat_until()` and `repeat_while()` revisit earlier named steps without hiding the back-edge inside arbitrary step code
 - **Durable artifacts** -- store named workflow outputs outside the main state bag and inspect them later through status, CLI, export, and replay
-- **Workflow guardrails** -- `version()`, a deterministic definition hash, `idempotency_key()`, `max_transitions()`, `max_fan_out_items()`, `max_state_bytes()`, `max_cost_units()`, and `max_spawned_workflows()` keep long-running runs inside a defined envelope
+- **Workflow guardrails** -- `version()`, a deterministic definition hash, `idempotency_key()`, `max_transitions()`, `max_for_each_items()`, `max_state_bytes()`, `max_cost_units()`, and `max_started_workflows()` keep long-running runs inside a defined envelope
 - **Resource-aware admission** -- concurrency groups, weighted queue and provider budgets, observed memory/time headroom, and optional container-awareness let workers defer expensive work instead of oversubscribing a process
 - **Step compensation** -- `compensate_with()` and `compensate_on_failure()` provide saga-style rollback hooks for completed steps
 - **Streaming steps** -- `StreamingStep` interface with `ChunkStore` for persisting streamed data chunk by chunk
@@ -313,8 +313,8 @@ wp queuety work --queue=providers --min-workers=2 --max-workers=6
 - **Schedule overlap policies** -- Allow, Skip, or Buffer for recurring jobs
 - **Multi-queue worker priorities** -- process multiple queues with strict priority ordering
 - **Parallel steps** -- run steps concurrently and wait for all to complete before advancing
-- **Conditional branching** -- skip to named steps based on prior state or use first-class loop steps for explicit back-edges
-- **Sub-workflows** -- spawn child workflows that feed results back to the parent
+- **Conditional branching** -- skip to named steps based on prior state or use first-class repeat steps for explicit back-edges
+- **Run Workflows** -- start child workflows that feed results back to the parent
 - **Priority queues** -- 4 levels (Low, Normal, High, Urgent) via type-safe enums
 - **Rate limiting** -- per-handler execution limits with sliding window
 - **Recurring jobs** -- interval-based (`every('1 hour')`) and cron-based (`cron('0 3 * * *')`) scheduling

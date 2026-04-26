@@ -74,7 +74,7 @@ if ( ! class_exists( 'WpEnvAgentTaskStep', false ) ) {
 			return array(
 				'topic'       => $state['topic'] ?? 'unknown',
 				'completed'   => true,
-				'spawn_index' => $state['spawn_item_index'] ?? null,
+				'start_index' => $state['start_item_index'] ?? null,
 			);
 		}
 
@@ -100,8 +100,8 @@ if ( ! class_exists( 'WpEnvAgentSummaryStep', false ) ) {
 			sort( $topics );
 
 			return array(
-				'joined_count'   => count( $results ),
-				'joined_topics'  => $topics,
+				'completed_count'   => count( $results ),
+				'completed_topics'  => $topics,
 				'agent_finished' => true,
 			);
 		}

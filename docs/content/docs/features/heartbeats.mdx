@@ -107,7 +107,7 @@ Use heartbeats when a single job or step runs for longer than `QUEUETY_STALE_TIM
 
 - LLM API calls with streaming responses
 - Large file downloads or uploads
-- Batch processing loops inside a single step
+- Batch processing repetitions inside a single step
 - Any external API call that may take minutes to respond
 
 If your step completes in under a minute, heartbeats are unnecessary. The stale detector only kicks in after the configured timeout has elapsed.

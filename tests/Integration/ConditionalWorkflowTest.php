@@ -1,6 +1,6 @@
 <?php
 /**
- * Conditional branching (_goto) workflow tests.
+ * Conditional branching (_next_step) workflow tests.
  *
  * @package Queuety
  */
@@ -15,14 +15,14 @@ use Queuety\Queue;
 use Queuety\Queuety;
 use Queuety\Tests\IntegrationTestCase;
 use Queuety\Tests\Integration\Fixtures\AccumulatingStep;
-use Queuety\Tests\Integration\Fixtures\ConditionalGoToStep;
+use Queuety\Tests\Integration\Fixtures\ConditionalBranchStep;
 use Queuety\Tests\Integration\Fixtures\DataFetchStep;
 use Queuety\Worker;
 use Queuety\Workflow;
 use Queuety\WorkflowBuilder;
 
 /**
- * Tests for conditional _goto branching in workflows.
+ * Tests for conditional _next_step branching in workflows.
  */
 class ConditionalWorkflowTest extends IntegrationTestCase {
 
@@ -62,20 +62,20 @@ class ConditionalWorkflowTest extends IntegrationTestCase {
 		}
 	}
 
-	public function test_goto_skips_to_named_step(): void {
-		// Build workflow: ConditionalGoTo -> AccumulatingStep (name: 'skipped') -> DataFetch (name: 'target')
-		$wf_id = Queuety::workflow( 'goto_test' )
-			->then( ConditionalGoToStep::class, 'condition' )
+	public function test_next_step_skips_to_named_step(): void {
+		// Build workflow: ConditionalBranch -> AccumulatingStep (name: 'skipped') -> DataFetch (name: 'target')
+		$wf_id = Queuety::workflow( 'next_step_test' )
+			->then( ConditionalBranchStep::class, 'condition' )
 			->then( AccumulatingStep::class, 'skipped' )
 			->then( DataFetchStep::class, 'target' )
 			->dispatch(
 				array(
 					'should_skip'  => true,
-					'goto_target'  => 'target',
+					'next_step_target'  => 'target',
 				)
 			);
 
-		// Process step 0: ConditionalGoToStep returns _goto => 'target'.
+		// Process step 0: ConditionalBranchStep returns _next_step => 'target'.
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
@@ -95,15 +95,15 @@ class ConditionalWorkflowTest extends IntegrationTestCase {
 		$this->assertArrayNotHasKey( 'counter', $status->state );
 	}
 
-	public function test_goto_to_nonexistent_step_throws(): void {
-		$wf_id = Queuety::workflow( 'bad_goto' )
-			->then( ConditionalGoToStep::class, 'condition' )
+	public function test_next_step_to_nonexistent_step_throws(): void {
+		$wf_id = Queuety::workflow( 'bad_next_step' )
+			->then( ConditionalBranchStep::class, 'condition' )
 			->then( AccumulatingStep::class, 'next' )
 			->max_attempts( 1 )
 			->dispatch(
 				array(
 					'should_skip' => true,
-					'goto_target' => 'nonexistent_step',
+					'next_step_target' => 'nonexistent_step',
 				)
 			);
 
@@ -111,7 +111,7 @@ class ConditionalWorkflowTest extends IntegrationTestCase {
 		// catch block. With max_attempts=1, the job is buried on the first failure.
 		$this->process_one();
 
-		// Verify the job was buried with the _goto target error.
+		// Verify the job was buried with the _next_step target error.
 		$jobs_table = $this->conn->table( \Queuety\Config::table_jobs() );
 		$stmt       = $this->conn->pdo()->prepare(
 			"SELECT status, error_message FROM {$jobs_table} WHERE workflow_id = :wf_id"
@@ -120,12 +120,12 @@ class ConditionalWorkflowTest extends IntegrationTestCase {
 		$row = $stmt->fetch();
 
 		$this->assertSame( 'buried', $row['status'] );
-		$this->assertStringContainsString( '_goto target', $row['error_message'] );
+		$this->assertStringContainsString( '_next_step target', $row['error_message'] );
 	}
 
-	public function test_normal_flow_without_goto(): void {
-		$wf_id = Queuety::workflow( 'no_goto' )
-			->then( ConditionalGoToStep::class, 'condition' )
+	public function test_normal_flow_without_next_step(): void {
+		$wf_id = Queuety::workflow( 'no_next_step' )
+			->then( ConditionalBranchStep::class, 'condition' )
 			->then( AccumulatingStep::class, 'accumulate' )
 			->then( DataFetchStep::class, 'fetch' )
 			->dispatch(
@@ -134,7 +134,7 @@ class ConditionalWorkflowTest extends IntegrationTestCase {
 				)
 			);
 
-		// Process step 0: no _goto, so advances normally to step 1.
+		// Process step 0: no _next_step, so advances normally to step 1.
 		$this->process_one();
 
 		$status = $this->workflow_mgr->status( $wf_id );
@@ -159,13 +159,13 @@ class ConditionalWorkflowTest extends IntegrationTestCase {
 	public function test_named_steps_with_default_index_names(): void {
 		// When no name is provided, the step index is used as the name.
 		$wf_id = Queuety::workflow( 'default_names' )
-			->then( ConditionalGoToStep::class )
+			->then( ConditionalBranchStep::class )
 			->then( AccumulatingStep::class )
 			->then( DataFetchStep::class )
 			->dispatch(
 				array(
 					'should_skip' => true,
-					'goto_target' => '2', // Index-based name.
+					'next_step_target' => '2', // Index-based name.
 				)
 			);
 

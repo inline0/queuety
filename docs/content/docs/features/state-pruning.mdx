@@ -47,7 +47,7 @@ Queuety never prunes reserved keys that start with `_`, such as `_steps`, `_queu
 
 ## When to use it
 
-State pruning is helpful for workflows with many steps where each step produces data that later steps do not actually need. Typical examples are long pipelines where each step only needs the previous one or two outputs, ETL workflows that generate bulky intermediate structures, and recursive or looping workflows that would otherwise accumulate repetitive state. If your workflow has only a few steps, or if late steps still depend on early outputs, you probably do not need pruning at all.
+State pruning is helpful for workflows with many steps where each step produces data that later steps do not actually need. Typical examples are long pipelines where each step only needs the previous one or two outputs, ETL workflows that generate bulky intermediate structures, and recursive or repeating workflows that would otherwise accumulate repetitive state. If your workflow has only a few steps, or if late steps still depend on early outputs, you probably do not need pruning at all.
 
 ## Default behavior
 

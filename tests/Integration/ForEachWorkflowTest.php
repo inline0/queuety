@@ -3,7 +3,7 @@
 namespace Queuety\Tests\Integration;
 
 use Queuety\Config;
-use Queuety\Enums\JoinMode;
+use Queuety\Enums\ForEachMode;
 use Queuety\Enums\WorkflowStatus;
 use Queuety\HandlerRegistry;
 use Queuety\Job;
@@ -11,16 +11,16 @@ use Queuety\Logger;
 use Queuety\Queue;
 use Queuety\Queuety;
 use Queuety\Tests\Integration\Fixtures\AccumulatingStep;
-use Queuety\Tests\Integration\Fixtures\FanOutItemStep;
-use Queuety\Tests\Integration\Fixtures\FanOutPlanningStep;
-use Queuety\Tests\Integration\Fixtures\FanOutSummaryReducer;
-use Queuety\Tests\Integration\Fixtures\FlakyFanOutItemStep;
+use Queuety\Tests\Integration\Fixtures\ForEachItemStep;
+use Queuety\Tests\Integration\Fixtures\ForEachPlanningStep;
+use Queuety\Tests\Integration\Fixtures\ForEachSummaryReducer;
+use Queuety\Tests\Integration\Fixtures\FlakyForEachItemStep;
 use Queuety\Tests\IntegrationTestCase;
 use Queuety\Worker;
 use Queuety\Workflow;
 use Queuety\WorkflowBuilder;
 
-class FanOutWorkflowTest extends IntegrationTestCase {
+class ForEachWorkflowTest extends IntegrationTestCase {
 
 	private Queue $queue;
 	private Logger $logger;
@@ -42,7 +42,7 @@ class FanOutWorkflowTest extends IntegrationTestCase {
 			new Config(),
 		);
 
-		FlakyFanOutItemStep::reset();
+		FlakyForEachItemStep::reset();
 
 		Queuety::reset();
 		Queuety::init( $this->conn );
@@ -58,15 +58,15 @@ class FanOutWorkflowTest extends IntegrationTestCase {
 		return $job;
 	}
 
-	public function test_dynamic_fan_out_collects_results_and_reducer_output(): void {
-		$builder = new WorkflowBuilder( 'fan_out_dynamic', $this->conn, $this->queue, $this->logger );
+	public function test_dynamic_for_each_collects_results_and_reducer_output(): void {
+		$builder = new WorkflowBuilder( 'for_each_dynamic', $this->conn, $this->queue, $this->logger );
 		$wf_id   = $builder
-			->then( FanOutPlanningStep::class )
-			->fan_out(
+			->then( ForEachPlanningStep::class )
+			->for_each(
 				items_key: 'tasks',
-				handler_class: FanOutItemStep::class,
+				handler_class: ForEachItemStep::class,
 				result_key: 'task_results',
-				reducer_class: FanOutSummaryReducer::class,
+				reducer_class: ForEachSummaryReducer::class,
 				name: 'run_tasks',
 			)
 			->then( AccumulatingStep::class )
@@ -81,7 +81,7 @@ class FanOutWorkflowTest extends IntegrationTestCase {
 			);
 
 		$this->process_one(); // planner
-		$this->process_one(); // fan-out placeholder
+		$this->process_one(); // for-each placeholder
 		$this->process_one(); // branch 0
 		$this->process_one(); // branch 1
 
@@ -91,7 +91,7 @@ class FanOutWorkflowTest extends IntegrationTestCase {
 		$this->assertSame( WorkflowStatus::Running, $status->status );
 		$this->assertSame( 2, $status->state['task_results']['succeeded'] );
 		$this->assertSame( 2, count( $status->state['task_results']['results'] ) );
-		$this->assertSame( 2, $status->state['fan_out_count'] );
+		$this->assertSame( 2, $status->state['for_each_count'] );
 		$this->assertSame( 'a', $status->state['winner_id'] );
 
 		$next = $this->queue->claim();
@@ -103,15 +103,15 @@ class FanOutWorkflowTest extends IntegrationTestCase {
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
 	}
 
-	public function test_first_success_join_advances_and_ignores_late_failure(): void {
-		$builder = new WorkflowBuilder( 'fan_out_first_success', $this->conn, $this->queue, $this->logger );
+	public function test_first_success_completion_advances_and_ignores_late_failure(): void {
+		$builder = new WorkflowBuilder( 'for_each_first_success', $this->conn, $this->queue, $this->logger );
 		$wf_id   = $builder
-			->then( FanOutPlanningStep::class )
-			->fan_out(
+			->then( ForEachPlanningStep::class )
+			->for_each(
 				items_key: 'tasks',
-				handler_class: FanOutItemStep::class,
+				handler_class: ForEachItemStep::class,
 				result_key: 'task_results',
-				join_mode: JoinMode::FirstSuccess,
+				mode: ForEachMode::FirstSuccess,
 				name: 'race',
 			)
 			->then( AccumulatingStep::class )
@@ -155,17 +155,17 @@ class FanOutWorkflowTest extends IntegrationTestCase {
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
 	}
 
-	public function test_quorum_join_tolerates_branch_failures(): void {
-		$builder = new WorkflowBuilder( 'fan_out_quorum', $this->conn, $this->queue, $this->logger );
+	public function test_quorum_completion_tolerates_branch_failures(): void {
+		$builder = new WorkflowBuilder( 'for_each_quorum', $this->conn, $this->queue, $this->logger );
 		$wf_id   = $builder
-			->then( FanOutPlanningStep::class )
-			->fan_out(
+			->then( ForEachPlanningStep::class )
+			->for_each(
 				items_key: 'tasks',
-				handler_class: FanOutItemStep::class,
+				handler_class: ForEachItemStep::class,
 				result_key: 'task_results',
-				join_mode: JoinMode::Quorum,
+				mode: ForEachMode::Quorum,
 				quorum: 2,
-				reducer_class: FanOutSummaryReducer::class,
+				reducer_class: ForEachSummaryReducer::class,
 				name: 'quorum',
 			)
 			->then( AccumulatingStep::class )
@@ -194,18 +194,18 @@ class FanOutWorkflowTest extends IntegrationTestCase {
 		$this->assertSame( 2, $status->current_step );
 		$this->assertSame( 2, $status->state['task_results']['succeeded'] );
 		$this->assertSame( 1, $status->state['task_results']['failed'] );
-		$this->assertSame( 2, $status->state['fan_out_count'] );
+		$this->assertSame( 2, $status->state['for_each_count'] );
 	}
 
 	public function test_impossible_quorum_fails_workflow(): void {
-		$builder = new WorkflowBuilder( 'fan_out_impossible', $this->conn, $this->queue, $this->logger );
+		$builder = new WorkflowBuilder( 'for_each_impossible', $this->conn, $this->queue, $this->logger );
 		$wf_id   = $builder
-			->then( FanOutPlanningStep::class )
-			->fan_out(
+			->then( ForEachPlanningStep::class )
+			->for_each(
 				items_key: 'tasks',
-				handler_class: FanOutItemStep::class,
+				handler_class: ForEachItemStep::class,
 				result_key: 'task_results',
-				join_mode: JoinMode::Quorum,
+				mode: ForEachMode::Quorum,
 				quorum: 3,
 				name: 'must_all_succeed',
 			)
@@ -227,13 +227,13 @@ class FanOutWorkflowTest extends IntegrationTestCase {
 		$this->assertSame( WorkflowStatus::Failed, $status->status );
 	}
 
-	public function test_retry_only_requeues_failed_fan_out_branches(): void {
-		$builder = new WorkflowBuilder( 'fan_out_retry_partial', $this->conn, $this->queue, $this->logger );
+	public function test_retry_only_requeues_failed_for_each_branches(): void {
+		$builder = new WorkflowBuilder( 'for_each_retry_partial', $this->conn, $this->queue, $this->logger );
 		$wf_id   = $builder
-			->then( FanOutPlanningStep::class )
-			->fan_out(
+			->then( ForEachPlanningStep::class )
+			->for_each(
 				items_key: 'tasks',
-				handler_class: FlakyFanOutItemStep::class,
+				handler_class: FlakyForEachItemStep::class,
 				result_key: 'task_results',
 				name: 'retryable_all',
 			)
@@ -263,8 +263,8 @@ class FanOutWorkflowTest extends IntegrationTestCase {
 
 		$retry_branch = $this->queue->claim();
 		$this->assertNotNull( $retry_branch );
-		$this->assertSame( FlakyFanOutItemStep::class, $retry_branch->handler );
-		$this->assertSame( 'flaky', $retry_branch->payload['__fan_out']['item']['id'] ?? null );
+		$this->assertSame( FlakyForEachItemStep::class, $retry_branch->handler );
+		$this->assertSame( 'flaky', $retry_branch->payload['__for_each']['item']['id'] ?? null );
 		$this->assertNull( $this->queue->claim() );
 
 		$this->worker->process_job( $retry_branch );

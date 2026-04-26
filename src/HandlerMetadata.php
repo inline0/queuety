@@ -7,7 +7,7 @@
 
 namespace Queuety;
 
-use Queuety\Contracts\FanOutHandler;
+use Queuety\Contracts\ForEachHandler;
 use Queuety\Contracts\StateAction;
 use Queuety\Attributes\QueuetyHandler;
 use Queuety\Attributes\QueuetyStep;
@@ -71,7 +71,7 @@ class HandlerMetadata {
 
 		$implements_configurable = $reflection->implementsInterface( Handler::class )
 			|| $reflection->implementsInterface( Step::class )
-			|| $reflection->implementsInterface( FanOutHandler::class )
+			|| $reflection->implementsInterface( ForEachHandler::class )
 			|| $reflection->implementsInterface( StreamingStep::class )
 			|| $reflection->implementsInterface( StateAction::class );
 

@@ -85,7 +85,7 @@ If you are building an agent-style system, start with [Agent Orchestration](/doc
 
 If the system is event-driven and long-lived, start with [State Machines](/docs/state-machines) alongside workflows.
 
-If you want end-to-end integration examples, see [Examples](/docs/examples), which now includes Neuron-based patterns for provider switching, streaming, memory-backed review loops, and dependent workflows.
+If you want end-to-end integration examples, see [Examples](/docs/examples), which now includes Neuron-based patterns for provider switching, streaming, memory-backed review repeats, and dependent workflows.
 
 If you want workflows to start from WordPress domain events like `save_post`, see [Action Triggers](/docs/features/action-triggers).
 
@@ -101,9 +101,9 @@ If you want to use the DB-backed runtime outside WordPress, see [Standalone Use]
 - **Streaming steps.** The `StreamingStep` interface yields chunks that are persisted to the database immediately. On retry, previously saved chunks are provided so the stream can resume where it left off. Ideal for LLM responses and large downloads.
 - **Pluggable cache layer.** `CacheFactory` auto-detects APCu or falls back to an in-memory cache. Custom backends implement `Contracts\Cache`. Used internally for rate-limiter lookups and queue state.
 - **Batching and chaining.** Dispatch groups of jobs with `then`/`catch`/`finally` callbacks and progress tracking, or chain jobs sequentially where each depends on the previous one completing.
-- **Durable timers and waits.** `sleep()` adds process-restart-safe delays. `wait_for_signal()`, `wait_for_signals()`, `await_approval()`, `await_input()`, and `await_workflow()` let workflows pause on external events or other workflows without keeping PHP alive.
-- **Dynamic fan-out.** `fan_out()` expands runtime-discovered branch work from workflow state and supports all-success, first-success, and quorum joins.
-- **Async workflow handoffs.** `spawn_workflows()` turns runtime-discovered items into independent top-level workflows that can be awaited later.
+- **Durable delays and waits.** `delay()` adds process-restart-safe delays. `wait_for_signal()`, `wait_for_signals()`, `wait_for_approval()`, `wait_for_input()`, and `wait_for_workflow()` let workflows pause on external events or other workflows without keeping PHP alive.
+- **Dynamic for-each.** `for_each()` expands runtime-discovered branch work from workflow state and supports all-success, first-success, and quorum completion modes.
+- **Async workflow handoffs.** `start_workflows()` turns runtime-discovered items into independent top-level workflows that can be waited on later.
 - **WordPress action triggers.** `on_action()` maps core or plugin action hooks into durable workflow dispatches with gating and idempotency.
 - **Durable artifacts.** Store named workflow outputs outside the main state bag and carry them through status, CLI inspection, export, and replay.
 - **Workflow guardrails.** `version()`, a deterministic definition hash, idempotent dispatch keys, and workflow budgets make agent-style runs easier to inspect and harder to duplicate or let run away silently.
@@ -112,8 +112,8 @@ If you want to use the DB-backed runtime outside WordPress, see [Standalone Use]
 - **Heartbeats.** Long-running steps send heartbeats to prevent the stale-job recovery system from reclaiming active work.
 - **Workflow event log.** Every step transition is recorded with a full state snapshot, enabling time-travel debugging via `workflow_state_at()`.
 - **Parallel steps.** Run steps concurrently and wait for all to complete before advancing.
-- **Conditional branching.** Skip to named steps based on prior state using `_goto`.
-- **Sub-workflows.** Spawn child workflows that feed results back to the parent.
+- **Conditional branching.** Skip to named steps based on prior state using `_next_step`.
+- **Run Workflows.** Start child workflows that feed results back to the parent.
 - **Priority queues.** Four levels (Low, Normal, High, Urgent) via type-safe PHP enums.
 - **Multi-queue workers.** Process multiple queues with strict priority ordering in a single worker.
 - **Rate limiting.** Per-handler execution limits with sliding window.

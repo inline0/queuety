@@ -8,7 +8,7 @@
 namespace Queuety;
 
 use Queuety\Attributes\QueuetyHandler;
-use Queuety\Contracts\FanOutHandler;
+use Queuety\Contracts\ForEachHandler;
 use Queuety\Contracts\Job as JobContract;
 use Queuety\Contracts\StreamingStep;
 
@@ -57,17 +57,17 @@ class HandlerRegistry {
 	 *
 	 * If the name is a registered alias, use the mapped class.
 	 * If the name is itself a valid class, instantiate it directly.
-	 * Supports Handler, Step, FanOutHandler, StreamingStep, and Contracts\Job implementations.
+	 * Supports Handler, Step, ForEachHandler, StreamingStep, and Contracts\Job implementations.
 	 *
 	 * Note: For Contracts\Job classes with required constructor parameters,
 	 * this method cannot fully instantiate them. Use is_job_class() to check
 	 * first, then JobSerializer::deserialize() with the payload in the Worker.
 	 *
 	 * @param string $name Handler name or class name.
-	 * @return Handler|Step|FanOutHandler|StreamingStep|JobContract
+	 * @return Handler|Step|ForEachHandler|StreamingStep|JobContract
 	 * @throws \RuntimeException If the handler cannot be resolved.
 	 */
-	public function resolve( string $name ): Handler|Step|FanOutHandler|StreamingStep|JobContract {
+	public function resolve( string $name ): Handler|Step|ForEachHandler|StreamingStep|JobContract {
 		$class = $this->handlers[ $name ] ?? $name;
 
 		if ( ! class_exists( $class ) ) {
@@ -89,8 +89,8 @@ class HandlerRegistry {
 
 		$instance = new $class();
 
-		if ( ! ( $instance instanceof Handler ) && ! ( $instance instanceof Step ) && ! ( $instance instanceof FanOutHandler ) && ! ( $instance instanceof StreamingStep ) ) {
-			throw new \RuntimeException( "Class {$class} must implement Handler, Step, FanOutHandler, StreamingStep, or Contracts\\Job." );
+		if ( ! ( $instance instanceof Handler ) && ! ( $instance instanceof Step ) && ! ( $instance instanceof ForEachHandler ) && ! ( $instance instanceof StreamingStep ) ) {
+			throw new \RuntimeException( "Class {$class} must implement Handler, Step, ForEachHandler, StreamingStep, or Contracts\\Job." );
 		}
 
 		return $instance;

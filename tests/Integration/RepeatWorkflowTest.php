@@ -12,12 +12,12 @@ use Queuety\Tests\Integration\Fixtures\AccumulatingStep;
 use Queuety\Tests\Integration\Fixtures\AlwaysRepeatCondition;
 use Queuety\Tests\Integration\Fixtures\CounterAtLeastCondition;
 use Queuety\Tests\Integration\Fixtures\DataFetchStep;
-use Queuety\Tests\Integration\Fixtures\LoopFlagStep;
+use Queuety\Tests\Integration\Fixtures\RepeatFlagStep;
 use Queuety\Tests\IntegrationTestCase;
 use Queuety\Worker;
 use Queuety\Workflow;
 
-class LoopWorkflowTest extends IntegrationTestCase {
+class RepeatWorkflowTest extends IntegrationTestCase {
 
 	private Queue $queue;
 	private Logger $logger;
@@ -50,7 +50,7 @@ class LoopWorkflowTest extends IntegrationTestCase {
 		}
 	}
 
-	public function test_repeat_until_loops_back_until_state_matches(): void {
+	public function test_repeat_until_repeats_until_state_matches(): void {
 		$workflow_id = Queuety::workflow( 'repeat_until_counter' )
 			->then( AccumulatingStep::class, 'increment' )
 			->repeat_until( 'increment', 'counter', 3, 'keep_counting' )
@@ -87,9 +87,9 @@ class LoopWorkflowTest extends IntegrationTestCase {
 		$this->assertArrayHasKey( 'user_name', $status->state );
 	}
 
-	public function test_repeat_while_loops_back_while_state_matches(): void {
+	public function test_repeat_while_repeats_while_state_matches(): void {
 		$workflow_id = Queuety::workflow( 'repeat_while_flag' )
-			->then( LoopFlagStep::class, 'poll' )
+			->then( RepeatFlagStep::class, 'poll' )
 			->repeat_while( 'poll', 'should_repeat', true, 'repeat_poll' )
 			->then( DataFetchStep::class, 'done' )
 			->dispatch(
@@ -157,7 +157,7 @@ class LoopWorkflowTest extends IntegrationTestCase {
 		$this->assertSame( 3, $status->state['counter'] );
 	}
 
-	public function test_repeat_while_honors_loop_max_iterations(): void {
+	public function test_repeat_while_honors_repeat_max_iterations(): void {
 		$workflow_id = Queuety::workflow( 'repeat_while_max_iterations' )
 			->then( AccumulatingStep::class, 'increment' )
 			->repeat_while(

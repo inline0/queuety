@@ -1,13 +1,13 @@
 ---
-title: Sub-workflows
+title: Run Workflows
 description: Nesting child workflows within a parent workflow.
 ---
 
-# Sub-workflows
+# Run Workflows
 
-A workflow can spawn a child workflow as one of its steps. The parent pauses until the sub-workflow completes, then merges the child's final state into the parent's state.
+A workflow can start a child workflow as one of its steps. The parent pauses until the run-workflow completes, then merges the child's final state into the parent's state.
 
-## The `->sub_workflow()` method
+## The `->run_workflow()` method
 
 ```php
 use Queuety\Queuety;
@@ -18,28 +18,28 @@ $enrichment = Queuety::workflow( 'enrich_user' )
 
 Queuety::workflow( 'onboarding' )
     ->then( CreateAccountHandler::class )
-    ->sub_workflow( 'enrich_user', $enrichment )
+    ->run_workflow( 'enrich_user', $enrichment )
     ->then( SendWelcomeEmailHandler::class )
     ->dispatch( [ 'email' => 'user@example.com' ] );
 ```
 
-The `sub_workflow()` method takes two arguments:
-1. A name for the sub-workflow
-2. A `WorkflowBuilder` instance defining the sub-workflow's steps
+The `run_workflow()` method takes two arguments:
+1. A name for the run-workflow
+2. A `WorkflowBuilder` instance defining the run-workflow's steps
 
 ## How it works
 
-When the parent workflow reaches a `sub_workflow` step:
+When the parent workflow reaches a `run_workflow` step:
 
-1. The sub-workflow is dispatched as an independent workflow with its own ID
+1. The run-workflow is dispatched as an independent workflow with its own ID
 2. The parent workflow pauses
-3. The sub-workflow runs through its steps normally
-4. When the sub-workflow completes, its final state is merged into the parent's state
+3. The run-workflow runs through its steps normally
+4. When the run-workflow completes, its final state is merged into the parent's state
 5. The parent workflow resumes with the next step
 
 ## Parent/child state
 
-The sub-workflow receives the parent's current accumulated state as its initial payload. This means child steps can access any data produced by earlier parent steps:
+The run-workflow receives the parent's current accumulated state as its initial payload. This means child steps can access any data produced by earlier parent steps:
 
 ```php
 class CreateAccountHandler implements Step {
@@ -53,7 +53,7 @@ class CreateAccountHandler implements Step {
     }
 }
 
-// This sub-workflow step can access 'user_id' from the parent
+// This run-workflow step can access 'user_id' from the parent
 class FetchSocialHandler implements Step {
     public function handle( array $state ): array {
         $profile = fetch_social_profile( $state['user_id'] );
@@ -68,7 +68,7 @@ class FetchSocialHandler implements Step {
 
 ## State merging
 
-When the sub-workflow completes, its final state (excluding internal keys like `_steps`, `_queue`, `_priority`, `_max_attempts`) is merged into the parent's state. The next parent step sees all data from both the parent's earlier steps and the sub-workflow:
+When the run-workflow completes, its final state (excluding internal keys like `_steps`, `_queue`, `_priority`, `_max_attempts`) is merged into the parent's state. The next parent step sees all data from both the parent's earlier steps and the run-workflow:
 
 ```php
 class SendWelcomeEmailHandler implements Step {
@@ -76,8 +76,8 @@ class SendWelcomeEmailHandler implements Step {
         // Has access to:
         // - $state['email'] (from initial dispatch)
         // - $state['user_id'] (from CreateAccountHandler)
-        // - $state['social_data'] (from sub-workflow's FetchSocialHandler)
-        // - $state['credit_score'] (from sub-workflow's FetchCreditScoreHandler)
+        // - $state['social_data'] (from run-workflow's FetchSocialHandler)
+        // - $state['credit_score'] (from run-workflow's FetchCreditScoreHandler)
 
         send_welcome_email( $state['email'], $state['social_data'] );
         return [ 'welcome_sent' => true ];
@@ -89,9 +89,9 @@ class SendWelcomeEmailHandler implements Step {
 }
 ```
 
-## Sub-workflow options
+## Run-workflow options
 
-The sub-workflow builder supports the same options as a regular workflow:
+The run-workflow builder supports the same options as a regular workflow:
 
 ```php
 $sub = Queuety::workflow( 'heavy_processing' )
@@ -102,14 +102,14 @@ $sub = Queuety::workflow( 'heavy_processing' )
     ->then( StepB::class );
 
 Queuety::workflow( 'parent' )
-    ->sub_workflow( 'heavy', $sub )
+    ->run_workflow( 'heavy', $sub )
     ->then( FinalStep::class )
     ->dispatch( $payload );
 ```
 
-## Nested sub-workflows
+## Nested run-workflows
 
-Sub-workflows can themselves contain sub-workflows, allowing arbitrary nesting:
+Run-workflows can themselves contain run-workflows, allowing arbitrary nesting:
 
 ```php
 $inner = Queuety::workflow( 'inner' )
@@ -118,12 +118,12 @@ $inner = Queuety::workflow( 'inner' )
 
 $middle = Queuety::workflow( 'middle' )
     ->then( MiddleStepA::class )
-    ->sub_workflow( 'inner', $inner )
+    ->run_workflow( 'inner', $inner )
     ->then( MiddleStepB::class );
 
 Queuety::workflow( 'outer' )
     ->then( OuterStepA::class )
-    ->sub_workflow( 'middle', $middle )
+    ->run_workflow( 'middle', $middle )
     ->then( OuterStepB::class )
     ->dispatch( $payload );
 ```

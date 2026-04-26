@@ -86,6 +86,6 @@ if ( 'failed' === $status->status->value ) {
 }
 ```
 
-## Deadline vs. sleep timers
+## Deadline vs. sleep delays
 
-Deadlines apply to the entire workflow duration. Sleep timers (`->sleep()`) pause the workflow for a fixed duration as part of its step sequence. A workflow with a 1-hour sleep timer and a 2-hour deadline will fail if the non-sleep steps take more than 1 hour total.
+Deadlines apply to the entire workflow duration. Sleep delays (`->delay()`) pause the workflow for a fixed duration as part of its step sequence. A workflow with a 1-hour sleep delay and a 2-hour deadline will fail if the non-sleep steps take more than 1 hour total.

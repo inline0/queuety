@@ -23,8 +23,8 @@ readonly class WorkflowState {
 	 * @param int            $current_step       The current step index.
 	 * @param int            $total_steps        Total number of steps.
 	 * @param array          $state              Accumulated state data.
-	 * @param int|null       $parent_workflow_id Parent workflow ID, if this is a sub-workflow.
-	 * @param int|null       $parent_step_index  Parent step index, if this is a sub-workflow.
+	 * @param int|null       $parent_workflow_id Parent workflow ID, if this is a run-workflow.
+	 * @param int|null       $parent_step_index  Parent step index, if this is a run-workflow.
 	 * @param string|null    $wait_type          Wait primitive currently blocking the workflow, if any.
 	 * @param array|null     $waiting_for        Wait targets currently blocking the workflow, if any.
 	 * @param string|null    $definition_version Application-level workflow definition version, if set.

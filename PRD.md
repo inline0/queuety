@@ -770,7 +770,7 @@ This means WooCommerce and any plugin using Action Scheduler can switch to Queue
 
 - Conditional branching (if step returns X, skip to step N)
 - Parallel steps (run steps concurrently, wait for all before continuing)
-- Sub-workflows (a step can spawn and await another workflow)
+- Run Workflows (a step can start and wait for another workflow)
 - Workflow templates (reusable, named workflow definitions)
 
 ### v0.5.0 - DX and observability
@@ -786,7 +786,7 @@ This means WooCommerce and any plugin using Action Scheduler can switch to Queue
 
 - Dispatchable job classes (`Contracts\Job` interface, `Dispatchable` trait)
 - Middleware pipeline (RateLimited, Timeout, UniqueJob, WithoutOverlapping)
-- Durable timers (`->sleep(hours: 24)` in workflows)
+- Durable delays (`->delay(hours: 24)` in workflows)
 - Workflow signals (`->wait_for_signal()` + `Queuety::signal()`)
 
 ### v0.7.0 - Laravel API parity

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# E2E test: spawned top-level workflows, quorum waits, and impossible quorum failure.
+# E2E test: started top-level workflows, quorum waits, and impossible quorum failure.
 #
 
 set -euo pipefail
@@ -66,8 +66,8 @@ php -r "
             sort(\$topics);
 
             return array(
-                'joined_count'  => count(\$results),
-                'joined_topics' => \$topics,
+                'completed_count'  => count(\$results),
+                'completed_topics' => \$topics,
             );
         }
         public function config(): array { return array(); }
@@ -92,15 +92,15 @@ php -r "
         \$worker->process_job(\$job);
     };
 
-    echo \"Test 1: spawned agent group quorum success\\n\";
+    echo \"Test 1: started agent group quorum success\\n\";
     \$child = Queuety::workflow('agent_task')
         ->then(AgentTaskStep::class)
         ->max_attempts(1);
 
     \$success_id = Queuety::workflow('agent_parent_success')
         ->with_priority(Priority::Urgent)
-        ->spawn_agents('agent_tasks', \$child, group_key: 'researchers')
-        ->await_agent_group('researchers', WaitMode::Quorum, 2, 'agent_results')
+        ->start_agents('agent_tasks', \$child, group_key: 'researchers')
+        ->wait_for_agent_group('researchers', WaitMode::Quorum, 2, 'agent_results')
         ->then(AgentSummaryStep::class)
         ->dispatch(
             array(
@@ -115,18 +115,18 @@ php -r "
     \$process_one();
 
     \$status = Queuety::workflow_status(\$success_id);
-    assert(\$status->status === WorkflowStatus::Running, 'Parent should still be running after spawning agents.');
+    assert(\$status->status === WorkflowStatus::Running, 'Parent should still be running after starting agents.');
 
     \$process_one();
 
     \$status = Queuety::workflow_status(\$success_id);
-    assert(\$status->status === WorkflowStatus::WaitingWorkflow, 'Parent should wait on the agent group.');
+    assert(\$status->status === WorkflowStatus::WaitingForWorkflows, 'Parent should wait on the agent group.');
     assert(\$status->wait_mode === 'quorum', 'Parent should be waiting with quorum mode.');
 
     \$process_one();
 
     \$status = Queuety::workflow_status(\$success_id);
-    assert(\$status->status === WorkflowStatus::WaitingWorkflow, 'Parent should keep waiting after the first matching agent completes.');
+    assert(\$status->status === WorkflowStatus::WaitingForWorkflows, 'Parent should keep waiting after the first matching agent completes.');
     assert(count(\$status->wait_details['matched'] ?? array()) === 1, 'Parent should track one matched child after the first success.');
 
     \$process_one();
@@ -139,15 +139,15 @@ php -r "
 
     \$status = Queuety::workflow_status(\$success_id);
     assert(\$status->status === WorkflowStatus::Completed, 'Parent should complete after running the summary step.');
-    assert((\$status->state['joined_count'] ?? null) === 2, 'Parent should continue after two agent results.');
-    assert((\$status->state['joined_topics'] ?? array()) === array('pricing', 'reviews'), 'Parent should summarize the completed agent topics.');
-    echo \"PASS: spawned agent group quorum success\\n\";
+    assert((\$status->state['completed_count'] ?? null) === 2, 'Parent should continue after two agent results.');
+    assert((\$status->state['completed_topics'] ?? array()) === array('pricing', 'reviews'), 'Parent should summarize the completed agent topics.');
+    echo \"PASS: started agent group quorum success\\n\";
 
-    echo \"Test 2: spawned agent group impossible quorum failure\\n\";
+    echo \"Test 2: started agent group impossible quorum failure\\n\";
     \$failure_id = Queuety::workflow('agent_parent_failure')
         ->with_priority(Priority::Urgent)
-        ->spawn_agents('agent_tasks', \$child, group_key: 'researchers')
-        ->await_agent_group('researchers', WaitMode::Quorum, 2, 'agent_results')
+        ->start_agents('agent_tasks', \$child, group_key: 'researchers')
+        ->wait_for_agent_group('researchers', WaitMode::Quorum, 2, 'agent_results')
         ->then(AgentSummaryStep::class)
         ->dispatch(
             array(
@@ -162,29 +162,29 @@ php -r "
     \$process_one();
 
     \$status = Queuety::workflow_status(\$failure_id);
-    assert(\$status->status === WorkflowStatus::Running, 'Failure parent should still be running after spawning agents.');
+    assert(\$status->status === WorkflowStatus::Running, 'Failure parent should still be running after starting agents.');
 
     \$process_one();
 
     \$status = Queuety::workflow_status(\$failure_id);
-    assert(\$status->status === WorkflowStatus::WaitingWorkflow, 'Failure parent should wait on the agent group.');
+    assert(\$status->status === WorkflowStatus::WaitingForWorkflows, 'Failure parent should wait on the agent group.');
     assert(\$status->wait_mode === 'quorum', 'Failure parent should wait with quorum mode.');
 
     \$process_one();
     \$status = Queuety::workflow_status(\$failure_id);
-    assert(\$status->status === WorkflowStatus::WaitingWorkflow, 'Failure parent should still be waiting after one success.');
+    assert(\$status->status === WorkflowStatus::WaitingForWorkflows, 'Failure parent should still be waiting after one success.');
     assert(count(\$status->wait_details['matched'] ?? array()) === 1, 'Failure parent should track the first success.');
 
     \$process_one();
     \$status = Queuety::workflow_status(\$failure_id);
-    assert(\$status->status === WorkflowStatus::WaitingWorkflow, 'Failure parent should still be waiting after the first failed child.');
+    assert(\$status->status === WorkflowStatus::WaitingForWorkflows, 'Failure parent should still be waiting after the first failed child.');
     assert(count(\$status->wait_details['failed'] ?? array()) === 1, 'Failure parent should track one failed child.');
 
     \$process_one();
 
     \$status = Queuety::workflow_status(\$failure_id);
     assert(\$status->status === WorkflowStatus::Failed, 'Parent should fail once quorum becomes impossible.');
-    echo \"PASS: spawned agent group impossible quorum failure\\n\";
+    echo \"PASS: started agent group impossible quorum failure\\n\";
 
     Schema::uninstall(\$conn);
     echo \"\\nAll agent workflow E2E tests passed.\\n\";

@@ -30,7 +30,7 @@ class CronBridge {
 	/**
 	 * Install the cron bridge.
 	 *
-	 * Removes the default wp_cron spawn on page load and hooks into
+	 * Removes the default wp_cron start on page load and hooks into
 	 * WordPress cron scheduling filters to intercept cron events.
 	 */
 	public static function install(): void {

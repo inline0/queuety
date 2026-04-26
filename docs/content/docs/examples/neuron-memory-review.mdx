@@ -144,7 +144,7 @@ The first pass enters `drafting`, runs the queued action, and transitions into `
 
 If the reviewer rejects the draft, the machine moves back into `drafting`. Because the `reject` event payload is passed into `DraftBriefAction`, the next draft can use the reviewer notes without losing the original Neuron thread history.
 
-## Why this is cleaner than a workflow loop
+## Why this is cleaner than a workflow repeat
 
 This problem is lifecycle-oriented. A draft waits for human review, a reviewer can approve or reject it, rejection returns the session to drafting, and approval finishes the session. That maps more directly to a state machine than to a linear workflow with a back-edge.
 

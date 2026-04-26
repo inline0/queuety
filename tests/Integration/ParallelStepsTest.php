@@ -98,7 +98,7 @@ class ParallelStepsTest extends IntegrationTestCase {
 		$this->assertNull( $this->queue->claim() );
 	}
 
-	public function test_workflow_waits_for_all_parallel_jobs(): void {
+	public function test_workflow_dependencies_for_all_parallel_jobs(): void {
 		$builder = new WorkflowBuilder( 'parallel_wait', $this->conn, $this->queue, $this->logger );
 		$wf_id   = $builder
 			->parallel( array( ParallelStepA::class, ParallelStepB::class ) )

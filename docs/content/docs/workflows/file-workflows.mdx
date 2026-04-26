@@ -82,7 +82,7 @@ workflows/
 
 ## Using all workflow features
 
-File workflows support everything the builder supports. Timers, signals, parallel steps, conditional branching, sub-workflows, cancellation handlers, and state pruning all work:
+File workflows support everything the builder supports. Delays, signals, parallel steps, conditional branching, run-workflows, cancellation handlers, and state pruning all work:
 
 ```php
 // workflows/approval-flow.php
@@ -113,7 +113,7 @@ class CleanupRequest implements \Queuety\Handler {
 
 return Queuety::define_workflow('approval_flow')
     ->then(SubmitRequest::class)
-    ->sleep(hours: 24)
+    ->delay(hours: 24)
     ->wait_for_signal('approved')
     ->then(ProcessApproval::class)
     ->on_cancel(CleanupRequest::class)
