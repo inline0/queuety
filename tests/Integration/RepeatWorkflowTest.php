@@ -13,6 +13,8 @@ use Queuety\Tests\Integration\Fixtures\AlwaysRepeatCondition;
 use Queuety\Tests\Integration\Fixtures\CounterAtLeastCondition;
 use Queuety\Tests\Integration\Fixtures\DataFetchStep;
 use Queuety\Tests\Integration\Fixtures\RepeatFlagStep;
+use Queuety\Tests\Integration\Fixtures\StructuredRepeatCondition;
+use Queuety\Tests\Integration\Fixtures\StructuredWorkflowHandlers;
 use Queuety\Tests\IntegrationTestCase;
 use Queuety\Worker;
 use Queuety\Workflow;
@@ -41,6 +43,7 @@ class RepeatWorkflowTest extends IntegrationTestCase {
 
 		Queuety::reset();
 		Queuety::init( $this->conn );
+		StructuredWorkflowHandlers::reset();
 	}
 
 	private function process_one(): void {
@@ -178,5 +181,44 @@ class RepeatWorkflowTest extends IntegrationTestCase {
 
 		$status = $this->workflow_mgr->status( $workflow_id );
 		$this->assertSame( WorkflowStatus::Failed, $status->status );
+	}
+
+	public function test_serialized_repeat_condition_receives_structured_payload(): void {
+		$workflow_id = $this->workflow_mgr->dispatch_definition(
+			array(
+				'name'  => 'structured_repeat_condition',
+				'steps' => array(
+					array(
+						'type'  => 'single',
+						'class' => AccumulatingStep::class,
+						'name'  => 'increment',
+					),
+					array(
+						'type'           => 'repeat',
+						'name'           => 'repeat_until_payload_threshold',
+						'repeat_mode'    => 'until',
+						'target_step'    => 'increment',
+						'condition'      => array(
+							'class'   => StructuredRepeatCondition::class,
+							'payload' => array(
+								'key'       => 'counter',
+								'threshold' => 2,
+							),
+						),
+						'max_iterations' => 3,
+					),
+				),
+			)
+		);
+
+		$this->process_one();
+		$this->process_one();
+		$this->process_one();
+		$this->process_one();
+
+		$status = $this->workflow_mgr->status( $workflow_id );
+		$this->assertSame( WorkflowStatus::Completed, $status->status );
+		$this->assertSame( 2, $status->state['counter'] );
+		$this->assertSame( 2, StructuredWorkflowHandlers::$calls['condition'][0]['payload']['threshold'] );
 	}
 }

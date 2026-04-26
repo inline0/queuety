@@ -15,6 +15,8 @@ use Queuety\Tests\Integration\Fixtures\ForEachItemStep;
 use Queuety\Tests\Integration\Fixtures\ForEachPlanningStep;
 use Queuety\Tests\Integration\Fixtures\ForEachSummaryReducer;
 use Queuety\Tests\Integration\Fixtures\FlakyForEachItemStep;
+use Queuety\Tests\Integration\Fixtures\StructuredForEachReducer;
+use Queuety\Tests\Integration\Fixtures\StructuredWorkflowHandlers;
 use Queuety\Tests\IntegrationTestCase;
 use Queuety\Worker;
 use Queuety\Workflow;
@@ -43,6 +45,7 @@ class ForEachWorkflowTest extends IntegrationTestCase {
 		);
 
 		FlakyForEachItemStep::reset();
+		StructuredWorkflowHandlers::reset();
 
 		Queuety::reset();
 		Queuety::init( $this->conn );
@@ -101,6 +104,43 @@ class ForEachWorkflowTest extends IntegrationTestCase {
 
 		$status = $this->workflow->status( $wf_id );
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
+	}
+
+	public function test_serialized_for_each_reducer_receives_structured_payload(): void {
+		$wf_id = $this->workflow->dispatch_definition(
+			array(
+				'name'  => 'structured_for_each_reducer',
+				'steps' => array(
+					array(
+						'type'       => 'for_each',
+						'name'       => 'run_tasks',
+						'items_key'  => 'planned_tasks',
+						'class'      => ForEachItemStep::class,
+						'result_key' => 'task_results',
+						'mode'       => 'all',
+						'reducer'    => array(
+							'class'   => StructuredForEachReducer::class,
+							'payload' => array( 'result_key' => 'task_summary' ),
+						),
+					),
+				),
+			),
+			array(
+				'planned_tasks' => array(
+					array( 'id' => 'a', 'value' => 'first' ),
+					array( 'id' => 'b', 'value' => 'second' ),
+				),
+			)
+		);
+
+		$this->process_one();
+		$this->process_one();
+		$this->process_one();
+
+		$status = $this->workflow->status( $wf_id );
+		$this->assertSame( WorkflowStatus::Completed, $status->status );
+		$this->assertSame( 2, $status->state['task_summary']['count'] );
+		$this->assertSame( 'task_summary', StructuredWorkflowHandlers::$calls['reducer'][0]['payload']['result_key'] );
 	}
 
 	public function test_first_success_completion_advances_and_ignores_late_failure(): void {

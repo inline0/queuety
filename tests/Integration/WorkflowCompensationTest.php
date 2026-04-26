@@ -14,6 +14,9 @@ use Queuety\Tests\Integration\Fixtures\CompensationLog;
 use Queuety\Tests\Integration\Fixtures\FailingStep;
 use Queuety\Tests\Integration\Fixtures\MarkerStepAlpha;
 use Queuety\Tests\Integration\Fixtures\MarkerStepBeta;
+use Queuety\Tests\Integration\Fixtures\StructuredCancelHandler;
+use Queuety\Tests\Integration\Fixtures\StructuredCompensation;
+use Queuety\Tests\Integration\Fixtures\StructuredWorkflowHandlers;
 use Queuety\Tests\IntegrationTestCase;
 use Queuety\Worker;
 use Queuety\Workflow;
@@ -42,6 +45,7 @@ class WorkflowCompensationTest extends IntegrationTestCase {
 		);
 
 		CompensationLog::reset();
+		StructuredWorkflowHandlers::reset();
 	}
 
 	private function process_one(): void {
@@ -176,5 +180,40 @@ class WorkflowCompensationTest extends IntegrationTestCase {
 
 		$this->assertSame( array( 'alpha' ), array_column( CompensationLog::$entries, 'label' ) );
 		$this->assertSame( 1, CompensationLog::$entries[0]['state']['counter'] );
+	}
+
+	public function test_structured_cancel_and_compensation_handlers_receive_payload(): void {
+		$definition = array(
+			'name'           => 'structured_handlers',
+			'cancel_handler' => array(
+				'class'   => StructuredCancelHandler::class,
+				'payload' => array( 'reason' => 'user_requested' ),
+			),
+			'steps'          => array(
+				array(
+					'type'         => 'single',
+					'class'        => MarkerStepAlpha::class,
+					'name'         => 'alpha',
+					'compensation' => array(
+						'class'   => StructuredCompensation::class,
+						'payload' => array( 'step' => 'alpha' ),
+					),
+				),
+				array(
+					'type'  => 'single',
+					'class' => AccumulatingStep::class,
+					'name'  => 'counter',
+				),
+			),
+		);
+
+		$wf_id = $this->workflow->dispatch_definition( $definition, array( 'workflow_ref' => 'structured' ) );
+
+		$this->process_one();
+		$this->workflow->cancel( $wf_id );
+
+		$this->assertSame( 'alpha', StructuredWorkflowHandlers::$calls['compensation'][0]['payload']['step'] );
+		$this->assertSame( 'user_requested', StructuredWorkflowHandlers::$calls['cancel'][0]['payload']['reason'] );
+		$this->assertSame( 'structured', StructuredWorkflowHandlers::$calls['cancel'][0]['state']['workflow_ref'] );
 	}
 }

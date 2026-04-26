@@ -140,6 +140,54 @@ class Workflow {
 	}
 
 	/**
+	 * Normalize a serialized handler definition.
+	 *
+	 * @param mixed $definition Handler class string or structured definition.
+	 * @return array{class:string,payload:array<string,mixed>}|null
+	 */
+	private function handler_definition( mixed $definition ): ?array {
+		if ( is_string( $definition ) && '' !== trim( $definition ) ) {
+			return array(
+				'class'   => trim( $definition ),
+				'payload' => array(),
+			);
+		}
+
+		if ( ! is_array( $definition ) ) {
+			return null;
+		}
+
+		$class = $definition['class'] ?? $definition['handler'] ?? null;
+		if ( ! is_string( $class ) || '' === trim( $class ) ) {
+			return null;
+		}
+
+		$payload = $definition['payload'] ?? $definition['config'] ?? array();
+
+		return array(
+			'class'   => trim( $class ),
+			'payload' => is_array( $payload ) ? $payload : array(),
+		);
+	}
+
+	/**
+	 * Invoke a handler method with optional structured payload.
+	 *
+	 * @param object $handler Handler instance.
+	 * @param string $method  Method name.
+	 * @param array  $args    Positional public arguments.
+	 * @param array  $payload Structured handler payload.
+	 * @return mixed
+	 */
+	private function call_handler_method( object $handler, string $method, array $args, array $payload ): mixed {
+		if ( empty( $payload ) ) {
+			return $handler->{$method}( ...$args );
+		}
+
+		return $handler->{$method}( ...array_merge( $args, array( $payload ) ) );
+	}
+
+	/**
 	 * Resolve public wait context from persisted workflow state.
 	 *
 	 * @param array $state Full workflow state.
@@ -763,10 +811,12 @@ class Workflow {
 	 * @throws \JsonException|\RuntimeException If the comparable values cannot be encoded or the repeat mode is invalid.
 	 */
 	private function repeat_should_continue( array $step_def, array $state ): bool {
-		$mode            = (string) ( $step_def['repeat_mode'] ?? 'while' );
-		$condition_class = trim( (string) ( $step_def['condition_class'] ?? '' ) );
+		$mode           = (string) ( $step_def['repeat_mode'] ?? 'while' );
+		$condition_def  = $this->handler_definition( $step_def['condition'] ?? null )
+			?? $this->handler_definition( $step_def['condition_class'] ?? null );
 
-		if ( '' !== $condition_class ) {
+		if ( null !== $condition_def ) {
+			$condition_class = $condition_def['class'];
 			if ( ! class_exists( $condition_class ) ) {
 				throw new \RuntimeException( "Repeat condition class '{$condition_class}' not found." );
 			}
@@ -776,7 +826,7 @@ class Workflow {
 				throw new \RuntimeException( "Repeat condition '{$condition_class}' must implement Queuety\\Contracts\\RepeatCondition." );
 			}
 
-			$matches = $condition->matches( $this->public_state( $state ) );
+			$matches = $this->call_handler_method( $condition, 'matches', array( $this->public_state( $state ) ), $condition_def['payload'] );
 		} else {
 			$state_key = trim( (string) ( $step_def['state_key'] ?? '' ) );
 			if ( '' === $state_key ) {
@@ -1542,15 +1592,16 @@ class Workflow {
 			return;
 		}
 
-		$handler_class = $step_def['compensation'] ?? null;
-		if ( ! is_string( $handler_class ) || '' === trim( $handler_class ) ) {
+		$handler_def = $this->handler_definition( $step_def['compensation'] ?? null );
+		if ( null === $handler_def ) {
 			return;
 		}
 
 		$state['_compensation_stack'] ??= array();
 		$state['_compensation_stack'][] = array(
 			'step_index' => $step_index,
-			'handler'    => $handler_class,
+			'handler'    => $handler_def['class'],
+			'payload'    => $handler_def['payload'],
 			'state'      => $this->public_state( $state ),
 		);
 	}
@@ -1578,6 +1629,7 @@ class Workflow {
 		for ( $i = count( $stack ) - 1; $i >= 0; --$i ) {
 			$entry         = $stack[ $i ];
 			$handler_class = $entry['handler'] ?? null;
+			$payload       = is_array( $entry['payload'] ?? null ) ? $entry['payload'] : array();
 			$snapshot      = is_array( $entry['state'] ?? null ) ? $entry['state'] : array();
 
 			if ( ! is_string( $handler_class ) || ! class_exists( $handler_class ) ) {
@@ -1588,7 +1640,7 @@ class Workflow {
 				$instance = new $handler_class();
 
 				if ( $instance instanceof Compensation || method_exists( $instance, 'handle' ) ) {
-					$instance->handle( $snapshot );
+					$this->call_handler_method( $instance, 'handle', array( $snapshot ), $payload );
 				}
 			} catch ( \Throwable $e ) {
 				$this->logger->log(
@@ -1821,11 +1873,13 @@ class Workflow {
 		$aggregate  = $this->build_for_each_aggregate( $step_def, $runtime );
 		$output     = array( $result_key => $aggregate );
 
-		$reducer_class = $step_def['reducer_class'] ?? null;
-		if ( ! is_string( $reducer_class ) || '' === trim( $reducer_class ) ) {
+		$reducer_def = $this->handler_definition( $step_def['reducer'] ?? null )
+			?? $this->handler_definition( $step_def['reducer_class'] ?? null );
+		if ( null === $reducer_def ) {
 			return $output;
 		}
 
+		$reducer_class = $reducer_def['class'];
 		if ( ! class_exists( $reducer_class ) ) {
 			throw new \RuntimeException( "For-each reducer class '{$reducer_class}' not found." );
 		}
@@ -1837,7 +1891,12 @@ class Workflow {
 
 		$reducer_state                = $state;
 		$reducer_state[ $result_key ] = $aggregate;
-		$reducer_output               = $reducer->reduce( $this->public_state( $reducer_state ), $aggregate );
+		$reducer_output               = $this->call_handler_method(
+			$reducer,
+			'reduce',
+			array( $this->public_state( $reducer_state ), $aggregate ),
+			$reducer_def['payload']
+		);
 
 		if ( ! is_array( $reducer_output ) ) {
 			throw new \RuntimeException( "For-each reducer '{$reducer_class}' must return an array." );
@@ -3551,9 +3610,9 @@ class Workflow {
 		$state['_priority']     = (int) ( $definition['priority'] ?? 0 );
 		$state['_max_attempts'] = max( 1, (int) ( $definition['max_attempts'] ?? 3 ) );
 
-		$cancel_handler = $definition['cancel_handler'] ?? null;
-		if ( is_string( $cancel_handler ) && '' !== trim( $cancel_handler ) ) {
-			$state['_on_cancel'] = trim( $cancel_handler );
+		$cancel_handler = $this->handler_definition( $definition['cancel_handler'] ?? null );
+		if ( null !== $cancel_handler ) {
+			$state['_on_cancel'] = $cancel_handler;
 		}
 
 		$prune_after = $definition['prune_after'] ?? null;
@@ -3569,9 +3628,9 @@ class Workflow {
 			$deadline_at                = gmdate( 'Y-m-d H:i:s', time() + $deadline_seconds );
 		}
 
-		$deadline_handler = $definition['deadline_handler'] ?? null;
-		if ( is_string( $deadline_handler ) && '' !== trim( $deadline_handler ) ) {
-			$state['_on_deadline'] = trim( $deadline_handler );
+		$deadline_handler = $this->handler_definition( $definition['deadline_handler'] ?? null );
+		if ( null !== $deadline_handler ) {
+			$state['_on_deadline'] = $deadline_handler;
 		}
 
 		$definition_version = $definition['definition_version'] ?? null;
@@ -4039,16 +4098,17 @@ class Workflow {
 		$this->persist_internal_state( $workflow_id, $state );
 
 		$cancel_handler = $state['_on_cancel'] ?? null;
-		if ( null !== $cancel_handler && class_exists( $cancel_handler ) ) {
+		$handler_def    = $this->handler_definition( $cancel_handler );
+		if ( null !== $handler_def && class_exists( $handler_def['class'] ) ) {
 			try {
-				$handler_instance = new $cancel_handler();
-				$handler_instance->handle( $this->public_state( $state ) );
+				$handler_instance = new $handler_def['class']();
+				$this->call_handler_method( $handler_instance, 'handle', array( $this->public_state( $state ) ), $handler_def['payload'] );
 			} catch ( \Throwable $e ) {
 				$this->logger->log(
 					LogEvent::Debug,
 					array(
 						'workflow_id'   => $workflow_id,
-						'handler'       => $cancel_handler,
+						'handler'       => $handler_def['class'],
 						'error_message' => $e->getMessage(),
 						'context'       => array( 'type' => 'cancel_handler_failed' ),
 					)
@@ -4701,9 +4761,9 @@ class Workflow {
 
 		foreach ( $rows as $wf_row ) {
 			$state         = json_decode( $wf_row['state'], true ) ?: array();
-			$handler_class = $state['_on_deadline'] ?? null;
+			$handler_def   = $this->handler_definition( $state['_on_deadline'] ?? null );
 
-			if ( null !== $handler_class && class_exists( $handler_class ) ) {
+			if ( null !== $handler_def && class_exists( $handler_def['class'] ) ) {
 				$public_state = array_filter(
 					$state,
 					fn( string $key ) => ! str_starts_with( $key, '_' ),
@@ -4711,8 +4771,8 @@ class Workflow {
 				);
 
 				try {
-					$handler_instance = new $handler_class();
-					$handler_instance->handle( $public_state );
+					$handler_instance = new $handler_def['class']();
+					$this->call_handler_method( $handler_instance, 'handle', array( $public_state ), $handler_def['payload'] );
 				} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Deadline handler failure should not prevent marking as failed.
 					unset( $e );
 				}

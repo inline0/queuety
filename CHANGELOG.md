@@ -2,6 +2,13 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.17.0] - 2026-04-26
+
+### Added
+
+- structured serialized handler definitions for workflow lifecycle handlers, step compensations, repeat conditions, and for-each reducers
+- optional handler payloads for generic workflow adapters
+
 ## [0.16.0] - 2026-04-26
 
 ### Added
