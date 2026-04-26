@@ -2,6 +2,12 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.17.3] - 2026-04-26
+
+### Changed
+
+- aligned structured repeat condition integration coverage with terminal repeat workflow shape
+
 ## [0.17.2] - 2026-04-26
 
 ### Changed

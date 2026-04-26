@@ -209,8 +209,14 @@ class RepeatWorkflowTest extends IntegrationTestCase {
 						),
 						'max_iterations' => 3,
 					),
+					array(
+						'type'  => 'single',
+						'class' => DataFetchStep::class,
+						'name'  => 'done',
+					),
 				),
-			)
+			),
+			array( 'user_id' => 11 )
 		);
 
 		$this->process_until_workflow_status( $workflow_id, WorkflowStatus::Completed );
