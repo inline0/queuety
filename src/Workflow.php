@@ -2825,8 +2825,9 @@ class Workflow {
 		}
 
 		if ( '' === $state_key ) {
-			$condition_class = trim( (string) ( $step_def['condition_class'] ?? '' ) );
-			if ( '' === $condition_class ) {
+			$condition_def = $this->handler_definition( $step_def['condition'] ?? null )
+				?? $this->handler_definition( $step_def['condition_class'] ?? null );
+			if ( null === $condition_def ) {
 				throw new \RuntimeException( "Workflow {$workflow_id}: repeat step {$step_index} is missing a state key." );
 			}
 		}

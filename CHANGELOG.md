@@ -2,6 +2,12 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.17.5] - 2026-04-26
+
+### Fixed
+
+- allowed structured repeat condition definitions to satisfy repeat-step validation
+
 ## [0.17.4] - 2026-04-26
 
 ### Changed
