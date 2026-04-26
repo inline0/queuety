@@ -1988,6 +1988,57 @@ class Workflow {
 	}
 
 	/**
+	 * Dispatch one workflow step job with serialized runtime metadata.
+	 *
+	 * @param array|string $step_def     Step definition.
+	 * @param string       $handler      Handler class or alias.
+	 * @param array        $payload      Job payload.
+	 * @param int          $workflow_id  Workflow ID.
+	 * @param int          $step_index   Step index.
+	 * @param string       $queue_name   Workflow queue name.
+	 * @param Priority     $priority     Workflow priority.
+	 * @param int          $max_attempts Workflow max attempts.
+	 * @param int          $default_cost Default cost units when no metadata exists.
+	 * @param int|null     $delay        Explicit dispatch delay override.
+	 */
+	private function dispatch_step_job(
+		array|string $step_def,
+		string $handler,
+		array $payload,
+		int $workflow_id,
+		int $step_index,
+		string $queue_name,
+		Priority $priority,
+		int $max_attempts,
+		int $default_cost = 1,
+		?int $delay = null,
+	): void {
+		$options = StepDispatchOptions::resolve(
+			definition: $step_def,
+			handler: $handler,
+			workflow_queue: $queue_name,
+			workflow_priority: $priority,
+			workflow_attempts: $max_attempts,
+			payload: $payload,
+			default_cost_units: $default_cost,
+		);
+
+		$this->queue->dispatch(
+			handler: $handler,
+			payload: $options['payload'],
+			queue: $options['queue'],
+			priority: $options['priority'],
+			delay: null === $delay ? $options['delay'] : $delay,
+			max_attempts: $options['max_attempts'],
+			workflow_id: $workflow_id,
+			step_index: $step_index,
+			concurrency_group: $options['concurrency_group'],
+			concurrency_limit: $options['concurrency_limit'],
+			cost_units: $options['cost_units'],
+		);
+	}
+
+	/**
 	 * Enqueue a step definition as one or more jobs within a transaction.
 	 *
 	 * @param array|string $step_def    Step definition.
@@ -2008,114 +2059,117 @@ class Workflow {
 		$type = $this->resolve_step_type( $step_def );
 
 		if ( 'parallel' === $type ) {
-			$handlers = $step_def['handlers'] ?? array();
-			foreach ( $handlers as $handler_class ) {
-				$handler_defaults = HandlerMetadata::from_class( $handler_class );
-				$this->queue->dispatch(
-					handler: $handler_class,
-					payload: array(),
-					queue: $queue_name,
-					priority: $priority,
-					max_attempts: $handler_defaults['max_attempts'] ?? $max_attempts,
-					workflow_id: $workflow_id,
-					step_index: $step_index,
-					concurrency_group: $handler_defaults['concurrency_group'],
-					concurrency_limit: $handler_defaults['concurrency_limit'],
-					cost_units: $handler_defaults['cost_units'] ?? 1,
+			$parallel_step = is_array( $step_def ) ? $step_def : array();
+			foreach ( StepDispatchOptions::parallel_branches( $parallel_step ) as $branch ) {
+				$branch_def = StepDispatchOptions::merge_parallel_branch( $parallel_step, $branch );
+				$handler    = StepDispatchOptions::branch_handler( $branch_def );
+				$this->dispatch_step_job(
+					$branch_def,
+					$handler,
+					StepDispatchOptions::payload( $branch_def ),
+					$workflow_id,
+					$step_index,
+					$queue_name,
+					$priority,
+					$max_attempts,
 				);
 			}
 		} elseif ( 'for_each' === $type ) {
-			$this->queue->dispatch(
-				handler: '__queuety_for_each',
-				payload: array( 'step_index' => $step_index ),
-				queue: $queue_name,
-				priority: $priority,
-				max_attempts: $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $step_index,
-				cost_units: 0,
+			$this->dispatch_step_job(
+				$step_def,
+				'__queuety_for_each',
+				array( 'step_index' => $step_index ),
+				$workflow_id,
+				$step_index,
+				$queue_name,
+				$priority,
+				$max_attempts,
+				0,
 			);
 		} elseif ( 'run_workflow' === $type ) {
-			$this->queue->dispatch(
-				handler: '__queuety_run_workflow',
-				payload: array( 'step_index' => $step_index ),
-				queue: $queue_name,
-				priority: $priority,
-				max_attempts: $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $step_index,
-				cost_units: 0,
+			$this->dispatch_step_job(
+				$step_def,
+				'__queuety_run_workflow',
+				array( 'step_index' => $step_index ),
+				$workflow_id,
+				$step_index,
+				$queue_name,
+				$priority,
+				$max_attempts,
+				0,
 			);
 		} elseif ( 'start_workflows' === $type ) {
-			$this->queue->dispatch(
-				handler: '__queuety_start_workflows',
-				payload: array( 'step_index' => $step_index ),
-				queue: $queue_name,
-				priority: $priority,
-				max_attempts: $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $step_index,
-				cost_units: 0,
+			$this->dispatch_step_job(
+				$step_def,
+				'__queuety_start_workflows',
+				array( 'step_index' => $step_index ),
+				$workflow_id,
+				$step_index,
+				$queue_name,
+				$priority,
+				$max_attempts,
+				0,
 			);
 		} elseif ( 'delay' === $type ) {
-			$this->queue->dispatch(
-				handler: '__queuety_delay',
-				payload: array( 'step_index' => $step_index ),
-				queue: $queue_name,
-				priority: $priority,
-				delay: $step_def['delay_seconds'] ?? 0,
-				max_attempts: $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $step_index,
-				cost_units: 0,
+			$this->dispatch_step_job(
+				$step_def,
+				'__queuety_delay',
+				array( 'step_index' => $step_index ),
+				$workflow_id,
+				$step_index,
+				$queue_name,
+				$priority,
+				$max_attempts,
+				0,
+				(int) ( $step_def['delay_seconds'] ?? 0 ),
 			);
 		} elseif ( 'wait_for_signal' === $type ) {
-			$this->queue->dispatch(
-				handler: '__queuety_wait_for_signal',
-				payload: array( 'step_index' => $step_index ),
-				queue: $queue_name,
-				priority: $priority,
-				max_attempts: $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $step_index,
-				cost_units: 0,
+			$this->dispatch_step_job(
+				$step_def,
+				'__queuety_wait_for_signal',
+				array( 'step_index' => $step_index ),
+				$workflow_id,
+				$step_index,
+				$queue_name,
+				$priority,
+				$max_attempts,
+				0,
 			);
 		} elseif ( 'wait_for_workflows' === $type ) {
-			$this->queue->dispatch(
-				handler: '__queuety_wait_for_workflows',
-				payload: array( 'step_index' => $step_index ),
-				queue: $queue_name,
-				priority: $priority,
-				max_attempts: $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $step_index,
-				cost_units: 0,
+			$this->dispatch_step_job(
+				$step_def,
+				'__queuety_wait_for_workflows',
+				array( 'step_index' => $step_index ),
+				$workflow_id,
+				$step_index,
+				$queue_name,
+				$priority,
+				$max_attempts,
+				0,
 			);
 		} elseif ( 'repeat' === $type ) {
-			$this->queue->dispatch(
-				handler: '__queuety_repeat',
-				payload: array( 'step_index' => $step_index ),
-				queue: $queue_name,
-				priority: $priority,
-				max_attempts: $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $step_index,
-				cost_units: 0,
+			$this->dispatch_step_job(
+				$step_def,
+				'__queuety_repeat',
+				array( 'step_index' => $step_index ),
+				$workflow_id,
+				$step_index,
+				$queue_name,
+				$priority,
+				$max_attempts,
+				0,
 			);
 		} else {
-			$handler          = $this->resolve_step_handler( $step_def );
-			$handler_defaults = HandlerMetadata::from_class( $handler );
-			$this->queue->dispatch(
-				handler: $handler,
-				payload: array(),
-				queue: $queue_name,
-				priority: $priority,
-				max_attempts: $handler_defaults['max_attempts'] ?? $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $step_index,
-				concurrency_group: $handler_defaults['concurrency_group'],
-				concurrency_limit: $handler_defaults['concurrency_limit'],
-				cost_units: $handler_defaults['cost_units'] ?? 1,
+			$handler = $this->resolve_step_handler( $step_def );
+			$this->dispatch_step_job(
+				$step_def,
+				$handler,
+				StepDispatchOptions::payload( $step_def ),
+				$workflow_id,
+				$step_index,
+				$queue_name,
+				$priority,
+				$max_attempts,
 			);
 		}
 	}
@@ -2381,26 +2435,22 @@ class Workflow {
 			$queue_name       = $state['_queue'] ?? 'default';
 			$priority         = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
 			$branch_handler   = $step_def['class'];
-			$handler_defaults = HandlerMetadata::from_class( $branch_handler );
-			$effective_max    = $handler_defaults['max_attempts'] ?? ( $state['_max_attempts'] ?? 3 );
 
 			foreach ( $missing as $item_index ) {
-				$this->queue->dispatch(
-					handler: $branch_handler,
-					payload: array(
+				$this->dispatch_step_job(
+					$step_def,
+					$branch_handler,
+					array(
 						'__for_each' => array(
 							'item_index' => $item_index,
 							'item'       => $runtime['items'][ $item_index ],
 						),
 					),
-					queue: $queue_name,
-					priority: $priority,
-					max_attempts: $effective_max,
-					workflow_id: $workflow_id,
-					step_index: $step_index,
-					concurrency_group: $handler_defaults['concurrency_group'],
-					concurrency_limit: $handler_defaults['concurrency_limit'],
-					cost_units: $handler_defaults['cost_units'] ?? 1,
+					$workflow_id,
+					$step_index,
+					$queue_name,
+					$priority,
+					$state['_max_attempts'] ?? 3,
 				);
 			}
 
@@ -3201,7 +3251,9 @@ class Workflow {
 			if ( 'parallel' === $current_step_type ) {
 				$this->merge_step_output_into_state( $state, $step_output, $current_step );
 				$this->increment_cost_units( $state, (int) ( $job_row['cost_units'] ?? 0 ) );
-				$total_handlers = count( $current_step_def['handlers'] ?? array() );
+				$total_handlers = is_array( $current_step_def )
+					? StepDispatchOptions::parallel_branch_count( $current_step_def )
+					: 0;
 
 				// Parallel branches can finish out of order, so count only after this branch is marked complete.
 				$mark_stmt = $pdo->prepare(

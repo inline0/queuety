@@ -15,7 +15,7 @@ final class ExecutionContext {
 	/**
 	 * Active execution frame.
 	 *
-	 * @var array<string,int|null>|null
+	 * @var array{job_id:int,workflow_id:int|null,step_index:int|null,payload:array}|null
 	 */
 	private static ?array $frame = null;
 
@@ -25,12 +25,14 @@ final class ExecutionContext {
 	 * @param int      $job_id       Current job ID.
 	 * @param int|null $workflow_id  Current workflow ID, if any.
 	 * @param int|null $step_index   Current workflow step index, if any.
+	 * @param array    $payload      Current job payload.
 	 */
-	public static function enter( int $job_id, ?int $workflow_id = null, ?int $step_index = null ): void {
+	public static function enter( int $job_id, ?int $workflow_id = null, ?int $step_index = null, array $payload = array() ): void {
 		self::$frame = array(
 			'job_id'      => $job_id,
 			'workflow_id' => $workflow_id,
 			'step_index'  => $step_index,
+			'payload'     => $payload,
 		);
 	}
 
@@ -66,5 +68,14 @@ final class ExecutionContext {
 	 */
 	public static function job_id(): ?int {
 		return self::$frame['job_id'] ?? null;
+	}
+
+	/**
+	 * Get the current job payload.
+	 *
+	 * @return array
+	 */
+	public static function payload(): array {
+		return self::$frame['payload'] ?? array();
 	}
 }

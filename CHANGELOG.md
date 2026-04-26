@@ -2,6 +2,18 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.16.0] - 2026-04-26
+
+### Added
+
+- serialized workflow step runtime metadata for queue, priority, retry, backoff, rate limit, concurrency, cost, delay, and timeout settings
+- structured serialized `parallel.branches` definitions with branch payloads and branch-level runtime metadata
+- current job payload access through `ExecutionContext::payload()` for adapter steps
+
+### Changed
+
+- direct workflow dispatch, builder dispatch, workflow replay, and for-each branch dispatch now share the same step metadata resolver
+
 ## [0.15.0] - 2026-04-26
 
 ### Changed

@@ -282,4 +282,58 @@ class ForEachWorkflowTest extends IntegrationTestCase {
 		$status = $this->workflow->status( $wf_id );
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
 	}
+
+	public function test_serialized_for_each_runtime_metadata_overrides_handler_defaults(): void {
+		$wf_id = $this->workflow->dispatch_definition(
+			array(
+				'name'         => 'for_each_serialized_retry',
+				'queue'        => 'default',
+				'priority'     => 0,
+				'max_attempts' => 1,
+				'steps'        => array(
+					array(
+						'type'  => 'single',
+						'name'  => 'plan',
+						'class' => ForEachPlanningStep::class,
+					),
+					array(
+						'type'       => 'for_each',
+						'name'       => 'retryable',
+						'items_key'  => 'tasks',
+						'class'      => FlakyForEachItemStep::class,
+						'result_key' => 'task_results',
+						'mode'       => 'all',
+						'retry'      => array(
+							'max_attempts' => 2,
+							'backoff'      => array( 0 ),
+						),
+					),
+				),
+			),
+			array(
+				'planned_tasks' => array(
+					array(
+						'id'     => 'flaky',
+						'value'  => 'eventually',
+						'action' => 'fail_once',
+					),
+				),
+			)
+		);
+
+		$this->process_one(); // planner.
+		$this->process_one(); // for-each placeholder.
+		$this->process_one(); // first branch attempt retries immediately.
+
+		$retry_branch = $this->queue->claim();
+		$this->assertNotNull( $retry_branch );
+		$this->assertSame( FlakyForEachItemStep::class, $retry_branch->handler );
+		$this->assertSame( 2, $retry_branch->max_attempts );
+		$this->worker->process_job( $retry_branch );
+
+		$status = $this->workflow->status( $wf_id );
+		$this->assertSame( WorkflowStatus::Completed, $status->status );
+		$this->assertSame( 1, $status->state['task_results']['succeeded'] );
+		$this->assertSame( 2, $status->state['task_results']['results'][0]['attempt'] );
+	}
 }

@@ -20,6 +20,7 @@ use Queuety\Tests\Integration\Fixtures\AccumulatingStep;
 use Queuety\Tests\Integration\Fixtures\DataFetchStep;
 use Queuety\Tests\Integration\Fixtures\ParallelStepA;
 use Queuety\Tests\Integration\Fixtures\ParallelStepB;
+use Queuety\Tests\Integration\Fixtures\PayloadAwareStep;
 use Queuety\Worker;
 use Queuety\Workflow;
 use Queuety\WorkflowBuilder;
@@ -200,5 +201,79 @@ class ParallelStepsTest extends IntegrationTestCase {
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
 		$this->assertTrue( $status->state['parallel_a_ran'] );
 		$this->assertTrue( $status->state['parallel_b_ran'] );
+	}
+
+	public function test_serialized_parallel_branches_support_payload_and_runtime_metadata(): void {
+		$wf_id = $this->workflow_mgr->dispatch_definition(
+			array(
+				'name'         => 'structured_parallel',
+				'queue'        => 'default',
+				'priority'     => 0,
+				'max_attempts' => 5,
+				'steps'        => array(
+					array(
+						'type'     => 'parallel',
+						'name'     => 'branches',
+						'branches' => array(
+							array(
+								'name'       => 'alpha',
+								'class'      => PayloadAwareStep::class,
+								'payload'    => array( 'branch' => 'alpha' ),
+								'queue'      => 'critical',
+								'priority'   => 'urgent',
+								'retry'      => array(
+									'max_attempts' => 2,
+									'backoff'      => array( 3, 5 ),
+								),
+								'resources'  => array(
+									'concurrency_group' => 'structured',
+									'concurrency_limit' => 2,
+									'cost_units'        => 4,
+								),
+								'timeout'    => array( 'seconds' => 9 ),
+								'rate_limit' => array(
+									'max'    => 10,
+									'window' => 60,
+								),
+							),
+							array(
+								'name'    => 'beta',
+								'class'   => PayloadAwareStep::class,
+								'payload' => array( 'branch' => 'beta' ),
+							),
+						),
+					),
+				),
+			)
+		);
+
+		$critical = $this->queue->claim( 'critical' );
+		$this->assertNotNull( $critical );
+		$this->assertSame( $wf_id, $critical->workflow_id );
+		$this->assertSame( 0, $critical->step_index );
+		$this->assertSame( PayloadAwareStep::class, $critical->handler );
+		$this->assertSame( 3, $critical->priority->value );
+		$this->assertSame( 2, $critical->max_attempts );
+		$this->assertSame( 'structured', $critical->concurrency_group );
+		$this->assertSame( 2, $critical->concurrency_limit );
+		$this->assertSame( 4, $critical->cost_units );
+		$this->assertSame( 'alpha', $critical->payload['branch'] ?? null );
+		$this->assertSame( 9, $critical->payload['__queuety_runtime']['timeout_seconds'] ?? null );
+		$this->assertSame( array( 3, 5 ), $critical->payload['__queuety_runtime']['backoff'] ?? null );
+		$this->assertSame( array( 10, 60 ), $critical->payload['__queuety_runtime']['rate_limit'] ?? null );
+
+		$default = $this->queue->claim();
+		$this->assertNotNull( $default );
+		$this->assertSame( PayloadAwareStep::class, $default->handler );
+		$this->assertSame( 'beta', $default->payload['branch'] ?? null );
+
+		$this->worker->process_job( $critical );
+		$this->worker->process_job( $default );
+
+		$status = $this->workflow_mgr->status( $wf_id );
+		$this->assertSame( WorkflowStatus::Completed, $status->status );
+		$this->assertSame( 'alpha', $status->state['branch_alpha_payload'] );
+		$this->assertSame( 9, $status->state['branch_alpha_timeout'] );
+		$this->assertSame( 'beta', $status->state['branch_beta_payload'] );
 	}
 }

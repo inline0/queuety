@@ -206,7 +206,7 @@ class Worker {
 			}
 
 			if ( null !== $this->rate_limiter ) {
-				$this->register_handler_rate_limit( $job->handler );
+				$this->register_job_rate_limit( $job );
 
 				$this->debug_log( "Checking rate limit for handler: {$job->handler}", $job->queue );
 
@@ -286,7 +286,7 @@ class Worker {
 			}
 
 			if ( null !== $this->rate_limiter ) {
-				$this->register_handler_rate_limit( $job->handler );
+				$this->register_job_rate_limit( $job );
 
 				if ( $this->rate_limiter->is_limited( $job->handler ) ) {
 					$this->queue->unclaim( $job->id );
@@ -341,6 +341,7 @@ class Worker {
 		$custom_backoff   = null;
 		$pcntl_available  = function_exists( 'pcntl_alarm' ) && function_exists( 'pcntl_signal' );
 		$job_instance     = null;
+		$runtime_options  = StepDispatchOptions::runtime_from_payload( $job->payload );
 
 		if ( $this->registry->is_job_class( $job->handler ) ) {
 			$job_props = $this->read_job_properties( $job->handler );
@@ -366,6 +367,22 @@ class Worker {
 			} elseif ( is_string( $handler_settings['backoff'] ) ) {
 				$backoff_strategy = BackoffStrategy::tryFrom( $handler_settings['backoff'] );
 			}
+		}
+
+		if ( isset( $runtime_options['timeout_seconds'] ) && is_int( $runtime_options['timeout_seconds'] ) && $runtime_options['timeout_seconds'] > 0 ) {
+			$timeout_seconds = $runtime_options['timeout_seconds'];
+		}
+
+		if ( isset( $runtime_options['max_attempts'] ) && is_int( $runtime_options['max_attempts'] ) && $runtime_options['max_attempts'] > 0 ) {
+			$max_attempts = $runtime_options['max_attempts'];
+		}
+
+		if ( isset( $runtime_options['backoff'] ) && is_array( $runtime_options['backoff'] ) ) {
+			$custom_backoff   = $runtime_options['backoff'];
+			$backoff_strategy = null;
+		} elseif ( isset( $runtime_options['backoff'] ) && is_string( $runtime_options['backoff'] ) ) {
+			$backoff_strategy = BackoffStrategy::tryFrom( $runtime_options['backoff'] );
+			$custom_backoff   = null;
 		}
 
 		$this->logger->log(
@@ -397,7 +414,7 @@ class Worker {
 		}
 
 		Heartbeat::init( $job->id, $this->conn );
-		ExecutionContext::enter( $job->id, $job->workflow_id, $job->step_index );
+		ExecutionContext::enter( $job->id, $job->workflow_id, $job->step_index, $job->payload );
 
 		try {
 			if ( $this->is_state_machine_action_job( $job ) ) {
@@ -674,7 +691,11 @@ class Worker {
 
 				if ( null !== $this->rate_limiter && $handler instanceof Handler ) {
 					$config = $handler->config();
-					if ( isset( $config['rate_limit'] ) && is_array( $config['rate_limit'] ) ) {
+					if (
+						isset( $config['rate_limit'] )
+						&& is_array( $config['rate_limit'] )
+						&& ! $this->rate_limiter->is_registered( $job->handler )
+					) {
 						$this->rate_limiter->register(
 							$job->handler,
 							(int) $config['rate_limit'][0],
@@ -912,6 +933,7 @@ class Worker {
 			$effective_max    = $job->max_attempts;
 			$backoff_strategy = Config::retry_backoff();
 			$handler_backoff  = null;
+			$runtime_options  = StepDispatchOptions::runtime_from_payload( $job->payload );
 
 			if ( $this->registry->is_job_class( $job->handler ) ) {
 				$job_props = $this->read_job_properties( $job->handler );
@@ -931,6 +953,17 @@ class Worker {
 				} elseif ( is_string( $handler_settings['backoff'] ) ) {
 					$backoff_strategy = BackoffStrategy::tryFrom( $handler_settings['backoff'] ) ?? $backoff_strategy;
 				}
+			}
+
+			if ( isset( $runtime_options['max_attempts'] ) && is_int( $runtime_options['max_attempts'] ) && $runtime_options['max_attempts'] > 0 ) {
+				$effective_max = $runtime_options['max_attempts'];
+			}
+
+			if ( isset( $runtime_options['backoff'] ) && is_array( $runtime_options['backoff'] ) ) {
+				$handler_backoff = $runtime_options['backoff'];
+			} elseif ( isset( $runtime_options['backoff'] ) && is_string( $runtime_options['backoff'] ) ) {
+				$backoff_strategy = BackoffStrategy::tryFrom( $runtime_options['backoff'] ) ?? $backoff_strategy;
+				$handler_backoff  = null;
 			}
 
 			if ( $job->attempts >= $effective_max ) {
@@ -1129,6 +1162,33 @@ class Worker {
 	}
 
 	/**
+	 * Register rate limit for a job from serialized runtime metadata or handler config.
+	 *
+	 * @param Job $job Job record.
+	 */
+	private function register_job_rate_limit( Job $job ): void {
+		if ( null === $this->rate_limiter ) {
+			return;
+		}
+
+		if ( $this->rate_limiter->is_registered( $job->handler ) ) {
+			return;
+		}
+
+		$runtime = StepDispatchOptions::runtime_from_payload( $job->payload );
+		if ( isset( $runtime['rate_limit'] ) && is_array( $runtime['rate_limit'] ) && count( $runtime['rate_limit'] ) >= 2 ) {
+			$this->rate_limiter->register(
+				$job->handler,
+				(int) $runtime['rate_limit'][0],
+				(int) $runtime['rate_limit'][1],
+			);
+			return;
+		}
+
+		$this->register_handler_rate_limit( $job->handler );
+	}
+
+	/**
 	 * Register rate limit for a handler from its config, if available.
 	 *
 	 * @param string $handler Handler name or class.
@@ -1170,7 +1230,7 @@ class Worker {
 	private function public_payload( array $payload ): array {
 		unset( $payload['__chain_catch'] );
 
-		return $payload;
+		return StepDispatchOptions::public_payload( $payload );
 	}
 
 	/**

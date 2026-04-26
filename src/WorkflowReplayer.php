@@ -266,6 +266,59 @@ class WorkflowReplayer {
 	}
 
 	/**
+	 * Dispatch one replayed workflow step job with serialized runtime metadata.
+	 *
+	 * @param Queue                   $queue        Queue operations.
+	 * @param array|string            $step_def     Step definition.
+	 * @param string                  $handler      Handler class or alias.
+	 * @param array                   $payload      Job payload.
+	 * @param int                     $workflow_id  Workflow ID.
+	 * @param int                     $step_index   Step index.
+	 * @param string                  $queue_name   Workflow queue name.
+	 * @param \Queuety\Enums\Priority $priority     Workflow priority.
+	 * @param int                     $max_attempts Workflow max attempts.
+	 * @param int                     $default_cost Default cost units when no metadata exists.
+	 * @param int|null                $delay        Explicit dispatch delay override.
+	 */
+	private static function dispatch_replay_job(
+		Queue $queue,
+		array|string $step_def,
+		string $handler,
+		array $payload,
+		int $workflow_id,
+		int $step_index,
+		string $queue_name,
+		\Queuety\Enums\Priority $priority,
+		int $max_attempts,
+		int $default_cost = 1,
+		?int $delay = null,
+	): void {
+		$options = StepDispatchOptions::resolve(
+			definition: $step_def,
+			handler: $handler,
+			workflow_queue: $queue_name,
+			workflow_priority: $priority,
+			workflow_attempts: $max_attempts,
+			payload: $payload,
+			default_cost_units: $default_cost,
+		);
+
+		$queue->dispatch(
+			handler: $handler,
+			payload: $options['payload'],
+			queue: $options['queue'],
+			priority: $options['priority'],
+			delay: null === $delay ? $options['delay'] : $delay,
+			max_attempts: $options['max_attempts'],
+			workflow_id: $workflow_id,
+			step_index: $step_index,
+			concurrency_group: $options['concurrency_group'],
+			concurrency_limit: $options['concurrency_limit'],
+			cost_units: $options['cost_units'],
+		);
+	}
+
+	/**
 	 * Enqueue a step for the replayed workflow.
 	 *
 	 * @param Queue                   $queue       Queue operations.
@@ -288,79 +341,99 @@ class WorkflowReplayer {
 		$type = $step_def['type'] ?? 'single';
 
 		if ( 'parallel' === $type ) {
-			$handlers = $step_def['handlers'] ?? array();
-			foreach ( $handlers as $handler_class ) {
-				$queue->dispatch(
-					handler: $handler_class,
-					payload: array(),
-					queue: $queue_name,
-					priority: $priority,
-					max_attempts: $max_attempts,
-					workflow_id: $workflow_id,
-					step_index: $step_index,
+			foreach ( StepDispatchOptions::parallel_branches( $step_def ) as $branch ) {
+				$branch_def = StepDispatchOptions::merge_parallel_branch( $step_def, $branch );
+				$handler    = StepDispatchOptions::branch_handler( $branch_def );
+				self::dispatch_replay_job(
+					$queue,
+					$branch_def,
+					$handler,
+					StepDispatchOptions::payload( $branch_def ),
+					$workflow_id,
+					$step_index,
+					$queue_name,
+					$priority,
+					$max_attempts,
 				);
 			}
 		} elseif ( 'single' === $type ) {
 			$handler = $step_def['class'] ?? '';
-			$queue->dispatch(
-				handler: $handler,
-				payload: array(),
-				queue: $queue_name,
-				priority: $priority,
-				max_attempts: $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $step_index,
+			self::dispatch_replay_job(
+				$queue,
+				$step_def,
+				$handler,
+				StepDispatchOptions::payload( $step_def ),
+				$workflow_id,
+				$step_index,
+				$queue_name,
+				$priority,
+				$max_attempts,
 			);
 		} elseif ( 'delay' === $type ) {
-			$queue->dispatch(
-				handler: '__queuety_delay',
-				payload: array( 'step_index' => $step_index ),
-				queue: $queue_name,
-				priority: $priority,
-				delay: $step_def['delay_seconds'] ?? 0,
-				max_attempts: $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $step_index,
+			self::dispatch_replay_job(
+				$queue,
+				$step_def,
+				'__queuety_delay',
+				array( 'step_index' => $step_index ),
+				$workflow_id,
+				$step_index,
+				$queue_name,
+				$priority,
+				$max_attempts,
+				0,
+				(int) ( $step_def['delay_seconds'] ?? 0 ),
 			);
 		} elseif ( 'run_workflow' === $type ) {
-			$queue->dispatch(
-				handler: '__queuety_run_workflow',
-				payload: array( 'step_index' => $step_index ),
-				queue: $queue_name,
-				priority: $priority,
-				max_attempts: $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $step_index,
+			self::dispatch_replay_job(
+				$queue,
+				$step_def,
+				'__queuety_run_workflow',
+				array( 'step_index' => $step_index ),
+				$workflow_id,
+				$step_index,
+				$queue_name,
+				$priority,
+				$max_attempts,
+				0,
 			);
 		} elseif ( 'for_each' === $type ) {
-			$queue->dispatch(
-				handler: '__queuety_for_each',
-				payload: array( 'step_index' => $step_index ),
-				queue: $queue_name,
-				priority: $priority,
-				max_attempts: $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $step_index,
+			self::dispatch_replay_job(
+				$queue,
+				$step_def,
+				'__queuety_for_each',
+				array( 'step_index' => $step_index ),
+				$workflow_id,
+				$step_index,
+				$queue_name,
+				$priority,
+				$max_attempts,
+				0,
 			);
 		} elseif ( 'wait_for_signal' === $type ) {
-			$queue->dispatch(
-				handler: '__queuety_wait_for_signal',
-				payload: array( 'step_index' => $step_index ),
-				queue: $queue_name,
-				priority: $priority,
-				max_attempts: $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $step_index,
+			self::dispatch_replay_job(
+				$queue,
+				$step_def,
+				'__queuety_wait_for_signal',
+				array( 'step_index' => $step_index ),
+				$workflow_id,
+				$step_index,
+				$queue_name,
+				$priority,
+				$max_attempts,
+				0,
 			);
 		} elseif ( 'wait_for_workflows' === $type ) {
-			$queue->dispatch(
-				handler: '__queuety_wait_for_workflows',
-				payload: array( 'step_index' => $step_index ),
-				queue: $queue_name,
-				priority: $priority,
-				max_attempts: $max_attempts,
-				workflow_id: $workflow_id,
-				step_index: $step_index,
+			self::dispatch_replay_job(
+				$queue,
+				$step_def,
+				'__queuety_wait_for_workflows',
+				array( 'step_index' => $step_index ),
+				$workflow_id,
+				$step_index,
+				$queue_name,
+				$priority,
+				$max_attempts,
+				0,
 			);
 		}
 	}
