@@ -2,6 +2,12 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.17.4] - 2026-04-26
+
+### Changed
+
+- made structured repeat condition integration coverage deterministic by testing repeat evaluation directly
+
 ## [0.17.3] - 2026-04-26
 
 ### Changed

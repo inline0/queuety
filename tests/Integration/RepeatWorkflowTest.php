@@ -186,44 +186,42 @@ class RepeatWorkflowTest extends IntegrationTestCase {
 	}
 
 	public function test_serialized_repeat_condition_receives_structured_payload(): void {
-		$workflow_id = $this->workflow_mgr->dispatch_definition(
-			array(
-				'name'  => 'structured_repeat_condition',
-				'steps' => array(
-					array(
-						'type'  => 'single',
-						'class' => AccumulatingStep::class,
-						'name'  => 'increment',
-					),
-					array(
-						'type'           => 'repeat',
-						'name'           => 'repeat_until_payload_threshold',
-						'repeat_mode'    => 'until',
-						'target_step'    => 'increment',
-						'condition'      => array(
-							'class'   => StructuredRepeatCondition::class,
-							'payload' => array(
-								'key'       => 'counter',
-								'threshold' => 2,
-							),
-						),
-						'max_iterations' => 3,
-					),
-					array(
-						'type'  => 'single',
-						'class' => DataFetchStep::class,
-						'name'  => 'done',
-					),
+		$step_def = array(
+			'type'           => 'repeat',
+			'name'           => 'repeat_until_payload_threshold',
+			'repeat_mode'    => 'until',
+			'target_step'    => 'increment',
+			'condition'      => array(
+				'class'   => StructuredRepeatCondition::class,
+				'payload' => array(
+					'key'       => 'counter',
+					'threshold' => 2,
 				),
 			),
-			array( 'user_id' => 11 )
+			'max_iterations' => 3,
 		);
 
-		$this->process_until_workflow_status( $workflow_id, WorkflowStatus::Completed );
+		$continue_output = $this->workflow_mgr->handle_repeat_step(
+			123,
+			$step_def,
+			1,
+			array(
+				'counter' => 1,
+			)
+		);
 
-		$status = $this->workflow_mgr->status( $workflow_id );
-		$this->assertSame( WorkflowStatus::Completed, $status->status );
-		$this->assertSame( 2, $status->state['counter'] );
+		$stop_output = $this->workflow_mgr->handle_repeat_step(
+			123,
+			$step_def,
+			1,
+			array(
+				'counter' => 2,
+			)
+		);
+
+		$this->assertSame( 'increment', $continue_output['_next_step'] );
+		$this->assertArrayNotHasKey( '_next_step', $stop_output );
 		$this->assertSame( 2, StructuredWorkflowHandlers::$calls['condition'][0]['payload']['threshold'] );
+		$this->assertSame( 2, StructuredWorkflowHandlers::$calls['condition'][1]['payload']['threshold'] );
 	}
 }
