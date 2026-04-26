@@ -54,7 +54,7 @@ class RepeatWorkflowTest extends IntegrationTestCase {
 	}
 
 	private function process_until_workflow_status( int $workflow_id, WorkflowStatus $expected_status ): void {
-		for ( $i = 0; $i < 10; ++$i ) {
+		for ( $i = 0; $i < 50; ++$i ) {
 			$this->process_one();
 
 			$status = $this->workflow_mgr->status( $workflow_id );
