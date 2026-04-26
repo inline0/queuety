@@ -334,6 +334,6 @@ class ForEachWorkflowTest extends IntegrationTestCase {
 		$status = $this->workflow->status( $wf_id );
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
 		$this->assertSame( 1, $status->state['task_results']['succeeded'] );
-		$this->assertSame( 2, $status->state['task_results']['results'][0]['attempt'] );
+		$this->assertSame( 2, $status->state['task_results']['results'][0]['output']['attempt'] );
 	}
 }
