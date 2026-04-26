@@ -18,7 +18,8 @@ interface StateGuard {
 	 * @param array  $state         Current public machine state.
 	 * @param array  $event_payload Incoming event payload.
 	 * @param string $event         Incoming event name.
+	 * @param array  $payload       Structured guard payload from the machine definition.
 	 * @return bool
 	 */
-	public function allows( array $state, array $event_payload, string $event ): bool;
+	public function allows( array $state, array $event_payload, string $event, array $payload = array() ): bool;
 }

@@ -40,11 +40,13 @@ class StateMachineBuilderTest extends TestCase {
 		$this->assertSame( 5, $definition['max_attempts'] );
 		$this->assertSame( 'agent-session.v1', $definition['definition_version'] );
 		$this->assertSame( 'PlanSessionAction', $definition['states']['planning']['action_class'] );
+		$this->assertSame( array( 'class' => 'PlanSessionAction', 'payload' => array() ), $definition['states']['planning']['action'] );
 		$this->assertSame( 'completed', $definition['states']['completed']['terminal_status'] );
 		$this->assertSame(
 			array(
 				'event'        => 'planned',
 				'target_state' => 'completed',
+				'guard'        => array( 'class' => 'PlanReadyGuard', 'payload' => array() ),
 				'guard_class'  => 'PlanReadyGuard',
 				'name'         => 'plan_ready',
 			),
@@ -79,6 +81,52 @@ class StateMachineBuilderTest extends TestCase {
 			->dispatch( array( 'thread_id' => 42 ) );
 
 		$this->assertSame( 7, $machine_id );
+	}
+
+	public function test_builder_accepts_structured_action_and_guard_payloads(): void {
+		$definition = $this->make_builder()
+			->state( 'planning' )
+			->action(
+				array(
+					'class'   => 'PlanSessionAction',
+					'payload' => array(
+						'prompt' => 'Build plan',
+					),
+				)
+			)
+			->on(
+				'planned',
+				'completed',
+				array(
+					'class'   => 'PlanReadyGuard',
+					'payload' => array(
+						'field' => 'approved',
+					),
+				)
+			)
+			->state( 'completed', StateMachineStatus::Completed )
+			->build_runtime_definition();
+
+		$this->assertSame(
+			array(
+				'class'   => 'PlanSessionAction',
+				'payload' => array(
+					'prompt' => 'Build plan',
+				),
+			),
+			$definition['states']['planning']['action']
+		);
+		$this->assertSame( 'PlanSessionAction', $definition['states']['planning']['action_class'] );
+		$this->assertSame(
+			array(
+				'class'   => 'PlanReadyGuard',
+				'payload' => array(
+					'field' => 'approved',
+				),
+			),
+			$definition['states']['planning']['transitions'][0]['guard']
+		);
+		$this->assertSame( 'PlanReadyGuard', $definition['states']['planning']['transitions'][0]['guard_class'] );
 	}
 
 	public function test_build_runtime_definition_rejects_missing_transition_target(): void {

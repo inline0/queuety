@@ -183,6 +183,9 @@ Queuety::machine_event(
 );
 ```
 
+State actions and guards may also be serialized as `['class' => Handler::class, 'payload' => [...]]`.
+The payload is passed as the fourth argument to `handle()` or `allows()`.
+
 Trigger workflows directly from WordPress actions:
 
 ```php

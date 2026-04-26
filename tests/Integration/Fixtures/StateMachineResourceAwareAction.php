@@ -6,7 +6,7 @@ use Queuety\Contracts\StateAction;
 
 class StateMachineResourceAwareAction implements StateAction {
 
-	public function handle( array $state, ?string $event_name = null, array $event_payload = array() ): array {
+	public function handle( array $state, ?string $event_name = null, array $event_payload = array(), array $payload = array() ): array {
 		return array();
 	}
 

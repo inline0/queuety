@@ -203,6 +203,58 @@ class StateMachineTest extends IntegrationTestCase {
 		);
 	}
 
+	public function test_machine_entry_action_and_guard_receive_structured_payloads(): void {
+		$machine_id = Queuety::machine( 'editorial_session' )
+			->state( 'planning' )
+			->action(
+				array(
+					'class'   => StateMachinePlanningAction::class,
+					'payload' => array(
+						'draft' => 'payload-outline',
+						'event' => 'planned',
+					),
+				)
+			)
+			->on(
+				'planned',
+				'awaiting_review'
+			)
+			->state( 'awaiting_review' )
+			->on(
+				'approve',
+				'completed',
+				array(
+					'class'   => StateMachineApproveGuard::class,
+					'payload' => array(
+						'field' => 'accepted',
+					),
+				)
+			)
+			->state( 'completed', StateMachineStatus::Completed )
+			->dispatch( array( 'brief_id' => 42 ) );
+
+		$this->process_one();
+
+		$status = Queuety::machine_status( $machine_id );
+		$this->assertNotNull( $status );
+		$this->assertSame( 'awaiting_review', $status->current_state );
+		$this->assertSame( 'payload-outline', $status->state['draft'] );
+
+		try {
+			Queuety::machine_event( $machine_id, 'approve', array( 'approved' => true ) );
+			$this->fail( 'Expected a rejected machine event to throw.' );
+		} catch ( \RuntimeException $e ) {
+			$this->assertStringContainsString( "does not allow event 'approve'", $e->getMessage() );
+		}
+
+		Queuety::machine_event( $machine_id, 'approve', array( 'accepted' => true ) );
+
+		$status = Queuety::machine_status( $machine_id );
+		$this->assertNotNull( $status );
+		$this->assertSame( StateMachineStatus::Completed, $status->status );
+		$this->assertSame( 'completed', $status->current_state );
+	}
+
 	public function test_machine_dispatch_is_idempotent_for_matching_dispatch_key(): void {
 		$builder = Queuety::machine( 'chat_session' )
 			->state( 'awaiting_user' )

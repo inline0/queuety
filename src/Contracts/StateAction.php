@@ -21,7 +21,8 @@ interface StateAction {
 	 * @param array       $state         Current public machine state.
 	 * @param string|null $event         Event that led into the state, if any.
 	 * @param array       $event_payload Payload that led into the state, if any.
+	 * @param array       $payload       Structured action payload from the machine definition.
 	 * @return array|string Public state updates, or a string event name shorthand.
 	 */
-	public function handle( array $state, ?string $event = null, array $event_payload = array() ): array|string;
+	public function handle( array $state, ?string $event = null, array $event_payload = array(), array $payload = array() ): array|string;
 }

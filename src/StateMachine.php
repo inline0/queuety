@@ -193,7 +193,7 @@ class StateMachine {
 			definition_hash: $row['definition_hash'] ? (string) $row['definition_hash'] : null,
 			idempotency_key: $row['idempotency_key'] ? (string) $row['idempotency_key'] : null,
 			error_message: $row['error_message'] ? (string) $row['error_message'] : null,
-			current_action: is_string( $current_state_def['action_class'] ?? null ) ? $current_state_def['action_class'] : null,
+			current_action: $this->state_action_class( $current_state_def ),
 			terminal_status: is_string( $current_state_def['terminal_status'] ?? null ) ? $current_state_def['terminal_status'] : null,
 		);
 	}
@@ -292,6 +292,7 @@ class StateMachine {
 	 * @param string      $state_name     State name the action was queued for.
 	 * @param string|null $event_name     Event that led into the state, if any.
 	 * @param array       $event_payload  Event payload that led into the state.
+	 * @throws \RuntimeException When the queued state no longer defines an action.
 	 * @throws \Throwable When the action fails so worker retries apply.
 	 */
 	public function handle_action_job( int $machine_id, string $state_name, ?string $event_name = null, array $event_payload = array() ): void {
@@ -302,7 +303,11 @@ class StateMachine {
 			}
 
 			$state_def = $context['state_def'];
-			$action    = $this->instantiate_action( (string) ( $state_def['action_class'] ?? '' ) );
+			$action_def = $this->state_action_definition( $state_def );
+			if ( null === $action_def ) {
+				throw new \RuntimeException( "State '{$state_name}' does not define an action." );
+			}
+			$action = $this->instantiate_action( $action_def['class'] );
 
 			$this->record_machine_event(
 				$machine_id,
@@ -313,7 +318,7 @@ class StateMachine {
 				$event_payload
 			);
 
-			$result = $action->handle( $context['state'], $event_name, $event_payload );
+			$result = $action->handle( $context['state'], $event_name, $event_payload, $action_def['payload'] );
 			if ( is_string( $result ) ) {
 				$result = array( '_event' => $result );
 			}
@@ -582,10 +587,10 @@ class StateMachine {
 				continue;
 			}
 
-			$guard_class = $transition['guard_class'] ?? null;
-			if ( is_string( $guard_class ) && '' !== trim( $guard_class ) ) {
-				$guard = $this->instantiate_guard( $guard_class );
-				if ( ! $guard->allows( $state, $event_payload, $event_name ) ) {
+			$guard_def = $this->transition_guard_definition( $transition );
+			if ( null !== $guard_def ) {
+				$guard = $this->instantiate_guard( $guard_def['class'] );
+				if ( ! $guard->allows( $state, $event_payload, $event_name, $guard_def['payload'] ) ) {
 					continue;
 				}
 			}
@@ -606,11 +611,12 @@ class StateMachine {
 	 * @param array                $event_payload  Event payload that led into the state.
 	 */
 	private function enqueue_state_action( int $machine_id, array $definition, string $state_name, ?string $event_name, array $event_payload ): void {
-		$state_def    = $definition['states'][ $state_name ] ?? array();
-		$action_class = trim( (string) ( $state_def['action_class'] ?? '' ) );
-		if ( '' === $action_class ) {
+		$state_def  = is_array( $definition['states'][ $state_name ] ?? null ) ? $definition['states'][ $state_name ] : array();
+		$action_def = $this->state_action_definition( $state_def );
+		if ( null === $action_def ) {
 			return;
 		}
+		$action_class    = $action_def['class'];
 		$action_defaults = HandlerMetadata::from_class( $action_class );
 
 		$this->queue->dispatch(
@@ -642,8 +648,7 @@ class StateMachine {
 			return StateMachineStatus::from( $terminal_status );
 		}
 
-		$action_class = trim( (string) ( $state_def['action_class'] ?? '' ) );
-		if ( '' !== $action_class ) {
+		if ( null !== $this->state_action_definition( $state_def ) ) {
 			return StateMachineStatus::Running;
 		}
 
@@ -669,6 +674,96 @@ class StateMachine {
 		}
 
 		return $instance;
+	}
+
+	/**
+	 * Resolve the action class for a state definition.
+	 *
+	 * @param array $state_def State definition.
+	 * @return string|null
+	 */
+	private function state_action_class( array $state_def ): ?string {
+		$action = $this->state_action_definition( $state_def );
+		return null === $action ? null : $action['class'];
+	}
+
+	/**
+	 * Resolve the structured action definition for a state.
+	 *
+	 * @param array $state_def State definition.
+	 * @return array{class:string,payload:array}|null
+	 */
+	private function state_action_definition( array $state_def ): ?array {
+		$action = $this->normalize_handler_definition( $state_def['action'] ?? null );
+		if ( null !== $action ) {
+			return $action;
+		}
+
+		$action_class = $state_def['action_class'] ?? null;
+		if ( is_string( $action_class ) && '' !== trim( $action_class ) ) {
+			return array(
+				'class'   => trim( $action_class ),
+				'payload' => array(),
+			);
+		}
+
+		return null;
+	}
+
+	/**
+	 * Resolve the structured guard definition for a transition.
+	 *
+	 * @param array $transition Transition definition.
+	 * @return array{class:string,payload:array}|null
+	 */
+	private function transition_guard_definition( array $transition ): ?array {
+		$guard = $this->normalize_handler_definition( $transition['guard'] ?? null );
+		if ( null !== $guard ) {
+			return $guard;
+		}
+
+		$guard_class = $transition['guard_class'] ?? null;
+		if ( is_string( $guard_class ) && '' !== trim( $guard_class ) ) {
+			return array(
+				'class'   => trim( $guard_class ),
+				'payload' => array(),
+			);
+		}
+
+		return null;
+	}
+
+	/**
+	 * Normalize a structured handler definition.
+	 *
+	 * @param mixed $definition Handler definition.
+	 * @return array{class:string,payload:array}|null
+	 */
+	private function normalize_handler_definition( mixed $definition ): ?array {
+		if ( is_string( $definition ) && '' !== trim( $definition ) ) {
+			return array(
+				'class'   => trim( $definition ),
+				'payload' => array(),
+			);
+		}
+
+		if ( ! is_array( $definition ) ) {
+			return null;
+		}
+
+		$class = isset( $definition['class'] ) && is_string( $definition['class'] )
+			? trim( $definition['class'] )
+			: '';
+		if ( '' === $class ) {
+			return null;
+		}
+
+		$payload = $definition['payload'] ?? ( $definition['config'] ?? array() );
+
+		return array(
+			'class'   => $class,
+			'payload' => is_array( $payload ) ? $payload : array(),
+		);
 	}
 
 	/**

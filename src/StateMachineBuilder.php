@@ -18,7 +18,7 @@ class StateMachineBuilder {
 	/**
 	 * State definitions keyed by state name.
 	 *
-	 * @var array<string, array{name: string, action_class: string|null, terminal_status: string|null, transitions: array<int, array{event: string, target_state: string, guard_class: string|null, name: string}>}>
+	 * @var array<string, array{name: string, action: array{class:string,payload:array}|null, action_class: string|null, terminal_status: string|null, transitions: array<int, array{event: string, target_state: string, guard: array{class:string,payload:array}|null, guard_class: string|null, name: string}>}>
 	 */
 	private array $states = array();
 
@@ -116,6 +116,7 @@ class StateMachineBuilder {
 		if ( ! isset( $this->states[ $state_name ] ) ) {
 			$this->states[ $state_name ] = array(
 				'name'            => $state_name,
+				'action'          => null,
 				'action_class'    => null,
 				'terminal_status' => null,
 				'transitions'     => array(),
@@ -140,29 +141,32 @@ class StateMachineBuilder {
 	/**
 	 * Register one queued entry action on the current state.
 	 *
-	 * @param string $action_class Action class implementing Contracts\StateAction.
+	 * @param string|array $action_class Action class or structured action definition implementing Contracts\StateAction.
 	 * @return self
 	 */
-	public function action( string $action_class ): self {
-		$state_name                                  = $this->current_state_name();
-		$this->states[ $state_name ]['action_class'] = $action_class;
+	public function action( string|array $action_class ): self {
+		$state_name     = $this->current_state_name();
+		$action         = self::handler_definition( $action_class, 'State machine action' );
+		$this->states[ $state_name ]['action']       = $action;
+		$this->states[ $state_name ]['action_class'] = $action['class'];
 		return $this;
 	}
 
 	/**
 	 * Register one event transition on the current state.
 	 *
-	 * @param string      $event       Event name.
-	 * @param string      $target      Target state name.
-	 * @param string|null $guard_class Optional guard class implementing Contracts\StateGuard.
-	 * @param string|null $name        Optional transition name for docs and inspection.
+	 * @param string            $event       Event name.
+	 * @param string            $target      Target state name.
+	 * @param string|array|null $guard_class Optional guard class or structured guard definition implementing Contracts\StateGuard.
+	 * @param string|null       $name        Optional transition name for docs and inspection.
 	 * @return self
 	 * @throws \InvalidArgumentException When the event name or target state name is empty.
 	 */
-	public function on( string $event, string $target, ?string $guard_class = null, ?string $name = null ): self {
+	public function on( string $event, string $target, string|array|null $guard_class = null, ?string $name = null ): self {
 		$state_name = $this->current_state_name();
 		$event      = trim( $event );
 		$target     = trim( $target );
+		$guard      = null === $guard_class ? null : self::handler_definition( $guard_class, 'State machine guard' );
 
 		if ( '' === $event ) {
 			throw new \InvalidArgumentException( 'State machine transition event cannot be empty.' );
@@ -175,7 +179,8 @@ class StateMachineBuilder {
 		$this->states[ $state_name ]['transitions'][] = array(
 			'event'        => $event,
 			'target_state' => $target,
-			'guard_class'  => $guard_class,
+			'guard'        => $guard,
+			'guard_class'  => null === $guard ? null : $guard['class'],
 			'name'         => $name ?? $event,
 		);
 
@@ -344,5 +349,44 @@ class StateMachineBuilder {
 		}
 
 		return $this->current_state;
+	}
+
+	/**
+	 * Normalize a state action or guard definition.
+	 *
+	 * @param string|array $definition Handler class string or structured definition.
+	 * @param string       $label      Error label.
+	 * @return array{class:string,payload:array}
+	 * @throws \InvalidArgumentException When the handler definition is invalid.
+	 */
+	private static function handler_definition( string|array $definition, string $label ): array {
+		if ( is_string( $definition ) ) {
+			$class = trim( $definition );
+			if ( '' === $class ) {
+				throw new \InvalidArgumentException( "{$label} class cannot be empty." );
+			}
+
+			return array(
+				'class'   => $class,
+				'payload' => array(),
+			);
+		}
+
+		$class = isset( $definition['class'] ) && is_string( $definition['class'] )
+			? trim( $definition['class'] )
+			: '';
+		if ( '' === $class ) {
+			throw new \InvalidArgumentException( "{$label} definition must include a class." );
+		}
+
+		$payload = $definition['payload'] ?? ( $definition['config'] ?? array() );
+		if ( ! is_array( $payload ) ) {
+			throw new \InvalidArgumentException( "{$label} payload must be an array." );
+		}
+
+		return array(
+			'class'   => $class,
+			'payload' => $payload,
+		);
 	}
 }

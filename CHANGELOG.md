@@ -2,6 +2,12 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.18.0] - 2026-04-26
+
+### Added
+
+- structured state machine action and guard definitions with serialized payloads
+
 ## [0.17.5] - 2026-04-26
 
 ### Fixed
