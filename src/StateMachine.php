@@ -218,7 +218,7 @@ class StateMachine {
 	 */
 	public function list( int $limit = 50, ?string $status = null ): array {
 		$table  = $this->conn->table( Config::table_state_machines() );
-		$sql    = "SELECT id, name, status, current_state, started_at, updated_at, completed_at, failed_at FROM {$table}";
+		$sql    = "SELECT id, name, status, current_state, definition_version, definition_hash, idempotency_key, started_at, updated_at, completed_at, failed_at FROM {$table}";
 		$params = array();
 
 		if ( null !== $status ) {

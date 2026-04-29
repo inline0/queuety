@@ -79,6 +79,9 @@ class StateMachineTest extends IntegrationTestCase {
 		$list = Queuety::list_machines();
 		$this->assertCount( 1, $list );
 		$this->assertSame( 'waiting_event', $list[0]['status'] );
+		$this->assertArrayHasKey( 'definition_version', $list[0] );
+		$this->assertArrayHasKey( 'definition_hash', $list[0] );
+		$this->assertArrayHasKey( 'idempotency_key', $list[0] );
 	}
 
 	public function test_machine_event_transitions_waiting_machine_to_completed_state(): void {
@@ -159,6 +162,10 @@ class StateMachineTest extends IntegrationTestCase {
 		$this->assertSame( 42, $status->state['brief_id'] );
 		$this->assertSame( 1, $status->state['plan_attempts'] );
 		$this->assertSame( 'outline', $status->state['draft'] );
+
+		$list = Queuety::list_machines();
+		$this->assertSame( 'editorial-session.v1', $list[0]['definition_version'] );
+		$this->assertSame( $status->definition_hash, $list[0]['definition_hash'] );
 
 		try {
 			Queuety::machine_event( $machine_id, 'approve', array( 'approved' => false ) );

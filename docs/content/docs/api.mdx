@@ -703,6 +703,9 @@ $machines = Queuety::list_machines();
 $waiting  = Queuety::list_machines( status: 'waiting_event' );
 ```
 
+Each row includes the machine id, name, status, current state, definition
+version, definition hash, idempotency key, and lifecycle timestamps.
+
 ### `Queuety::machine_timeline( $machine_id, $limit = 100, $offset = 0 )`
 
 Get the durable event timeline for one machine.

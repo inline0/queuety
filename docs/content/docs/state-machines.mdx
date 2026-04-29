@@ -103,7 +103,7 @@ $trace    = Queuety::machine_trace( $machine_id );
 $state    = Queuety::machine_state_at( $machine_id, $event_id );
 ```
 
-Those APIs expose the current state name, lifecycle status, public state, available events, definition metadata, the full transition timeline, and a normalized trace bundle for debugger UIs. The trace bundle includes grouped states, raw events, correlated action jobs, logs, artifact references, chunk references, handler input/output, state before/after, context, timings, and structured errors.
+Those APIs expose the current state name, lifecycle status, public state, available events, definition metadata, the full transition timeline, and a normalized trace bundle for debugger UIs. Machine list rows include definition version, definition hash, and idempotency key so list screens can show the source/runtime version without loading each machine individually. The trace bundle includes grouped states, raw events, correlated action jobs, logs, artifact references, chunk references, handler input/output, state before/after, context, timings, and structured errors.
 
 ## Agent sessions
 

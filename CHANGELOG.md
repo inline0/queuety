@@ -2,6 +2,12 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.21.1] - 2026-04-29
+
+### Changed
+
+- state-machine list rows include definition version, definition hash, and idempotency key metadata
+
 ## [0.21.0] - 2026-04-29
 
 ### Added
