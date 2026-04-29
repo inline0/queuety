@@ -117,7 +117,7 @@ class WorkflowRewindTest extends IntegrationTestCase {
 
 		// Try to rewind to step 5 (doesn't exist).
 		$this->expectException( \RuntimeException::class );
-		$this->expectExceptionMessage( 'No state snapshot found' );
+		$this->expectExceptionMessage( 'No recorded state found' );
 		$this->workflow->rewind( $wf_id, 5 );
 	}
 

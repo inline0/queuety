@@ -42,7 +42,7 @@ queuety/
 │   ├── Workflow.php       # Workflow model and orchestration
 │   ├── WorkflowBuilder.php # Fluent workflow builder
 │   ├── WorkflowState.php  # Workflow state value object (readonly)
-│   ├── WorkflowEventLog.php # Workflow event timeline and state snapshots
+│   ├── WorkflowEventLog.php # Workflow trace timeline and normalized trace bundles
 │   ├── WorkflowTemplate.php # Registered workflow template
 │   ├── WorkflowRegistry.php # Workflow template registry
 │   ├── Worker.php         # Worker process loop
@@ -177,7 +177,7 @@ All constants are optional. Define them in `wp-config.php` or `queuety-config.ph
 10. **Cache layer is pluggable**: `CacheFactory` auto-detects APCu or falls back to `MemoryCache`. Custom backends implement `Contracts\Cache`.
 11. **Streaming steps yield chunks**: each yielded value is persisted to the `queuety_chunks` table immediately. On retry, `$existing_chunks` provides previously saved data so the stream can resume.
 12. **Middleware wraps job execution**: middleware classes implement `Contracts\Middleware` and are declared in a `middleware()` method on the job class. The pipeline is onion-style (outer to inner).
-13. **Workflow event log records step transitions**: every step start, completion, and failure is recorded with state snapshots for time-travel debugging.
+13. **Workflow tracing records step transitions**: every step start, completion, and failure is recorded with input, output, before/after state, context, artifacts, chunks, and errors for debugger UIs and time-travel debugging.
 14. **Keep `CliCommandMap` and `CliCommandAdapters` aligned with the real CLI surface**: new or changed commands need a stable operation ID, a public API target, and resolver coverage.
 
 ## Harness Contract
@@ -224,7 +224,7 @@ All constants are optional. Define them in `wp-config.php` or `queuety-config.ph
 | `wp queuety workflow fork <id>` | Fork a workflow into an independent copy |
 | `wp queuety workflow export <id> [--output=<file>]` | Export a workflow to JSON |
 | `wp queuety workflow replay <file>` | Replay a workflow export |
-| `wp queuety workflow state-at <id> <step>` | Show workflow state snapshot at a specific step |
+| `wp queuety workflow state-at <id> <step>` | Show workflow state after a specific step |
 | `wp queuety schedule list` | List recurring schedules |
 | `wp queuety schedule add <handler> [--every=<interval>] [--cron=<expr>]` | Add a recurring schedule |
 | `wp queuety schedule remove <handler>` | Remove a schedule |

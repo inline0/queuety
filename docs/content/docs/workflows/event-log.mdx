@@ -1,75 +1,128 @@
 ---
 title: Event Log
-description: Full event timeline and state snapshots for workflow debugging and auditing.
+description: Full workflow traces with input, output, state, context, artifacts, chunks, and errors.
 ---
 
 # Workflow Event Log
 
-The workflow event log records step transitions and workflow wait/resume events with state snapshots. This gives you a complete timeline of exactly what happened during a workflow and what the state looked like at each durable boundary.
+The workflow event log records a trace for every durable workflow boundary. Each trace event can include the step input, output, public state before the step, public state after the step, runtime context, artifact references, streaming chunks, timing, and error details.
 
 ## What gets recorded
 
-The worker automatically records these event types:
-
 | Event | When | Data captured |
 |---|---|---|
-| `step_started` | Before a step handler runs | Workflow ID, step index, handler class |
-| `step_completed` | After a step handler succeeds | Full state snapshot, step output, duration in milliseconds |
-| `step_failed` | When a step handler throws | Error message, duration in milliseconds |
-| `workflow_waiting` | When a signal or workflow wait parks the run | Full public state, wait type, wait targets, and wait metadata such as mode, result key, or correlation rules |
-| `workflow_resumed` | When a signal or workflow wait settles | Full public state after resuming, wait output |
-| `workflow_replayed` | When an export is recreated in a new environment | Full public state plus replay metadata |
-
-The `step_completed` event includes two key pieces of data:
-
-- **State snapshot**: The full workflow state after merging the step's output. This is the exact state that the next step will receive.
-- **Step output**: The array returned by the step handler, before it was merged into the state.
+| `step_started` | Before a step handler runs | Job ID, queue, attempt, step name, step type, input, and state before execution |
+| `step_completed` | After a step handler succeeds | Input, output, state before, state after, context, artifacts, chunks, and duration |
+| `step_failed` | When a step handler throws | Input, state before, state after when available, context, error class, error message, trace, and duration |
+| `step_branch_completed` | When one parallel branch succeeds | Branch input, output, state before, state after, context, and duration |
+| `step_item_completed` | When one for-each item succeeds | Item input, output, state before, state after, item metadata, context, and duration |
+| `workflow_waiting` | When a wait step parks the run | Wait type, wait targets, wait mode, result key, match metadata, and state while waiting |
+| `workflow_resumed` | When a wait step is satisfied | Resume payload, state before resuming, and state after resuming |
+| `workflow_replayed` | When an export is recreated | Source workflow metadata and replay state |
 
 ## Querying the timeline
 
-### PHP API
-
-Get the ordered list of events for a workflow:
-
 ```php
 $events = Queuety::workflow_timeline( $workflow_id );
-$next   = Queuety::workflow_timeline( $workflow_id, 100, 100 );
 
 foreach ( $events as $event ) {
     echo $event['step_index'] . ' ' . $event['event'] . ' ' . $event['handler'] . "\n";
 
     if ( 'step_completed' === $event['event'] ) {
-        // $event['state_snapshot'] contains the full state after this step
-        // $event['step_output'] contains just what this step returned
-        // $event['duration_ms'] contains execution time in milliseconds
+        $input        = $event['input'];
+        $output       = $event['output'];
+        $state_before = $event['state_before'];
+        $state_after  = $event['state_after'];
     }
 
     if ( 'step_failed' === $event['event'] ) {
-        echo 'Error: ' . $event['error_message'] . "\n";
-    }
-
-    if ( 'workflow_waiting' === $event['event'] ) {
-        // $event['step_output']['wait_type'] is 'signal' or 'workflow'
-        // $event['step_output']['waiting_for'] contains the current blockers
-        // $event['step_output']['wait_mode'] is 'all' or 'any'
+        echo 'Error: ' . $event['error']['message'] . "\n";
     }
 }
 ```
 
-Get the exact state after a specific step completed:
+Each event row contains:
+
+- `id`
+- `workflow_id`
+- `job_id`
+- `parent_event_id`
+- `step_index`
+- `step_name`
+- `step_type`
+- `handler`
+- `event`
+- `queue`
+- `attempt`
+- `input`
+- `output`
+- `state_before`
+- `state_after`
+- `context`
+- `artifacts`
+- `chunks`
+- `error`
+- `duration_ms`
+- `created_at`
+
+## Normalized trace bundle
+
+Use `workflow_trace()` when building a debugger UI:
+
+```php
+$trace = Queuety::workflow_trace( $workflow_id );
+```
+
+The trace bundle includes:
+
+- `workflow`
+- `steps`
+- `events`
+- `jobs`
+- `logs`
+- `artifacts`
+- `chunks`
+- `signals`
+- `wait_dependencies`
+
+`steps` groups events by step index and includes the latest important event for each step.
+
+## Step state lookup
 
 ```php
 $state = Queuety::workflow_state_at( $workflow_id, $step_index );
-
-if ( null !== $state ) {
-    // $state is the full workflow state array as it existed after step $step_index
-    echo $state['user_name'];
-}
 ```
 
-Returns `null` if the step has not completed or no snapshot was recorded.
+This returns the public `state_after` from the latest completed or resumed event for that step, or `null` when no state was recorded.
 
-### CLI
+## Runtime trace metadata
+
+Handlers can add application-level trace details while they run:
+
+```php
+Queuety::trace_input( [ 'resolved' => $resolved_input ] );
+Queuety::trace_context( [ 'ability' => 'content/load-post' ] );
+Queuety::trace_output( [ 'post' => $post ] );
+```
+
+Step handlers can also return reserved trace metadata:
+
+```php
+return [
+    'result' => 'done',
+    '_queuety_trace' => [
+        'input' => [ 'resolved' => $resolved_input ],
+        'context' => [ 'node_id' => 'loadPost' ],
+        'artifacts' => [
+            [ 'key' => 'brief', 'kind' => 'markdown' ],
+        ],
+    ],
+];
+```
+
+The `_queuety_trace` key is stored in the event log and is not merged into workflow state.
+
+## CLI
 
 View the timeline as a table:
 
@@ -77,99 +130,16 @@ View the timeline as a table:
 wp queuety workflow timeline 42
 ```
 
-Limit the output when a run has a longer history:
-
-```bash
-wp queuety workflow timeline 42 --limit=100 --offset=100
-```
-
-Output:
-
-```
-+----+------+----------------+---------------------+-------------+-------+---------------------+
-| ID | Step | Event          | Handler             | Duration_ms | Error | Created_at          |
-+----+------+----------------+---------------------+-------------+-------+---------------------+
-| 1  | 0    | step_started   | FetchDataHandler    | -           | -     | 2026-03-28 10:00:00 |
-| 2  | 0    | step_completed | FetchDataHandler    | 230         | -     | 2026-03-28 10:00:00 |
-| 3  | 1    | step_started   | CallLLMHandler      | -           | -     | 2026-03-28 10:00:01 |
-| 4  | 1    | step_failed    | CallLLMHandler      | 1520        | Ti... | 2026-03-28 10:00:02 |
-+----+------+----------------+---------------------+-------------+-------+---------------------+
-```
-
-View the state snapshot at a specific step:
+View state after a step:
 
 ```bash
 wp queuety workflow state-at 42 0
 ```
 
-Output:
+## Retention
 
-```
-State at step 0 for workflow #42:
-{
-    "user_id": 42,
-    "user_name": "Alice",
-    "records_fetched": 150
-}
-```
-
-## Use cases
-
-### Debugging failed workflows
-
-When a workflow fails at step 3, you can inspect the exact state that step 3 received:
+Event logs accumulate over time. Use `prune()` to delete old trace events:
 
 ```php
-// What state did step 3 see when it failed?
-$state = Queuety::workflow_state_at( $workflow_id, 2 ); // state after step 2
-```
-
-This shows you the exact inputs without needing to re-run previous steps.
-
-### Auditing
-
-The timeline provides a complete audit trail of every step execution, including timestamps and durations. Use it to verify that workflows ran in the expected order and completed within acceptable time bounds.
-
-### Reproducing issues
-
-Use `workflow_state_at()` to extract the exact state a step received, then pass it to the step handler directly in a test:
-
-```php
-$state = Queuety::workflow_state_at( $workflow_id, 2 );
-$handler = new CallLLMHandler();
-$output = $handler->handle( $state ); // reproduce the exact call
-```
-
-## Accessing the event log directly
-
-For advanced use cases, access the `WorkflowEventLog` instance:
-
-```php
-$log = Queuety::workflow_events();
-
-// Get the timeline, optionally in pages
-$events = $log->get_timeline( $workflow_id );
-$next   = $log->get_timeline( $workflow_id, 100, 100 );
-
-// Get state at a specific step
-$snapshot = $log->get_state_at_step( $workflow_id, $step_index );
-```
-
-## Retention and pruning
-
-Event logs accumulate over time. Use `prune()` to delete old events:
-
-```php
-$log = Queuety::workflow_events();
-$deleted = $log->prune( 30 ); // delete events older than 30 days
-```
-
-The `prune()` method returns the number of rows deleted. Consider running this on a schedule to keep the `queuety_workflow_events` table bounded.
-
-## Configuration
-
-The workflow events table name defaults to `queuety_workflow_events`. Override it with:
-
-```php
-define( 'QUEUETY_TABLE_WORKFLOW_EVENTS', 'my_workflow_events' );
+$deleted = Queuety::workflow_events()->prune( 30 );
 ```

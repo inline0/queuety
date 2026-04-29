@@ -141,7 +141,7 @@ class WorkflowExportTest extends IntegrationTestCase {
 		// Should have logs (started, completed for each step, plus workflow logs).
 		$this->assertNotEmpty( $data['logs'] );
 
-		// Verify events contain state snapshots.
+		// Verify events contain completion traces.
 		$completed_events = array_filter(
 			$data['events'],
 			fn( array $e ) => 'step_completed' === $e['event']

@@ -233,20 +233,41 @@ class Schema {
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 
+		if ( self::table_exists( $conn, $workflow_events ) ) {
+			$columns = $pdo->query( "SHOW COLUMNS FROM {$workflow_events}" )->fetchAll();
+			$names   = array_map( static fn( array $column ): string => (string) $column['Field'], $columns );
+			if ( ! in_array( 'state_after', $names, true ) ) {
+				$pdo->exec( "DROP TABLE IF EXISTS {$workflow_events}" );
+			}
+		}
+
 		$pdo->exec(
 			"CREATE TABLE IF NOT EXISTS {$workflow_events} (
 				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 				workflow_id BIGINT UNSIGNED NOT NULL,
+				job_id BIGINT UNSIGNED DEFAULT NULL,
+				parent_event_id BIGINT UNSIGNED DEFAULT NULL,
 				step_index TINYINT UNSIGNED NOT NULL,
+				step_name VARCHAR(191) DEFAULT NULL,
+				step_type VARCHAR(64) DEFAULT NULL,
 				handler VARCHAR(255) NOT NULL,
-				event ENUM('step_started', 'step_completed', 'step_failed', 'state_snapshot', 'workflow_rewound', 'workflow_forked', 'workflow_deadline_exceeded', 'workflow_waiting', 'workflow_resumed', 'workflow_replayed') NOT NULL,
-				state_snapshot LONGTEXT DEFAULT NULL,
-				step_output LONGTEXT DEFAULT NULL,
+				event ENUM('step_started', 'step_completed', 'step_failed', 'step_branch_completed', 'step_item_completed', 'step_item_failed', 'workflow_rewound', 'workflow_forked', 'workflow_deadline_exceeded', 'workflow_waiting', 'workflow_resumed', 'workflow_replayed') NOT NULL,
+				queue VARCHAR(64) DEFAULT NULL,
+				attempt TINYINT UNSIGNED DEFAULT NULL,
+				input LONGTEXT DEFAULT NULL,
+				output LONGTEXT DEFAULT NULL,
+				state_before LONGTEXT DEFAULT NULL,
+				state_after LONGTEXT DEFAULT NULL,
+				context LONGTEXT DEFAULT NULL,
+				artifacts LONGTEXT DEFAULT NULL,
+				chunks LONGTEXT DEFAULT NULL,
+				error LONGTEXT DEFAULT NULL,
 				duration_ms INT UNSIGNED DEFAULT NULL,
-				error_message TEXT DEFAULT NULL,
 				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				INDEX idx_workflow (workflow_id, step_index),
 				INDEX idx_timeline (workflow_id, id),
+				INDEX idx_job (job_id),
+				INDEX idx_step_name (workflow_id, step_name),
 				INDEX idx_created (created_at)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);

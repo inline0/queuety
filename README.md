@@ -311,7 +311,7 @@ wp queuety work --queue=providers --min-workers=2 --max-workers=6
 - **Cache layer** -- pluggable cache with `MemoryCache` and `ApcuCache` backends, auto-detected via `CacheFactory`
 - **Heartbeats** -- long-running steps send heartbeats to prevent premature stale-job recovery
 - **Workflow cancellation** -- cancel running workflows and trigger registered cleanup handlers
-- **Workflow event log** -- full timeline of step transitions with state snapshots and time-travel debugging
+- **Workflow tracing** -- full timeline of step input, output, before/after state, context, artifacts, chunks, errors, and time-travel debugging
 - **State pruning** -- automatic removal of old step outputs to keep workflow state lean
 - **Schedule overlap policies** -- Allow, Skip, or Buffer for recurring jobs
 - **Multi-queue worker priorities** -- process multiple queues with strict priority ordering
@@ -472,7 +472,7 @@ class StreamLLMHandler implements StreamingStep {
 | `wp queuety workflow list [--status=<s>]` | List workflows |
 | `wp queuety workflow cancel <id>` | Cancel a workflow and run cleanup handlers |
 | `wp queuety workflow timeline <id>` | Show the full event timeline for a workflow |
-| `wp queuety workflow state-at <id> <step>` | Show workflow state snapshot at a specific step |
+| `wp queuety workflow state-at <id> <step>` | Show workflow state after a specific step |
 | `wp queuety schedule list` | List recurring schedules |
 | `wp queuety schedule add <handler> [--every=<i>] [--cron=<c>]` | Add a recurring schedule |
 | `wp queuety schedule remove <handler>` | Remove a schedule |

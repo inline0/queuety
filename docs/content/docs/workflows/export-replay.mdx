@@ -77,7 +77,7 @@ wp queuety workflow replay /tmp/workflow-42.json
 
 ## JSON structure
 
-The export contains the full workflow state, associated jobs, workflow events, log entries, stored signals, and any workflow-dependency wait rows:
+The export contains the full workflow state, associated jobs, trace events, log entries, stored signals, artifacts, chunks, and any workflow-dependency wait rows:
 
 ```json
 {
@@ -111,11 +111,18 @@ The export contains the full workflow state, associated jobs, workflow events, l
     "events": [
         {
             "id": 1,
+            "job_id": 100,
             "step_index": 0,
+            "step_name": "fetchData",
+            "step_type": "single",
             "handler": "App\\Handlers\\FetchDataHandler",
             "event": "step_completed",
-            "state_snapshot": { "user_id": 1, "records": 150 },
-            "step_output": { "records": 150 },
+            "input": { "user_id": 1 },
+            "output": { "records": 150 },
+            "state_before": { "user_id": 1 },
+            "state_after": { "user_id": 1, "records": 150 },
+            "context": { "source": "api" },
+            "error": null,
             "duration_ms": 230,
             "created_at": "2026-03-28 10:00:01"
         }
@@ -129,13 +136,15 @@ The export contains the full workflow state, associated jobs, workflow events, l
         }
     ],
     "signals": [],
+    "artifacts": [],
+    "chunks": [],
     "wait_dependencies": [],
     "exported_at": "2026-03-28T12:00:00+00:00",
     "queuety_version": "0.14.0"
 }
 ```
 
-Some fields are abbreviated in the example above. The actual export includes all columns from each table row.
+Some fields are abbreviated in the example above. The actual export includes all trace columns from each event row.
 
 Workflow exports also preserve workflow metadata such as `definition_version`, `definition_hash`, and `idempotency_key` when those were set on the original run.
 
@@ -186,7 +195,7 @@ wp queuety workflow replay workflow.json
 
 ### Auditing and archival
 
-Export completed workflows for long-term storage or compliance. The JSON file contains the full execution history, including state snapshots at every step, timing data, and error messages.
+Export completed workflows for long-term storage or compliance. The JSON file contains the full execution history, including inputs, outputs, before/after state, timing data, and error details.
 
 ```php
 $data = Queuety::export_workflow( $workflow_id );

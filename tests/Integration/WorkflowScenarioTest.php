@@ -95,22 +95,22 @@ class WorkflowScenarioTest extends IntegrationTestCase {
 		// Verify intermediate states via the workflow event log.
 		$event_log = Queuety::workflow_events();
 
-		// Step 0 (DataFetchStep) state snapshot.
+		// Step 0 (DataFetchStep) recorded state.
 		$step0_state = $event_log->get_state_at_step( $wf_id, 0 );
-		$this->assertNotNull( $step0_state, 'Step 0 state snapshot should exist in event log.' );
+		$this->assertNotNull( $step0_state, 'Step 0 recorded state should exist in event log.' );
 		$this->assertSame( 'User #42', $step0_state['user_name'] );
 		$this->assertSame( 42, $step0_state['order_count'] );
 		$this->assertCount( 3, $step0_state['order_data'] );
 
-		// Step 1 (LlmProcessStep) state snapshot.
+		// Step 1 (LlmProcessStep) recorded state.
 		$step1_state = $event_log->get_state_at_step( $wf_id, 1 );
-		$this->assertNotNull( $step1_state, 'Step 1 state snapshot should exist in event log.' );
+		$this->assertNotNull( $step1_state, 'Step 1 recorded state should exist in event log.' );
 		$this->assertStringContainsString( 'User #42', $step1_state['llm_response'] );
 		$this->assertSame( 'mock-gpt-4', $step1_state['llm_model'] );
 
-		// Step 2 (FormatOutputStep) state snapshot.
+		// Step 2 (FormatOutputStep) recorded state.
 		$step2_state = $event_log->get_state_at_step( $wf_id, 2 );
-		$this->assertNotNull( $step2_state, 'Step 2 state snapshot should exist in event log.' );
+		$this->assertNotNull( $step2_state, 'Step 2 recorded state should exist in event log.' );
 		$this->assertSame( '/reports/42.pdf', $step2_state['report_url'] );
 		$this->assertTrue( $step2_state['email_sent'] );
 

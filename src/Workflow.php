@@ -38,7 +38,7 @@ class Workflow {
 	 * @param Queue                 $queue     Queue operations.
 	 * @param Logger                $logger    Logger instance.
 	 * @param Cache|null            $cache     Optional cache backend for reducing DB reads.
-	 * @param WorkflowEventLog|null $event_log Optional workflow event log for state snapshots.
+	 * @param WorkflowEventLog|null $event_log Optional workflow trace event log.
 	 * @param ArtifactStore|null    $artifacts Optional workflow artifact store.
 	 */
 	public function __construct(
@@ -137,6 +137,36 @@ class Workflow {
 			fn( string $key ) => ! str_starts_with( $key, '_' ),
 			ARRAY_FILTER_USE_KEY
 		);
+	}
+
+	/**
+	 * Resolve the stable step name from a step definition.
+	 *
+	 * @param array|string|null $step_def   Step definition.
+	 * @param int               $step_index Step index.
+	 * @return string
+	 */
+	private function resolve_step_name( array|string|null $step_def, int $step_index ): string {
+		if ( is_array( $step_def ) && isset( $step_def['name'] ) && is_string( $step_def['name'] ) && '' !== $step_def['name'] ) {
+			return $step_def['name'];
+		}
+
+		return (string) $step_index;
+	}
+
+	/**
+	 * Pull reserved trace metadata out of a step output.
+	 *
+	 * @param array $step_output Step output.
+	 * @return array Step output without trace metadata.
+	 */
+	private function extract_trace_from_step_output( array $step_output ): array {
+		if ( array_key_exists( ExecutionContext::TRACE_OUTPUT_KEY, $step_output ) ) {
+			ExecutionContext::merge_trace_payload( $step_output[ ExecutionContext::TRACE_OUTPUT_KEY ] );
+			unset( $step_output[ ExecutionContext::TRACE_OUTPUT_KEY ] );
+		}
+
+		return $step_output;
 	}
 
 	/**
@@ -1458,8 +1488,10 @@ class Workflow {
 		$wf_tbl      = $this->conn->table( Config::table_workflows() );
 		$steps       = $state['_steps'] ?? array();
 		$total_steps = (int) $wf_row['total_steps'];
+		$state_before = $this->public_state( $state );
 
 		$this->clear_wait_context( $state );
+		$step_output = $this->extract_trace_from_step_output( $step_output );
 		$this->merge_step_output_into_state( $state, $step_output, $step_index );
 
 		$current_step_def = $steps[ $step_index ] ?? null;
@@ -1493,12 +1525,16 @@ class Workflow {
 		);
 
 		if ( null !== $this->event_log ) {
+			$trace = ExecutionContext::consume_trace();
 			$this->event_log->record_workflow_resumed(
 				workflow_id: $workflow_id,
 				step_index: $step_index,
 				handler: $this->event_handler_for_step( $current_step_def ),
-				state_snapshot: $this->public_state( $state ),
-				step_output: $step_output,
+				state_before: $state_before,
+				state_after: $this->public_state( $state ),
+				output: is_array( $trace['output'] ?? null ) ? $trace['output'] : $step_output,
+				step_name: $this->resolve_step_name( $current_step_def, $step_index ),
+				step_type: $this->resolve_step_type( $current_step_def ),
 			);
 		}
 
@@ -1939,6 +1975,8 @@ class Workflow {
 	): array {
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
 
+		$state_before = $this->public_state( $state );
+		$step_output  = $this->extract_trace_from_step_output( $step_output );
 		$this->merge_step_output_into_state( $state, $step_output, $current_step );
 
 		$current_step_def = $steps[ $current_step ] ?? null;
@@ -2004,13 +2042,24 @@ class Workflow {
 		}
 
 		if ( null !== $this->event_log ) {
+			$trace = ExecutionContext::consume_trace();
 			$this->event_log->record_step_completed(
 				workflow_id: $workflow_id,
 				step_index: $current_step,
 				handler: $job_row['handler'] ?? '',
-				state_snapshot: $this->public_state( $state ),
-				step_output: $step_output,
+				state_before: $state_before,
+				state_after: $this->public_state( $state ),
+				output: is_array( $trace['output'] ?? null ) ? $trace['output'] : $step_output,
 				duration_ms: $duration_ms,
+				step_name: $this->resolve_step_name( $current_step_def, $current_step ),
+				step_type: $this->resolve_step_type( $current_step_def ),
+				job_id: $completed_job_id,
+				attempt: isset( $job_row['attempts'] ) ? (int) $job_row['attempts'] : null,
+				queue: $job_row['queue'] ?? null,
+				input: $trace['input'] ?? $state_before,
+				context: is_array( $trace['context'] ?? null ) ? $trace['context'] : null,
+				artifacts: is_array( $trace['artifacts'] ?? null ) ? $trace['artifacts'] : null,
+				chunks: is_array( $trace['chunks'] ?? null ) ? $trace['chunks'] : null,
 			);
 		}
 
@@ -2262,6 +2311,7 @@ class Workflow {
 			}
 
 			$state            = json_decode( $wf_row['state'], true ) ?: array();
+			$state_before     = $this->public_state( $state );
 			$current_step     = (int) $wf_row['current_step'];
 			$status           = WorkflowStatus::from( $wf_row['status'] );
 			$matched_payloads = $this->resolve_signal_wait_payloads( $workflow_id, $step_def, $state );
@@ -2318,7 +2368,8 @@ class Workflow {
 						workflow_id: $workflow_id,
 						step_index: $step_index,
 						handler: '__queuety_wait_for_signal',
-						state_snapshot: $this->public_state( $state ),
+						state_before: $state_before,
+						state_after: $this->public_state( $state ),
 						wait_type: 'signal',
 						waiting_for: $this->signal_names_for_step( $step_def ),
 						details: array(
@@ -2329,6 +2380,8 @@ class Workflow {
 							'match_payload'   => $this->signal_match_payload_for_step( $step_def ),
 							'correlation_key' => $this->signal_correlation_key_for_step( $step_def ),
 						),
+						step_name: $this->resolve_step_name( $step_def, $step_index ),
+						step_type: $this->resolve_step_type( $step_def ),
 					);
 				}
 			}
@@ -2700,6 +2753,7 @@ class Workflow {
 			}
 
 			$state        = json_decode( $wf_row['state'], true ) ?: $workflow_state;
+			$state_before = $this->public_state( $state );
 			$current_step = (int) $wf_row['current_step'];
 			$status       = WorkflowStatus::from( $wf_row['status'] );
 
@@ -2761,7 +2815,8 @@ class Workflow {
 						workflow_id: $workflow_id,
 						step_index: $step_index,
 						handler: '__queuety_wait_for_workflows',
-						state_snapshot: $this->public_state( $state ),
+						state_before: $state_before,
+						state_after: $this->public_state( $state ),
 						wait_type: 'workflow',
 						waiting_for: array_map( 'strval', $workflow_ids ),
 						details: array(
@@ -2771,6 +2826,8 @@ class Workflow {
 							'quorum'     => $this->wait_for_workflows_quorum_for_step( $step_def ),
 							'result_key' => $this->wait_result_key_for_step( $step_def ),
 						),
+						step_name: $this->resolve_step_name( $step_def, $step_index ),
+						step_type: $this->resolve_step_type( $step_def ),
 					);
 				}
 			} else {
@@ -3210,6 +3267,8 @@ class Workflow {
 			if ( 'for_each' === $current_step_type ) {
 				$payload     = json_decode( $job_row['payload'], true ) ?: array();
 				$branch_meta = $payload['__for_each'] ?? null;
+				$state_before = $this->public_state( $state );
+				$step_output  = $this->extract_trace_from_step_output( $step_output );
 
 				if ( ! is_array( $current_step_def ) || ! is_array( $branch_meta ) || ! array_key_exists( 'item_index', $branch_meta ) ) {
 					throw new \RuntimeException( "Workflow {$workflow_id}: invalid for-each branch payload." );
@@ -3275,6 +3334,40 @@ class Workflow {
 						)
 					);
 
+					if ( null !== $this->event_log ) {
+						$trace = ExecutionContext::consume_trace();
+						$this->event_log->record_step_item_completed(
+							array(
+								'workflow_id'  => $workflow_id,
+								'job_id'       => $completed_job_id,
+								'step_index'   => $current_step,
+								'step_name'    => $this->resolve_step_name( $current_step_def, $current_step ),
+								'step_type'    => $this->resolve_step_type( $current_step_def ),
+								'handler'      => $job_row['handler'] ?? '',
+								'queue'        => $job_row['queue'] ?? null,
+								'attempt'      => isset( $job_row['attempts'] ) ? (int) $job_row['attempts'] : null,
+								'input'        => $trace['input'] ?? array(
+									'state'      => $state_before,
+									'item'       => $item,
+									'item_index' => $item_index,
+								),
+								'output'       => is_array( $trace['output'] ?? null ) ? $trace['output'] : $step_output,
+								'state_before' => $state_before,
+								'state_after'  => $this->public_state( $state ),
+								'context'      => array_merge(
+									array(
+										'item_index' => $item_index,
+										'item'       => $item,
+									),
+									is_array( $trace['context'] ?? null ) ? $trace['context'] : array()
+								),
+								'artifacts'    => is_array( $trace['artifacts'] ?? null ) ? $trace['artifacts'] : null,
+								'chunks'       => is_array( $trace['chunks'] ?? null ) ? $trace['chunks'] : null,
+								'duration_ms'  => $duration_ms,
+							)
+						);
+					}
+
 					$pdo->commit();
 					$this->invalidate_workflow_cache( $workflow_id );
 					return;
@@ -3284,6 +3377,40 @@ class Workflow {
 				$state['_for_each_steps'][ $current_step ] = $runtime;
 				$this->persist_internal_state( $workflow_id, $state );
 				$this->bury_active_jobs_for_step( $workflow_id, $current_step, 'For-each completion settled early.', $completed_job_id );
+
+				if ( null !== $this->event_log ) {
+					$trace = ExecutionContext::consume_trace();
+					$this->event_log->record_step_item_completed(
+						array(
+							'workflow_id'  => $workflow_id,
+							'job_id'       => $completed_job_id,
+							'step_index'   => $current_step,
+							'step_name'    => $this->resolve_step_name( $current_step_def, $current_step ),
+							'step_type'    => $this->resolve_step_type( $current_step_def ),
+							'handler'      => $job_row['handler'] ?? '',
+							'queue'        => $job_row['queue'] ?? null,
+							'attempt'      => isset( $job_row['attempts'] ) ? (int) $job_row['attempts'] : null,
+							'input'        => $trace['input'] ?? array(
+								'state'      => $state_before,
+								'item'       => $item,
+								'item_index' => $item_index,
+							),
+							'output'       => is_array( $trace['output'] ?? null ) ? $trace['output'] : $step_output,
+							'state_before' => $state_before,
+							'state_after'  => $this->public_state( $state ),
+							'context'      => array_merge(
+								array(
+									'item_index' => $item_index,
+									'item'       => $item,
+								),
+								is_array( $trace['context'] ?? null ) ? $trace['context'] : array()
+							),
+							'artifacts'    => is_array( $trace['artifacts'] ?? null ) ? $trace['artifacts'] : null,
+							'chunks'       => is_array( $trace['chunks'] ?? null ) ? $trace['chunks'] : null,
+							'duration_ms'  => $duration_ms,
+						)
+					);
+				}
 
 				$step_output  = $this->for_each_step_output( $state, $current_step_def, $runtime, $current_step );
 				$terminal_ids = $this->finalize_step_completion(
@@ -3309,6 +3436,8 @@ class Workflow {
 			}
 
 			if ( 'parallel' === $current_step_type ) {
+				$state_before = $this->public_state( $state );
+				$step_output  = $this->extract_trace_from_step_output( $step_output );
 				$this->merge_step_output_into_state( $state, $step_output, $current_step );
 				$this->increment_cost_units( $state, (int) ( $job_row['cost_units'] ?? 0 ) );
 				$total_handlers = is_array( $current_step_def )
@@ -3351,6 +3480,30 @@ class Workflow {
 					)
 				);
 
+				if ( null !== $this->event_log ) {
+					$trace = ExecutionContext::consume_trace();
+					$this->event_log->record_step_branch_completed(
+						array(
+							'workflow_id'  => $workflow_id,
+							'job_id'       => $completed_job_id,
+							'step_index'   => $current_step,
+							'step_name'    => $this->resolve_step_name( $current_step_def, $current_step ),
+							'step_type'    => $current_step_type,
+							'handler'      => $job_row['handler'] ?? '',
+							'queue'        => $job_row['queue'] ?? null,
+							'attempt'      => isset( $job_row['attempts'] ) ? (int) $job_row['attempts'] : null,
+							'input'        => $trace['input'] ?? $state_before,
+							'output'       => is_array( $trace['output'] ?? null ) ? $trace['output'] : $step_output,
+							'state_before' => $state_before,
+							'state_after'  => $this->public_state( $state ),
+							'context'      => is_array( $trace['context'] ?? null ) ? $trace['context'] : null,
+							'artifacts'    => is_array( $trace['artifacts'] ?? null ) ? $trace['artifacts'] : null,
+							'chunks'       => is_array( $trace['chunks'] ?? null ) ? $trace['chunks'] : null,
+							'duration_ms'  => $duration_ms,
+						)
+					);
+				}
+
 				if ( $completed_count < $total_handlers ) {
 					$pdo->commit();
 					return;
@@ -3373,9 +3526,16 @@ class Workflow {
 						workflow_id: $workflow_id,
 						step_index: $current_step,
 						handler: $job_row['handler'] ?? '',
-						state_snapshot: $snapshot,
-						step_output: $step_output,
+						state_before: $state_before,
+						state_after: $snapshot,
+						output: $step_output,
 						duration_ms: $duration_ms,
+						step_name: $this->resolve_step_name( $current_step_def, $current_step ),
+						step_type: $current_step_type,
+						job_id: $completed_job_id,
+						attempt: isset( $job_row['attempts'] ) ? (int) $job_row['attempts'] : null,
+						queue: $job_row['queue'] ?? null,
+						input: $state_before,
 					);
 				}
 
@@ -4528,13 +4688,13 @@ class Workflow {
 	/**
 	 * Rewind a workflow to a previous step's state and re-run from there.
 	 *
-	 * Loads the state snapshot from the event log at the given step,
+	 * Loads state_after from the event log at the given step,
 	 * restores internal state, sets current_step to $to_step + 1,
 	 * and enqueues the next step.
 	 *
 	 * @param int $workflow_id The workflow ID.
-	 * @param int $to_step     The step index to rewind to (must have a completed snapshot).
-	 * @throws \RuntimeException If the workflow is not found, no snapshot exists, or event log is unavailable.
+	 * @param int $to_step     The step index to rewind to.
+	 * @throws \RuntimeException If the workflow is not found, no recorded state exists, or event log is unavailable.
 	 * @throws \Throwable If the database transaction fails.
 	 */
 	public function rewind( int $workflow_id, int $to_step ): void {
@@ -4546,7 +4706,7 @@ class Workflow {
 
 		if ( null === $snapshot ) {
 			throw new \RuntimeException(
-				"No state snapshot found for workflow {$workflow_id} at step {$to_step}."
+				"No recorded state found for workflow {$workflow_id} at step {$to_step}."
 			);
 		}
 

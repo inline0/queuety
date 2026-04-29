@@ -507,9 +507,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	}
 
 	/**
-	 * Show the state snapshot at a specific workflow step.
+	 * Show the recorded state after a specific workflow step.
 	 *
-	 * Displays the full workflow state as it was after the given step completed.
+	 * Displays public workflow state after the given step completed or resumed.
 	 *
 	 * ## OPTIONS
 	 *
@@ -530,7 +530,7 @@ class WorkflowCommand extends \WP_CLI_Command {
 		$snapshot    = Queuety::workflow_state_at( $workflow_id, $step_index );
 
 		if ( null === $snapshot ) {
-			\WP_CLI::error( "No state snapshot found for workflow #{$workflow_id} at step {$step_index}." );
+			\WP_CLI::error( "No recorded state found for workflow #{$workflow_id} at step {$step_index}." );
 			return;
 		}
 

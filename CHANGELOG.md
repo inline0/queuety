@@ -2,6 +2,19 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.20.0] - 2026-04-29
+
+### Added
+
+- first-class workflow tracing with step input, output, state before, state after, context, artifacts, chunks, and structured errors
+- normalized `Queuety::workflow_trace()` API for debugger UIs
+- runtime trace helpers for handlers through `Queuety::trace_input()`, `Queuety::trace_output()`, and `Queuety::trace_context()`
+
+### Changed
+
+- workflow event rows use explicit trace fields instead of the old `state_snapshot` and `step_output` payload shape
+- workflow export and replay preserve the new trace format
+
 ## [0.19.0] - 2026-04-26
 
 ### Added

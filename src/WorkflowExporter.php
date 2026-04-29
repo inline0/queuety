@@ -33,6 +33,7 @@ class WorkflowExporter {
 		$sig_tbl = $conn->table( Config::table_signals() );
 		$dep_tbl = $conn->table( Config::table_workflow_dependencies() );
 		$art_tbl = $conn->table( Config::table_artifacts() );
+		$chk_tbl = $conn->table( Config::table_chunks() );
 
 		$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id" );
 		$stmt->execute( array( 'id' => $workflow_id ) );
@@ -99,19 +100,26 @@ class WorkflowExporter {
 		$events = array();
 		foreach ( $event_rows as $row ) {
 			$events[] = array(
-				'id'             => (int) $row['id'],
-				'step_index'     => (int) $row['step_index'],
-				'handler'        => $row['handler'],
-				'event'          => $row['event'],
-				'state_snapshot' => null !== $row['state_snapshot']
-					? json_decode( $row['state_snapshot'], true )
-					: null,
-				'step_output'    => null !== $row['step_output']
-					? json_decode( $row['step_output'], true )
-					: null,
-				'duration_ms'    => $row['duration_ms'] !== null ? (int) $row['duration_ms'] : null,
-				'error_message'  => $row['error_message'],
-				'created_at'     => $row['created_at'],
+				'id'              => (int) $row['id'],
+				'job_id'          => null !== $row['job_id'] ? (int) $row['job_id'] : null,
+				'parent_event_id' => null !== $row['parent_event_id'] ? (int) $row['parent_event_id'] : null,
+				'step_index'      => (int) $row['step_index'],
+				'step_name'       => $row['step_name'],
+				'step_type'       => $row['step_type'],
+				'handler'         => $row['handler'],
+				'event'           => $row['event'],
+				'queue'           => $row['queue'],
+				'attempt'         => null !== $row['attempt'] ? (int) $row['attempt'] : null,
+				'input'           => null !== $row['input'] ? json_decode( $row['input'], true ) : null,
+				'output'          => null !== $row['output'] ? json_decode( $row['output'], true ) : null,
+				'state_before'    => null !== $row['state_before'] ? json_decode( $row['state_before'], true ) : null,
+				'state_after'     => null !== $row['state_after'] ? json_decode( $row['state_after'], true ) : null,
+				'context'         => null !== $row['context'] ? json_decode( $row['context'], true ) : null,
+				'artifacts'       => null !== $row['artifacts'] ? json_decode( $row['artifacts'], true ) : null,
+				'chunks'          => null !== $row['chunks'] ? json_decode( $row['chunks'], true ) : null,
+				'error'           => null !== $row['error'] ? json_decode( $row['error'], true ) : null,
+				'duration_ms'     => $row['duration_ms'] !== null ? (int) $row['duration_ms'] : null,
+				'created_at'      => $row['created_at'],
 			);
 		}
 
@@ -133,6 +141,7 @@ class WorkflowExporter {
 				'attempt'       => $row['attempt'] !== null ? (int) $row['attempt'] : null,
 				'duration_ms'   => $row['duration_ms'] !== null ? (int) $row['duration_ms'] : null,
 				'error_message' => $row['error_message'],
+				'context'       => null !== $row['context'] ? json_decode( $row['context'], true ) : null,
 				'created_at'    => $row['created_at'],
 			);
 		}
@@ -195,6 +204,25 @@ class WorkflowExporter {
 			);
 		}
 
+		$stmt = $pdo->prepare(
+			"SELECT * FROM {$chk_tbl} WHERE workflow_id = :workflow_id ORDER BY step_index ASC, chunk_index ASC, id ASC"
+		);
+		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
+		$chunk_rows = $stmt->fetchAll();
+
+		$chunks = array();
+		foreach ( $chunk_rows as $row ) {
+			$chunks[] = array(
+				'id'          => (int) $row['id'],
+				'job_id'      => (int) $row['job_id'],
+				'workflow_id' => (int) $row['workflow_id'],
+				'step_index'  => null !== $row['step_index'] ? (int) $row['step_index'] : null,
+				'chunk_index' => (int) $row['chunk_index'],
+				'content'     => $row['content'],
+				'created_at'  => $row['created_at'],
+			);
+		}
+
 		return array(
 			'workflow'          => $wf_data,
 			'jobs'              => $jobs,
@@ -202,6 +230,7 @@ class WorkflowExporter {
 			'logs'              => $logs,
 			'signals'           => $signals,
 			'artifacts'         => $artifacts,
+			'chunks'            => $chunks,
 			'wait_dependencies' => $wait_dependencies,
 			'exported_at'       => gmdate( 'c' ),
 			'queuety_version'   => defined( 'QUEUETY_VERSION' ) ? QUEUETY_VERSION : 'dev',

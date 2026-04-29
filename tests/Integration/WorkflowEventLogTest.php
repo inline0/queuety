@@ -116,16 +116,26 @@ class WorkflowEventLogTest extends TestCase {
 			workflow_id: $wf_id,
 			step_index: 0,
 			handler: 'StepA',
-			state_snapshot: array( 'data' => 'value' ),
-			step_output: array( 'result' => 42 ),
+			state_before: array( 'input' => 'value' ),
+			state_after: array( 'data' => 'value' ),
+			output: array( 'result' => 42 ),
 			duration_ms: 150,
+			step_name: 'loadData',
+			step_type: 'ability',
+			job_id: 99,
+			attempt: 1,
+			queue: 'default',
 		);
 
 		$timeline = $this->event_log->get_timeline( $wf_id );
 		$this->assertCount( 1, $timeline );
 		$this->assertSame( 'step_completed', $timeline[0]['event'] );
-		$this->assertSame( array( 'data' => 'value' ), $timeline[0]['state_snapshot'] );
-		$this->assertSame( array( 'result' => 42 ), $timeline[0]['step_output'] );
+		$this->assertSame( array( 'input' => 'value' ), $timeline[0]['state_before'] );
+		$this->assertSame( array( 'data' => 'value' ), $timeline[0]['state_after'] );
+		$this->assertSame( array( 'result' => 42 ), $timeline[0]['output'] );
+		$this->assertSame( 'loadData', $timeline[0]['step_name'] );
+		$this->assertSame( 'ability', $timeline[0]['step_type'] );
+		$this->assertSame( 99, (int) $timeline[0]['job_id'] );
 		$this->assertSame( 150, (int) $timeline[0]['duration_ms'] );
 	}
 
@@ -139,7 +149,7 @@ class WorkflowEventLogTest extends TestCase {
 			workflow_id: $wf_id,
 			step_index: 1,
 			handler: 'FailingStep',
-			error: 'Something went wrong',
+			error: array( 'message' => 'Something went wrong', 'class' => \RuntimeException::class ),
 			duration_ms: 50,
 		);
 
@@ -157,7 +167,8 @@ class WorkflowEventLogTest extends TestCase {
 			workflow_id: $wf_id,
 			step_index: 1,
 			handler: '__queuety_wait_for_signal',
-			state_snapshot: array( 'counter' => 1 ),
+			state_before: array( 'counter' => 1 ),
+			state_after: array( 'counter' => 1 ),
 			wait_type: 'signal',
 			waiting_for: array( 'approval' ),
 		);
@@ -165,8 +176,9 @@ class WorkflowEventLogTest extends TestCase {
 			workflow_id: $wf_id,
 			step_index: 1,
 			handler: '__queuety_wait_for_signal',
-			state_snapshot: array( 'counter' => 1, 'approval' => array( 'approved' => true ) ),
-			step_output: array( 'approval' => array( 'approved' => true ) ),
+			state_before: array( 'counter' => 1 ),
+			state_after: array( 'counter' => 1, 'approval' => array( 'approved' => true ) ),
+			output: array( 'approval' => array( 'approved' => true ) ),
 		);
 
 		$timeline = $this->event_log->get_timeline( $wf_id );
@@ -177,12 +189,12 @@ class WorkflowEventLogTest extends TestCase {
 				'wait_type'   => 'signal',
 				'waiting_for' => array( 'approval' ),
 			),
-			$timeline[0]['step_output']
+			$timeline[0]['output']
 		);
 		$this->assertSame( 'workflow_resumed', $timeline[1]['event'] );
 		$this->assertSame(
 			array( 'approval' => array( 'approved' => true ) ),
-			$timeline[1]['step_output']
+			$timeline[1]['output']
 		);
 	}
 
@@ -193,8 +205,7 @@ class WorkflowEventLogTest extends TestCase {
 		$this->event_log->record_workflow_replayed(
 			workflow_id: $wf_id,
 			step_index: 0,
-			handler: '__queuety_replay',
-			state_snapshot: array( 'input' => 'data' ),
+			state_after: array( 'input' => 'data' ),
 			context: array(
 				'source_workflow_id' => 12,
 				'definition_hash'    => str_repeat( 'b', 64 ),
@@ -204,7 +215,7 @@ class WorkflowEventLogTest extends TestCase {
 		$timeline = $this->event_log->get_timeline( $wf_id );
 		$this->assertCount( 1, $timeline );
 		$this->assertSame( 'workflow_replayed', $timeline[0]['event'] );
-		$this->assertSame( 12, $timeline[0]['step_output']['source_workflow_id'] );
+		$this->assertSame( 12, $timeline[0]['output']['source_workflow_id'] );
 	}
 
 	// -- get_timeline returns events in order --------------------------------
@@ -214,7 +225,7 @@ class WorkflowEventLogTest extends TestCase {
 
 		$wf_id = $this->create_workflow();
 		$this->event_log->record_step_started( $wf_id, 0, 'StepA' );
-		$this->event_log->record_step_completed( $wf_id, 0, 'StepA', array(), array(), 100 );
+		$this->event_log->record_step_completed( $wf_id, 0, 'StepA', array(), array(), array(), 100 );
 		$this->event_log->record_step_started( $wf_id, 1, 'StepB' );
 
 		$timeline = $this->event_log->get_timeline( $wf_id );
@@ -229,7 +240,7 @@ class WorkflowEventLogTest extends TestCase {
 
 		$wf_id = $this->create_workflow();
 		$this->event_log->record_step_started( $wf_id, 0, 'StepA' );
-		$this->event_log->record_step_completed( $wf_id, 0, 'StepA', array(), array(), 100 );
+		$this->event_log->record_step_completed( $wf_id, 0, 'StepA', array(), array(), array(), 100 );
 		$this->event_log->record_step_started( $wf_id, 1, 'StepB' );
 
 		$timeline = $this->event_log->get_timeline( $wf_id, 1, 1 );
@@ -243,12 +254,8 @@ class WorkflowEventLogTest extends TestCase {
 		$this->skip_without_db();
 
 		$wf_id = $this->create_workflow();
-		$this->event_log->record_step_completed(
-			$wf_id, 0, 'StepA', array( 'key' => 'val0' ), array(), 100
-		);
-		$this->event_log->record_step_completed(
-			$wf_id, 1, 'StepB', array( 'key' => 'val1' ), array(), 200
-		);
+		$this->event_log->record_step_completed( $wf_id, 0, 'StepA', array(), array( 'key' => 'val0' ), array(), 100 );
+		$this->event_log->record_step_completed( $wf_id, 1, 'StepB', array(), array( 'key' => 'val1' ), array(), 200 );
 
 		$state0 = $this->event_log->get_state_at_step( $wf_id, 0 );
 		$this->assertSame( array( 'key' => 'val0' ), $state0 );

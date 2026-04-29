@@ -453,13 +453,13 @@ Throws `RuntimeException` if the workflow is already `completed` or `cancelled`.
 
 ### `Queuety::rewind_workflow( $workflow_id, $to_step )`
 
-Rewind a workflow to a previous step and re-run from there. The state is restored from the event log snapshot at the given step, and the next step is enqueued.
+Rewind a workflow to a previous step and re-run from there. The state is restored from the event log `state_after` for the given step, and the next step is enqueued.
 
 ```php
 Queuety::rewind_workflow( $workflow_id, to_step: 1 );
 ```
 
-Throws `RuntimeException` if no state snapshot exists for the target step. Requires the [Workflow Event Log](/docs/workflows/event-log). See [Time Travel](/docs/workflows/time-travel) for details.
+Throws `RuntimeException` if no recorded state exists for the target step. Requires the [Workflow Event Log](/docs/workflows/event-log). See [Time Travel](/docs/workflows/time-travel) for details.
 
 ### `Queuety::fork_workflow( $workflow_id )`
 
@@ -974,11 +974,33 @@ $events = Queuety::workflow_timeline( $workflow_id );
 $next   = Queuety::workflow_timeline( $workflow_id, 100, 100 );
 ```
 
-Each event row contains: `id`, `workflow_id`, `step_index`, `handler`, `event`, `state_snapshot`, `step_output`, `error_message`, `duration_ms`, `created_at`.
+Each event row contains: `id`, `workflow_id`, `job_id`, `step_index`, `step_name`, `step_type`, `handler`, `event`, `queue`, `attempt`, `input`, `output`, `state_before`, `state_after`, `context`, `artifacts`, `chunks`, `error`, `duration_ms`, and `created_at`.
+
+### `Queuety::workflow_trace( $workflow_id )`
+
+Get a normalized trace bundle for a workflow debugger UI.
+
+```php
+$trace = Queuety::workflow_trace( $workflow_id );
+```
+
+The trace contains `workflow`, grouped `steps`, raw `events`, `jobs`, `logs`, `artifacts`, `chunks`, `signals`, and `wait_dependencies`.
+
+### `Queuety::trace_input( $input )`
+
+Set application-level input for the currently executing workflow step.
+
+### `Queuety::trace_output( $output )`
+
+Set application-level output for the currently executing workflow step.
+
+### `Queuety::trace_context( array $context )`
+
+Merge application-level context into the currently executing workflow step.
 
 ### `Queuety::workflow_state_at( $workflow_id, $step_index )`
 
-Get the state snapshot at a specific workflow step. Returns the full workflow state array as it existed after the given step completed, or `null` if not found.
+Get the public state after a specific workflow step completed or resumed, or `null` if not found.
 
 ```php
 $state = Queuety::workflow_state_at( $workflow_id, 2 );
@@ -999,7 +1021,7 @@ These methods return internal instances for advanced use cases.
 | `Queuety::connection()` | `Connection` | Database connection |
 | `Queuety::batch_manager()` | `BatchManager` | Batch lifecycle management (cancel, prune) |
 | `Queuety::chunk_store()` | `ChunkStore` | Chunk persistence for streaming steps |
-| `Queuety::workflow_events()` | `WorkflowEventLog` | Workflow event timeline and state snapshots |
+| `Queuety::workflow_events()` | `WorkflowEventLog` | Workflow trace events and normalized trace bundles |
 | `Queuety::resource_manager()` | `ResourceManager` | Worker admission profiles, weighted budgets, and system-memory inspection |
 | `Queuety::cache()` | `Cache` | Cache backend instance |
 
@@ -1187,15 +1209,17 @@ interface Cache {
 
 ### `WorkflowEventLog`
 
-Records workflow step transitions with full state snapshots. Access via `Queuety::workflow_events()`.
+Records workflow step transitions with full trace context. Access via `Queuety::workflow_events()`.
 
 | Method | Returns | Description |
 |---|---|---|
-| `record_step_started( int $workflow_id, int $step_index, string $handler )` | `void` | Record a step_started event |
-| `record_step_completed( int $workflow_id, int $step_index, string $handler, array $state_snapshot, array $step_output, int $duration_ms )` | `void` | Record a step_completed event with full state snapshot |
-| `record_step_failed( int $workflow_id, int $step_index, string $handler, string $error, int $duration_ms )` | `void` | Record a step_failed event |
-| `get_timeline( int $workflow_id, ?int $limit = 100, int $offset = 0 )` | `array` | Get workflow events in order, with optional paging |
-| `get_state_at_step( int $workflow_id, int $step_index )` | `array\|null` | Get the state snapshot after a specific step completed |
+| `record_event( array $event )` | `void` | Record a raw trace event |
+| `record_step_started( ... )` | `void` | Record a step_started event with input and state before execution |
+| `record_step_completed( ... )` | `void` | Record a step_completed event with input, output, state before, and state after |
+| `record_step_failed( ... )` | `void` | Record a step_failed event with trace context and structured error details |
+| `get_timeline( int $workflow_id, ?int $limit = 100, int $offset = 0 )` | `array` | Get workflow trace events in order, with optional paging |
+| `get_trace( int $workflow_id )` | `array` | Get a normalized trace bundle |
+| `get_state_at_step( int $workflow_id, int $step_index )` | `array\|null` | Get the public state after a specific step completed or resumed |
 | `prune( int $older_than_days )` | `int` | Delete events older than the given number of days. Returns rows deleted. |
 
 ### `Contracts\StreamingStep`

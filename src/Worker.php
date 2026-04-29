@@ -342,6 +342,7 @@ class Worker {
 		$pcntl_available  = function_exists( 'pcntl_alarm' ) && function_exists( 'pcntl_signal' );
 		$job_instance     = null;
 		$runtime_options  = StepDispatchOptions::runtime_from_payload( $job->payload );
+		$workflow_trace   = $job->is_workflow_step() ? $this->workflow_step_trace_info( $job ) : null;
 
 		if ( $this->registry->is_job_class( $job->handler ) ) {
 			$job_props = $this->read_job_properties( $job->handler );
@@ -402,6 +403,14 @@ class Worker {
 				workflow_id: $job->workflow_id,
 				step_index: $job->step_index,
 				handler: $job->handler,
+				step_name: $workflow_trace['step_name'] ?? null,
+				step_type: $workflow_trace['step_type'] ?? null,
+				job_id: $job->id,
+				attempt: $job->attempts,
+				queue: $job->queue,
+				input: $workflow_trace['input'] ?? null,
+				state_before: $workflow_trace['state_before'] ?? null,
+				context: $workflow_trace['context'] ?? null,
 			);
 		}
 
@@ -415,6 +424,12 @@ class Worker {
 
 		Heartbeat::init( $job->id, $this->conn );
 		ExecutionContext::enter( $job->id, $job->workflow_id, $job->step_index, $job->payload );
+		if ( null !== $workflow_trace ) {
+			ExecutionContext::set_trace_input( $workflow_trace['input'] ?? array() );
+			if ( ! empty( $workflow_trace['context'] ) && is_array( $workflow_trace['context'] ) ) {
+				ExecutionContext::add_trace_context( $workflow_trace['context'] );
+			}
+		}
 
 		try {
 			if ( $this->is_state_machine_action_job( $job ) ) {
@@ -775,12 +790,26 @@ class Worker {
 			$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
 			if ( null !== $this->event_log && $job->is_workflow_step() && null !== $job->step_index ) {
+				$trace = ExecutionContext::consume_trace();
 				$this->event_log->record_step_failed(
 					workflow_id: $job->workflow_id,
 					step_index: $job->step_index,
 					handler: $job->handler,
-					error: $e->getMessage(),
+					error: array(
+						'message' => $e->getMessage(),
+						'class'   => get_class( $e ),
+						'trace'   => $e->getTraceAsString(),
+					),
 					duration_ms: $duration_ms,
+					step_name: $workflow_trace['step_name'] ?? null,
+					step_type: $workflow_trace['step_type'] ?? null,
+					job_id: $job->id,
+					attempt: $job->attempts,
+					queue: $job->queue,
+					input: $trace['input'] ?? $workflow_trace['input'] ?? null,
+					state_before: $workflow_trace['state_before'] ?? null,
+					state_after: $workflow_trace['state_after'] ?? null,
+					context: is_array( $trace['context'] ?? null ) ? $trace['context'] : ( $workflow_trace['context'] ?? null ),
 				);
 			}
 
@@ -1120,6 +1149,17 @@ class Worker {
 		}
 
 		$all_chunks = $this->chunk_store->get_chunks( $job->id );
+		foreach ( $all_chunks as $chunk ) {
+			ExecutionContext::add_trace_chunk(
+				array(
+					'job_id'      => $job->id,
+					'workflow_id' => $job->workflow_id,
+					'step_index'  => $job->step_index,
+					'chunk_index' => $chunk['chunk_index'] ?? null,
+					'content'     => $chunk['content'] ?? null,
+				)
+			);
+		}
 
 		$output = $handler->on_complete( $all_chunks, $state );
 
@@ -1219,6 +1259,95 @@ class Worker {
 				$metadata['rate_limit'][1],
 			);
 		}
+	}
+
+	/**
+	 * Build trace metadata for a workflow step job.
+	 *
+	 * @param Job $job Workflow job.
+	 * @return array<string,mixed>
+	 */
+	private function workflow_step_trace_info( Job $job ): array {
+		$state        = $this->workflow->get_state( $job->workflow_id ) ?? array();
+		$public_state = $this->public_workflow_state( $state );
+		$steps        = $state['_steps'] ?? array();
+		$step_def     = null !== $job->step_index ? ( $steps[ $job->step_index ] ?? null ) : null;
+		$step_name    = $this->step_name_from_definition( $step_def, (int) ( $job->step_index ?? 0 ) );
+		$step_type    = $this->step_type_from_definition( $step_def );
+		$context      = array();
+		$input        = $public_state;
+
+		if ( isset( $job->payload['__for_each'] ) && is_array( $job->payload['__for_each'] ) ) {
+			$branch_meta = $job->payload['__for_each'];
+			$item_index  = (int) ( $branch_meta['item_index'] ?? 0 );
+			$item        = $branch_meta['item'] ?? null;
+			$input       = array(
+				'state'      => $public_state,
+				'item'       => $item,
+				'item_index' => $item_index,
+			);
+			$context     = array(
+				'item'       => $item,
+				'item_index' => $item_index,
+			);
+		} elseif ( is_array( $step_def ) && isset( $step_def['type'] ) && 'single' !== $step_def['type'] ) {
+			$input = array(
+				'state'      => $public_state,
+				'definition' => $step_def,
+			);
+		}
+
+		return array(
+			'step_name'    => $step_name,
+			'step_type'    => $step_type,
+			'input'        => $input,
+			'state_before' => $public_state,
+			'state_after'  => $public_state,
+			'context'      => $context,
+		);
+	}
+
+	/**
+	 * Strip internal keys from workflow state for trace exposure.
+	 *
+	 * @param array $state Workflow state.
+	 * @return array
+	 */
+	private function public_workflow_state( array $state ): array {
+		return array_filter(
+			$state,
+			fn( string $key ) => ! str_starts_with( $key, '_' ),
+			ARRAY_FILTER_USE_KEY
+		);
+	}
+
+	/**
+	 * Resolve a stable step name from a definition.
+	 *
+	 * @param array|string|null $step_def   Step definition.
+	 * @param int               $step_index Step index.
+	 * @return string
+	 */
+	private function step_name_from_definition( array|string|null $step_def, int $step_index ): string {
+		if ( is_array( $step_def ) && isset( $step_def['name'] ) && is_string( $step_def['name'] ) && '' !== $step_def['name'] ) {
+			return $step_def['name'];
+		}
+
+		return (string) $step_index;
+	}
+
+	/**
+	 * Resolve a step type from a definition.
+	 *
+	 * @param array|string|null $step_def Step definition.
+	 * @return string
+	 */
+	private function step_type_from_definition( array|string|null $step_def ): string {
+		if ( is_array( $step_def ) && isset( $step_def['type'] ) && is_string( $step_def['type'] ) ) {
+			return $step_def['type'];
+		}
+
+		return 'single';
 	}
 
 	/**

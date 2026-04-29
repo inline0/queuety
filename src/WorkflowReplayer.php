@@ -31,6 +31,20 @@ class WorkflowReplayer {
 	}
 
 	/**
+	 * JSON encode nullable replay values.
+	 *
+	 * @param mixed $value Value to encode.
+	 * @return string|null
+	 */
+	private static function json_or_null( mixed $value ): ?string {
+		if ( null === $value ) {
+			return null;
+		}
+
+		return json_encode( $value, JSON_THROW_ON_ERROR );
+	}
+
+	/**
 	 * Replay an exported workflow.
 	 *
 	 * Creates a new workflow from the export data, records historical event
@@ -53,6 +67,7 @@ class WorkflowReplayer {
 		$signals   = $export_data['signals'] ?? array();
 		$waits     = $export_data['wait_dependencies'] ?? array();
 		$artifacts = $export_data['artifacts'] ?? array();
+		$chunks    = $export_data['chunks'] ?? array();
 
 		$pdo     = $conn->pdo();
 		$wf_tbl  = $conn->table( Config::table_workflows() );
@@ -61,6 +76,7 @@ class WorkflowReplayer {
 		$sig_tbl = $conn->table( Config::table_signals() );
 		$dep_tbl = $conn->table( Config::table_workflow_dependencies() );
 		$art_tbl = $conn->table( Config::table_artifacts() );
+		$chk_tbl = $conn->table( Config::table_chunks() );
 
 		$state         = $wf_data['state'] ?? array();
 		$current_step  = (int) ( $wf_data['current_step'] ?? 0 );
@@ -105,25 +121,32 @@ class WorkflowReplayer {
 			foreach ( $events as $event ) {
 				$ins = $pdo->prepare(
 					"INSERT INTO {$ev_tbl}
-					(workflow_id, step_index, handler, event, state_snapshot, step_output, duration_ms, error_message, created_at)
+					(workflow_id, job_id, parent_event_id, step_index, step_name, step_type, handler, event, queue, attempt, input, output, state_before, state_after, context, artifacts, chunks, error, duration_ms, created_at)
 					VALUES
-					(:workflow_id, :step_index, :handler, :event, :state_snapshot, :step_output, :duration_ms, :error_message, :created_at)"
+					(:workflow_id, :job_id, :parent_event_id, :step_index, :step_name, :step_type, :handler, :event, :queue, :attempt, :input, :output, :state_before, :state_after, :context, :artifacts, :chunks, :error, :duration_ms, :created_at)"
 				);
 				$ins->execute(
 					array(
-						'workflow_id'    => $new_id,
-						'step_index'     => (int) ( $event['step_index'] ?? 0 ),
-						'handler'        => $event['handler'] ?? '',
-						'event'          => $event['event'] ?? 'step_completed',
-						'state_snapshot' => null !== $event['state_snapshot']
-							? json_encode( $event['state_snapshot'], JSON_THROW_ON_ERROR )
-							: null,
-						'step_output'    => null !== $event['step_output']
-							? json_encode( $event['step_output'], JSON_THROW_ON_ERROR )
-							: null,
-						'duration_ms'    => $event['duration_ms'] ?? null,
-						'error_message'  => $event['error_message'] ?? null,
-						'created_at'     => $event['created_at'] ?? gmdate( 'Y-m-d H:i:s' ),
+						'workflow_id'     => $new_id,
+						'job_id'          => null,
+						'parent_event_id' => null,
+						'step_index'      => (int) ( $event['step_index'] ?? 0 ),
+						'step_name'       => $event['step_name'] ?? null,
+						'step_type'       => $event['step_type'] ?? null,
+						'handler'         => $event['handler'] ?? '',
+						'event'           => $event['event'] ?? 'step_completed',
+						'queue'           => $event['queue'] ?? null,
+						'attempt'         => $event['attempt'] ?? null,
+						'input'           => self::json_or_null( $event['input'] ?? null ),
+						'output'          => self::json_or_null( $event['output'] ?? null ),
+						'state_before'    => self::json_or_null( $event['state_before'] ?? null ),
+						'state_after'     => self::json_or_null( $event['state_after'] ?? null ),
+						'context'         => self::json_or_null( $event['context'] ?? null ),
+						'artifacts'       => self::json_or_null( $event['artifacts'] ?? null ),
+						'chunks'          => self::json_or_null( $event['chunks'] ?? null ),
+						'error'           => self::json_or_null( $event['error'] ?? null ),
+						'duration_ms'     => $event['duration_ms'] ?? null,
+						'created_at'      => $event['created_at'] ?? gmdate( 'Y-m-d H:i:s' ),
 					)
 				);
 			}
@@ -131,9 +154,9 @@ class WorkflowReplayer {
 			foreach ( $logs as $log ) {
 				$ins = $pdo->prepare(
 					"INSERT INTO {$lg_tbl}
-					(job_id, workflow_id, step_index, handler, queue, event, attempt, duration_ms, error_message, created_at)
+					(job_id, workflow_id, step_index, handler, queue, event, attempt, duration_ms, error_message, context, created_at)
 					VALUES
-					(:job_id, :workflow_id, :step_index, :handler, :queue, :event, :attempt, :duration_ms, :error_message, :created_at)"
+					(:job_id, :workflow_id, :step_index, :handler, :queue, :event, :attempt, :duration_ms, :error_message, :context, :created_at)"
 				);
 				$ins->execute(
 					array(
@@ -146,6 +169,7 @@ class WorkflowReplayer {
 						'attempt'       => $log['attempt'] ?? null,
 						'duration_ms'   => $log['duration_ms'] ?? null,
 						'error_message' => $log['error_message'] ?? null,
+						'context'       => self::json_or_null( $log['context'] ?? null ),
 						'created_at'    => $log['created_at'] ?? gmdate( 'Y-m-d H:i:s' ),
 					)
 				);
@@ -210,27 +234,45 @@ class WorkflowReplayer {
 				);
 			}
 
+			foreach ( $chunks as $chunk ) {
+				$ins = $pdo->prepare(
+					"INSERT INTO {$chk_tbl}
+						(job_id, workflow_id, step_index, chunk_index, content, created_at)
+					VALUES
+						(:job_id, :workflow_id, :step_index, :chunk_index, :content, :created_at)"
+				);
+				$ins->execute(
+					array(
+						'job_id'      => (int) ( $chunk['job_id'] ?? 0 ),
+						'workflow_id' => $new_id,
+						'step_index'  => $chunk['step_index'] ?? null,
+						'chunk_index' => (int) ( $chunk['chunk_index'] ?? 0 ),
+						'content'     => (string) ( $chunk['content'] ?? '' ),
+						'created_at'  => $chunk['created_at'] ?? gmdate( 'Y-m-d H:i:s' ),
+					)
+				);
+			}
+
 			$replay_event = $pdo->prepare(
 				"INSERT INTO {$ev_tbl}
-				(workflow_id, step_index, handler, event, state_snapshot, step_output)
+				(workflow_id, step_index, handler, event, output, state_after, context)
 				VALUES
-				(:workflow_id, :step_index, :handler, 'workflow_replayed', :state_snapshot, :step_output)"
+				(:workflow_id, :step_index, :handler, 'workflow_replayed', :output, :state_after, :context)"
+			);
+			$replay_context = array(
+				'source_workflow_id' => (int) ( $wf_data['id'] ?? 0 ),
+				'source_status'      => $source_status,
+				'definition_version' => $wf_data['definition_version'] ?? null,
+				'definition_hash'    => $wf_data['definition_hash'] ?? null,
 			);
 			$replay_event->execute(
 				array(
-					'workflow_id'    => $new_id,
-					'step_index'     => $replay_step,
-					'handler'        => '__queuety_replay',
-					'state_snapshot' => json_encode( self::public_state( $state ), JSON_THROW_ON_ERROR ),
-					'step_output'    => json_encode(
-						array(
-							'source_workflow_id' => (int) ( $wf_data['id'] ?? 0 ),
-							'source_status'      => $source_status,
-							'definition_version' => $wf_data['definition_version'] ?? null,
-							'definition_hash'    => $wf_data['definition_hash'] ?? null,
-						),
-						JSON_THROW_ON_ERROR
-					),
+					'workflow_id' => $new_id,
+					'step_index'  => $replay_step,
+					'handler'     => '__queuety_replay',
+					'output'      => json_encode( $replay_context, JSON_THROW_ON_ERROR ),
+					'state_after' => json_encode( self::public_state( $state ), JSON_THROW_ON_ERROR ),
+					'context'     => json_encode( $replay_context, JSON_THROW_ON_ERROR ),
 				)
 			);
 

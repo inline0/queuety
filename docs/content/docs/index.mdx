@@ -110,7 +110,7 @@ If you want to use the DB-backed runtime outside WordPress, see [Standalone Use]
 - **Resource management.** Concurrency groups, cost units, workflow budgets, and worker admission help keep expensive agent-style work inside a defined envelope.
 - **Step compensation.** `compensate_with()` and `compensate_on_failure()` provide rollback hooks for completed steps when workflows are cancelled or fail.
 - **Heartbeats.** Long-running steps send heartbeats to prevent the stale-job recovery system from reclaiming active work.
-- **Workflow event log.** Every step transition is recorded with a full state snapshot, enabling time-travel debugging via `workflow_state_at()`.
+- **Workflow tracing.** Every step transition is recorded with input, output, before/after state, context, artifacts, chunks, errors, and time-travel debugging via `workflow_state_at()`.
 - **Parallel steps.** Run steps concurrently and wait for all to complete before advancing.
 - **Conditional branching.** Skip to named steps based on prior state using `_next_step`.
 - **Run Workflows.** Start child workflows that feed results back to the parent.

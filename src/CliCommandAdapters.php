@@ -591,7 +591,7 @@ class CliCommandAdapters {
 	}
 
 	/**
-	 * Resolve workflow state snapshot reads.
+	 * Resolve workflow state reads.
 	 *
 	 * @param array<int, string>   $args Positional arguments.
 	 * @param array<string, mixed> $assoc_args Associative arguments.

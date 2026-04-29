@@ -1570,15 +1570,53 @@ class Queuety {
 	}
 
 	/**
-	 * Get the state snapshot at a specific workflow step.
+	 * Get the normalized trace bundle for a workflow.
+	 *
+	 * @param int $workflow_id Workflow ID.
+	 * @return array
+	 */
+	public static function workflow_trace( int $workflow_id ): array {
+		self::ensure_initialized();
+		return self::$workflow_event_log->get_trace( $workflow_id );
+	}
+
+	/**
+	 * Get the public state after a specific workflow step.
 	 *
 	 * @param int $workflow_id Workflow ID.
 	 * @param int $step_index  Step index.
-	 * @return array|null The state snapshot, or null if not found.
+	 * @return array|null The recorded state, or null if not found.
 	 */
 	public static function workflow_state_at( int $workflow_id, int $step_index ): ?array {
 		self::ensure_initialized();
 		return self::$workflow_event_log->get_state_at_step( $workflow_id, $step_index );
+	}
+
+	/**
+	 * Set trace input for the currently executing workflow step.
+	 *
+	 * @param mixed $input Trace input.
+	 */
+	public static function trace_input( mixed $input ): void {
+		ExecutionContext::set_trace_input( $input );
+	}
+
+	/**
+	 * Set trace output for the currently executing workflow step.
+	 *
+	 * @param mixed $output Trace output.
+	 */
+	public static function trace_output( mixed $output ): void {
+		ExecutionContext::set_trace_output( $output );
+	}
+
+	/**
+	 * Add trace context for the currently executing workflow step.
+	 *
+	 * @param array $context Trace context.
+	 */
+	public static function trace_context( array $context ): void {
+		ExecutionContext::add_trace_context( $context );
 	}
 
 	/**

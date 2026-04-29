@@ -577,7 +577,7 @@ class CliCommandMap {
 					),
 				),
 				CliCommandAdapters::class . '::workflow_state_at',
-				'Read a workflow state snapshot.'
+				'Read workflow state after a step.'
 			),
 			self::definition_item(
 				'log.query',

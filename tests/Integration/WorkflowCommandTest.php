@@ -297,7 +297,7 @@ class WorkflowCommandTest extends TestCase {
 		// Record some events.
 		$event_log = Queuety::workflow_events();
 		$event_log->record_step_started( $wf_id, 0, 'FakeStep' );
-		$event_log->record_step_completed( $wf_id, 0, 'FakeStep', array( 'user_id' => 42 ), array(), 100 );
+		$event_log->record_step_completed( $wf_id, 0, 'FakeStep', array(), array( 'user_id' => 42 ), array(), 100 );
 
 		$this->cmd->timeline( array( $wf_id ), array() );
 
@@ -322,7 +322,7 @@ class WorkflowCommandTest extends TestCase {
 		$wf_id = $this->create_test_workflow();
 		$event_log = Queuety::workflow_events();
 		$event_log->record_step_started( $wf_id, 0, 'StepA' );
-		$event_log->record_step_completed( $wf_id, 0, 'StepA', array(), array(), 100 );
+		$event_log->record_step_completed( $wf_id, 0, 'StepA', array(), array(), array(), 100 );
 		$event_log->record_step_started( $wf_id, 1, 'StepB' );
 
 		$this->cmd->timeline( array( $wf_id ), array( 'limit' => 1, 'offset' => 1 ) );
@@ -379,14 +379,14 @@ class WorkflowCommandTest extends TestCase {
 		$this->assert_logged_contains( '"summary": "ok"' );
 	}
 
-	// -- state_at() shows state snapshot -------------------------------------
+	// -- state_at() shows recorded state --------------------------------------
 
 	public function test_state_at_shows_snapshot(): void {
 		$this->skip_without_db();
 
 		$wf_id     = $this->create_test_workflow();
 		$event_log = Queuety::workflow_events();
-		$event_log->record_step_completed( $wf_id, 0, 'FakeStep', array( 'data' => 'test' ), array( 'data' => 'test' ), 50 );
+		$event_log->record_step_completed( $wf_id, 0, 'FakeStep', array(), array( 'data' => 'test' ), array( 'data' => 'test' ), 50 );
 
 		$this->cmd->state_at( array( $wf_id, 0 ), array() );
 		$this->assert_logged_contains( "State at step 0 for workflow #{$wf_id}:" );
@@ -397,7 +397,7 @@ class WorkflowCommandTest extends TestCase {
 		$this->skip_without_db();
 
 		$this->expectException( \RuntimeException::class );
-		$this->expectExceptionMessage( 'No state snapshot found' );
+		$this->expectExceptionMessage( 'No recorded state found' );
 
 		$this->cmd->state_at( array( 999999, 0 ), array() );
 	}

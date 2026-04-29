@@ -424,7 +424,7 @@ Output columns: `ID`, `Step`, `Event`, `Handler`, `Duration_ms`, `Error`, `Creat
 
 ### `wp queuety workflow state-at`
 
-Show the state snapshot at a specific workflow step. Displays the full workflow state as it was after the given step completed.
+Show the public workflow state after a specific workflow step completed or resumed.
 
 ```bash
 wp queuety workflow state-at <id> <step>
@@ -443,7 +443,7 @@ See [Workflow Event Log](/docs/workflows/event-log) for details on what gets rec
 
 ### `wp queuety workflow rewind`
 
-Rewind a workflow to a previous step and re-run from there. The state is restored from the event log snapshot at the given step.
+Rewind a workflow to a previous step and re-run from there. The state is restored from the event log `state_after` for the given step.
 
 ```bash
 wp queuety workflow rewind <id> <step>

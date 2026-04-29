@@ -7,7 +7,7 @@ description: Rewind a workflow to a previous step and re-run from there.
 
 Queuety can rewind a workflow to a previous step and resume execution from that point. This is useful when a step produced bad output, when you want to retry with different configuration, or when you need to recover from corrupt data without restarting the entire workflow.
 
-Rewinding relies on the [Workflow Event Log](/docs/workflows/event-log). The event log must have state snapshots for the target step.
+Rewinding relies on the [Workflow Event Log](/docs/workflows/event-log). The event log must have `state_after` data for the target step.
 
 ## Rewinding a workflow
 
@@ -24,7 +24,7 @@ use Queuety\Queuety;
 Queuety::rewind_workflow( $workflow_id, to_step: 1 );
 ```
 
-The `to_step` parameter is the 0-based index of the step whose completed state snapshot should be restored. Execution resumes from the _next_ step (to_step + 1).
+The `to_step` parameter is the 0-based index of the step whose completed state should be restored. Execution resumes from the _next_ step (to_step + 1).
 
 ### CLI
 
@@ -45,7 +45,7 @@ wp queuety workflow rewind 42 1
 
 When you rewind a workflow to step N:
 
-1. The event log is queried for the state snapshot recorded after step N completed
+1. The event log is queried for the `state_after` value recorded after step N completed
 2. If no snapshot exists, a `RuntimeException` is thrown
 3. The workflow row is locked
 4. The workflow state is replaced with the snapshot, preserving all reserved keys (`_steps`, `_queue`, `_priority`, etc.) from the current workflow row
@@ -58,7 +58,7 @@ The worker then picks up the enqueued step and the workflow continues as normal 
 
 ## Requirements
 
-Rewinding requires state snapshots in the event log. The event log records snapshots automatically for every `step_completed` event. If the event log has been pruned (via `WorkflowEventLog::prune()`) and the snapshot for the target step no longer exists, the rewind will fail.
+Rewinding requires `state_after` data in the event log. The event log records it automatically for every `step_completed` event. If the event log has been pruned (via `WorkflowEventLog::prune()`) and the state for the target step no longer exists, the rewind will fail.
 
 Make sure your event log retention covers the period you might need to rewind to.
 
@@ -100,7 +100,7 @@ Queuety::rewind_workflow( $workflow_id, to_step: 0 );
 | Aspect | `retry_workflow()` | `rewind_workflow()` |
 |---|---|---|
 | Resumes from | The failed step | Any previous step |
-| State | Current workflow state | Restored from event log snapshot |
+| State | Current workflow state | Restored from event log `state_after` |
 | Requires | Workflow is in `failed` status | Event log snapshot at target step |
 | Status after | `running` | `running` |
 | Log event | `workflow_resumed` | `workflow_rewound` |

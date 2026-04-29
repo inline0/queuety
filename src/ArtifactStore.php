@@ -79,6 +79,17 @@ class ArtifactStore {
 				'step_index'   => $step_index,
 			)
 		);
+
+		if ( ExecutionContext::workflow_id() === $workflow_id ) {
+			ExecutionContext::add_trace_artifact(
+				array(
+					'key'        => $artifact_key,
+					'kind'       => $kind,
+					'step_index' => $step_index,
+					'metadata'   => $metadata,
+				)
+			);
+		}
 	}
 
 	/**
