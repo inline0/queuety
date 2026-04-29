@@ -15,6 +15,7 @@ use Queuety\Tests\Integration\Fixtures\StateMachineApproveGuard;
 use Queuety\Tests\Integration\Fixtures\StateMachineFailingAction;
 use Queuety\Tests\Integration\Fixtures\StateMachinePlanningAction;
 use Queuety\Tests\Integration\Fixtures\StateMachineResourceAwareAction;
+use Queuety\Tests\Integration\Fixtures\StateMachineTraceAction;
 use Queuety\Tests\IntegrationTestCase;
 use Queuety\Worker;
 use Queuety\Workflow;
@@ -191,16 +192,66 @@ class StateMachineTest extends IntegrationTestCase {
 		$this->assertSame(
 			array(
 				'machine_started',
+				'action_enqueued',
 				'action_started',
 				'action_completed',
 				'transitioned',
 				'machine_waiting',
 				'event_received',
+				'guard_started',
+				'guard_completed',
+				'event_rejected',
+				'event_received',
+				'guard_started',
+				'guard_completed',
 				'transitioned',
 				'machine_completed',
 			),
 			$events
 		);
+	}
+
+	public function test_machine_trace_matches_workflow_trace_detail_shape(): void {
+		$machine_id = Queuety::machine( 'traceable_session' )
+			->state( 'planning' )
+			->action( StateMachineTraceAction::class )
+			->on( 'planned', 'completed' )
+			->state( 'completed', StateMachineStatus::Completed )
+			->dispatch( array( 'brief_id' => 42 ) );
+
+		$this->process_one();
+
+		$timeline = Queuety::machine_timeline( $machine_id );
+		$this->assertContains( 'action_started', array_column( $timeline, 'event' ) );
+		$this->assertContains( 'action_completed', array_column( $timeline, 'event' ) );
+
+		$completed = array_values(
+			array_filter(
+				$timeline,
+				static fn( array $event ): bool => 'action_completed' === $event['event']
+			)
+		)[0];
+
+		$this->assertSame( StateMachineTraceAction::class, $completed['handler'] );
+		$this->assertSame( array( 'brief_id' => 42 ), $completed['input'] );
+		$this->assertSame( array( 'planned' => true ), $completed['output'] );
+		$this->assertSame( array( 'brief_id' => 42 ), $completed['state_before'] );
+		$this->assertSame( true, $completed['state_after']['planned'] );
+		$this->assertSame( 'tests/state-machine-trace-action', $completed['context']['ability'] );
+		$this->assertSame( 'state-plan', $completed['artifacts'][0]['key'] );
+		$this->assertSame( 'chunk', $completed['chunks'][0]['content'] );
+		$this->assertIsInt( $completed['duration_ms'] );
+		$this->assertGreaterThan( 0, (int) $completed['job_id'] );
+		$this->assertSame( $completed['state_after'], Queuety::machine_state_at( $machine_id, (int) $completed['id'] ) );
+
+		$trace = Queuety::machine_trace( $machine_id );
+		$this->assertSame( $machine_id, (int) $trace['machine']['id'] );
+		$this->assertCount( 2, $trace['states'] );
+		$this->assertSame( 'transitioned', $trace['states'][0]['latest']['event'] );
+		$this->assertNotEmpty( $trace['jobs'] );
+		$this->assertNotEmpty( $trace['logs'] );
+		$this->assertSame( 'state-plan', $trace['artifacts'][0]['key'] );
+		$this->assertSame( 'chunk', $trace['chunks'][0]['content'] );
 	}
 
 	public function test_machine_entry_action_and_guard_receive_structured_payloads(): void {
@@ -298,11 +349,13 @@ class StateMachineTest extends IntegrationTestCase {
 		$this->assertSame(
 			array(
 				'machine_started',
+				'action_enqueued',
+				'action_started',
 				'action_failed',
 				'machine_failed',
 			),
-				$events
-			);
+			$events
+		);
 	}
 
 	public function test_state_machine_entry_actions_inherit_resource_policy(): void {

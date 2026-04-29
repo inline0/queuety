@@ -311,19 +311,40 @@ class Schema {
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);
 
+		if ( self::table_exists( $conn, $state_machine_events ) ) {
+			$columns = $pdo->query( "SHOW COLUMNS FROM {$state_machine_events}" )->fetchAll();
+			$names   = array_map( static fn( array $column ): string => (string) $column['Field'], $columns );
+			if ( ! in_array( 'state_after', $names, true ) ) {
+				$pdo->exec( "DROP TABLE IF EXISTS {$state_machine_events}" );
+			}
+		}
+
 		$pdo->exec(
 			"CREATE TABLE IF NOT EXISTS {$state_machine_events} (
 				id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 				machine_id BIGINT UNSIGNED NOT NULL,
+				job_id BIGINT UNSIGNED DEFAULT NULL,
 				state_name VARCHAR(191) NOT NULL,
-				event ENUM('machine_started', 'machine_waiting', 'event_received', 'transitioned', 'action_started', 'action_completed', 'action_failed', 'machine_completed', 'machine_failed', 'machine_paused', 'machine_resumed', 'machine_cancelled') NOT NULL,
+				handler VARCHAR(255) DEFAULT NULL,
+				event ENUM('machine_started', 'machine_waiting', 'event_received', 'event_rejected', 'transitioned', 'action_enqueued', 'action_started', 'action_completed', 'action_failed', 'guard_started', 'guard_completed', 'guard_failed', 'machine_completed', 'machine_failed', 'machine_paused', 'machine_resumed', 'machine_cancelled', 'machine_replayed') NOT NULL,
 				event_name VARCHAR(191) DEFAULT NULL,
-				state_snapshot LONGTEXT DEFAULT NULL,
-				payload LONGTEXT DEFAULT NULL,
-				error_message TEXT DEFAULT NULL,
+				transition_name VARCHAR(191) DEFAULT NULL,
+				queue VARCHAR(64) DEFAULT NULL,
+				attempt TINYINT UNSIGNED DEFAULT NULL,
+				input LONGTEXT DEFAULT NULL,
+				output LONGTEXT DEFAULT NULL,
+				state_before LONGTEXT DEFAULT NULL,
+				state_after LONGTEXT DEFAULT NULL,
+				context LONGTEXT DEFAULT NULL,
+				artifacts LONGTEXT DEFAULT NULL,
+				chunks LONGTEXT DEFAULT NULL,
+				error LONGTEXT DEFAULT NULL,
+				duration_ms INT UNSIGNED DEFAULT NULL,
 				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				INDEX idx_machine (machine_id, id),
 				INDEX idx_machine_event (machine_id, event),
+				INDEX idx_job (job_id),
+				INDEX idx_state (machine_id, state_name),
 				INDEX idx_created (created_at)
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
 		);

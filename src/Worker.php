@@ -444,6 +444,11 @@ class Worker {
 					state_name: $meta['state_name'],
 					event_name: $meta['event_name'],
 					event_payload: $meta['event_payload'],
+					runtime: array(
+						'job_id'  => $job->id,
+						'queue'   => $job->queue,
+						'attempt' => $job->attempts,
+					),
 				);
 
 				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
@@ -890,6 +895,12 @@ class Worker {
 							$meta['machine_id'],
 							$meta['state_name'],
 							$e->getMessage(),
+							array(
+								'job_id'                 => $job->id,
+								'queue'                  => $job->queue,
+								'attempt'                => $job->attempts,
+								'action_failed_recorded' => true,
+							),
 						);
 					}
 				}
@@ -1030,6 +1041,11 @@ class Worker {
 							$meta['machine_id'],
 							$meta['state_name'],
 							'Stale: worker died without completing.',
+							array(
+								'job_id'  => $job->id,
+								'queue'   => $job->queue,
+								'attempt' => $job->attempts,
+							),
 						);
 					}
 				}

@@ -107,21 +107,32 @@ class StateMachine {
 				'machine_started',
 				null,
 				$initial_state,
-				array( 'status' => $status->value )
+				array( 'status' => $status->value ),
+				null,
+				array(
+					'input'       => $initial_state,
+					'output'      => array( 'status' => $status->value ),
+					'state_after' => $initial_state,
+					'context'     => array(
+						'name'            => (string) ( $definition['name'] ?? 'machine' ),
+						'initial_state'   => $initial_state_name,
+						'definition_hash' => $definition['definition_hash'] ?? null,
+					),
+				)
 			);
 
 			if ( StateMachineStatus::WaitingEvent === $status ) {
-				$this->record_machine_event( $machine_id, $initial_state_name, 'machine_waiting', null, $initial_state );
+				$this->record_lifecycle_state_event( $machine_id, $initial_state_name, 'machine_waiting', null, $initial_state, array( 'status' => $status->value ) );
 			} elseif ( StateMachineStatus::Completed === $status ) {
-				$this->record_machine_event( $machine_id, $initial_state_name, 'machine_completed', null, $initial_state );
+				$this->record_lifecycle_state_event( $machine_id, $initial_state_name, 'machine_completed', null, $initial_state, array( 'status' => $status->value ) );
 			} elseif ( StateMachineStatus::Failed === $status ) {
-				$this->record_machine_event( $machine_id, $initial_state_name, 'machine_failed', null, $initial_state );
+				$this->record_lifecycle_state_event( $machine_id, $initial_state_name, 'machine_failed', null, $initial_state, array( 'status' => $status->value ) );
 			} elseif ( StateMachineStatus::Cancelled === $status ) {
-				$this->record_machine_event( $machine_id, $initial_state_name, 'machine_cancelled', null, $initial_state );
+				$this->record_lifecycle_state_event( $machine_id, $initial_state_name, 'machine_cancelled', null, $initial_state, array( 'status' => $status->value ) );
 			}
 
 			if ( StateMachineStatus::Running === $status ) {
-				$this->enqueue_state_action( $machine_id, $definition, $initial_state_name, null, array() );
+				$this->enqueue_state_action( $machine_id, $definition, $initial_state_name, null, array(), $initial_state );
 			}
 
 			$pdo->commit();
@@ -237,6 +248,16 @@ class StateMachine {
 	}
 
 	/**
+	 * Return the normalized trace bundle for one machine.
+	 *
+	 * @param int $machine_id Machine ID.
+	 * @return array<string,mixed>
+	 */
+	public function trace( int $machine_id ): array {
+		return null === $this->event_log ? array() : $this->event_log->get_trace( $machine_id );
+	}
+
+	/**
 	 * Send one external event into a machine.
 	 *
 	 * @param int    $machine_id Machine ID.
@@ -244,6 +265,7 @@ class StateMachine {
 	 * @param array  $payload    Event payload.
 	 * @throws \InvalidArgumentException When the event name is empty.
 	 * @throws \RuntimeException When the machine is not waiting or the event is not allowed.
+	 * @throws \Throwable When a transition guard fails.
 	 */
 	public function send_event( int $machine_id, string $event_name, array $payload = array() ): void {
 		$event_name = trim( $event_name );
@@ -263,7 +285,8 @@ class StateMachine {
 				);
 			}
 
-			$state = $context['state'];
+			$state_before = $context['state'];
+			$state        = $context['state'];
 			foreach ( $payload as $key => $value ) {
 				if ( is_string( $key ) && ! str_starts_with( $key, '_' ) ) {
 					$state[ $key ] = $value;
@@ -276,10 +299,50 @@ class StateMachine {
 				'event_received',
 				$event_name,
 				$state,
-				$payload
+				$payload,
+				null,
+				array(
+					'input'        => $payload,
+					'output'       => $payload,
+					'state_before' => $state_before,
+					'state_after'  => $state,
+					'context'      => array(
+						'event' => $event_name,
+					),
+				)
 			);
 
 			$this->apply_transition_from_locked_context( $context, $state, $event_name, $payload );
+		} catch ( \Throwable $e ) {
+			if ( $context['pdo']->inTransaction() ) {
+				$this->record_machine_event(
+					$machine_id,
+					$context['current_state'],
+					'event_rejected',
+					$event_name,
+					$context['state'],
+					array(
+						'message' => $e->getMessage(),
+					),
+					$e->getMessage(),
+					array(
+						'input'        => $payload,
+						'output'       => array(
+							'rejected' => true,
+							'message'  => $e->getMessage(),
+						),
+						'state_before' => $context['state'],
+						'state_after'  => $context['state'],
+						'context'      => array(
+							'event' => $event_name,
+						),
+						'error'        => $this->error_payload( $e ),
+					)
+				);
+				$context['pdo']->commit();
+			}
+
+			throw $e;
 		} finally {
 			$this->unlock_if_needed( $context['pdo'] );
 		}
@@ -292,22 +355,44 @@ class StateMachine {
 	 * @param string      $state_name     State name the action was queued for.
 	 * @param string|null $event_name     Event that led into the state, if any.
 	 * @param array       $event_payload  Event payload that led into the state.
+	 * @param array       $runtime        Worker runtime metadata.
 	 * @throws \RuntimeException When the queued state no longer defines an action.
 	 * @throws \Throwable When the action fails so worker retries apply.
 	 */
-	public function handle_action_job( int $machine_id, string $state_name, ?string $event_name = null, array $event_payload = array() ): void {
-		$context = $this->lock_machine( $machine_id );
+	public function handle_action_job( int $machine_id, string $state_name, ?string $event_name = null, array $event_payload = array(), array $runtime = array() ): void {
+		$context        = $this->lock_machine( $machine_id );
+		$state_before   = array();
+		$action_input   = array();
+		$action_context = array();
+		$handler        = null;
+		$started_at     = hrtime( true );
+
 		try {
 			if ( StateMachineStatus::Running !== $context['status'] || $context['current_state'] !== $state_name ) {
+				$context['pdo']->commit();
 				return;
 			}
 
-			$state_def = $context['state_def'];
-			$action_def = $this->state_action_definition( $state_def );
+			$state_before = $context['state'];
+			$state_def    = $context['state_def'];
+			$action_def   = $this->state_action_definition( $state_def );
 			if ( null === $action_def ) {
 				throw new \RuntimeException( "State '{$state_name}' does not define an action." );
 			}
-			$action = $this->instantiate_action( $action_def['class'] );
+
+			$handler        = $action_def['class'];
+			$action         = $this->instantiate_action( $handler );
+			$action_input   = array(
+				'state'         => $context['state'],
+				'event'         => $event_name,
+				'event_payload' => $event_payload,
+				'payload'       => $action_def['payload'],
+			);
+			$action_context = array(
+				'action' => $handler,
+				'state'  => $state_name,
+				'event'  => $event_name,
+			);
 
 			$this->record_machine_event(
 				$machine_id,
@@ -315,12 +400,28 @@ class StateMachine {
 				'action_started',
 				$event_name,
 				$context['state'],
-				$event_payload
+				$event_payload,
+				null,
+				array(
+					'job_id'       => $runtime['job_id'] ?? null,
+					'handler'      => $handler,
+					'queue'        => $runtime['queue'] ?? null,
+					'attempt'      => $runtime['attempt'] ?? null,
+					'input'        => $action_input,
+					'state_before' => $context['state'],
+					'context'      => $action_context,
+				)
 			);
+			ExecutionContext::set_trace_input( $action_input );
+			ExecutionContext::add_trace_context( $action_context );
 
 			$result = $action->handle( $context['state'], $event_name, $event_payload, $action_def['payload'] );
 			if ( is_string( $result ) ) {
 				$result = array( '_event' => $result );
+			}
+			if ( array_key_exists( ExecutionContext::TRACE_OUTPUT_KEY, $result ) ) {
+				ExecutionContext::merge_trace_payload( $result[ ExecutionContext::TRACE_OUTPUT_KEY ] );
+				unset( $result[ ExecutionContext::TRACE_OUTPUT_KEY ] );
 			}
 
 			$state              = $context['state'];
@@ -337,6 +438,8 @@ class StateMachine {
 				}
 			}
 
+			$trace       = ExecutionContext::consume_trace();
+			$duration_ms = (int) ( ( hrtime( true ) - $started_at ) / 1_000_000 );
 			$this->record_machine_event(
 				$machine_id,
 				$state_name,
@@ -346,6 +449,21 @@ class StateMachine {
 				array(
 					'result' => $public_updates,
 					'event'  => $result['_event'] ?? null,
+				),
+				null,
+				array(
+					'job_id'       => $runtime['job_id'] ?? null,
+					'handler'      => $handler,
+					'queue'        => $runtime['queue'] ?? null,
+					'attempt'      => $runtime['attempt'] ?? null,
+					'input'        => $trace['input'] ?? $action_input,
+					'output'       => $trace['output'] ?? $result,
+					'state_before' => $state_before,
+					'state_after'  => $state,
+					'context'      => array_merge( $action_context, is_array( $trace['context'] ?? null ) ? $trace['context'] : array() ),
+					'artifacts'    => is_array( $trace['artifacts'] ?? null ) ? $trace['artifacts'] : null,
+					'chunks'       => is_array( $trace['chunks'] ?? null ) ? $trace['chunks'] : null,
+					'duration_ms'  => $duration_ms,
 				)
 			);
 
@@ -371,12 +489,56 @@ class StateMachine {
 				)
 			);
 
-			$this->record_machine_event( $machine_id, $state_name, 'machine_waiting', null, $state );
+			$this->record_lifecycle_state_event( $machine_id, $state_name, 'machine_waiting', null, $state, array( 'event' => $event_name ) );
 			$context['pdo']->commit();
 		} catch ( \Throwable $e ) {
 			if ( $context['pdo']->inTransaction() ) {
 				$context['pdo']->rollBack();
 			}
+
+			$trace       = ExecutionContext::consume_trace();
+			$duration_ms = (int) ( ( hrtime( true ) - $started_at ) / 1_000_000 );
+			if ( ! empty( $action_input ) ) {
+				$this->record_machine_event(
+					$machine_id,
+					$state_name,
+					'action_started',
+					$event_name,
+					! empty( $state_before ) ? $state_before : null,
+					$event_payload,
+					null,
+					array(
+						'job_id'       => $runtime['job_id'] ?? null,
+						'handler'      => $handler,
+						'queue'        => $runtime['queue'] ?? null,
+						'attempt'      => $runtime['attempt'] ?? null,
+						'input'        => $action_input,
+						'state_before' => empty( $state_before ) ? null : $state_before,
+						'context'      => $action_context,
+					)
+				);
+			}
+			$this->record_machine_event(
+				$machine_id,
+				$state_name,
+				'action_failed',
+				$event_name,
+				! empty( $state_before ) ? $state_before : null,
+				null,
+				$e->getMessage(),
+				array(
+					'job_id'       => $runtime['job_id'] ?? null,
+					'handler'      => $handler,
+					'queue'        => $runtime['queue'] ?? null,
+					'attempt'      => $runtime['attempt'] ?? null,
+					'input'        => $trace['input'] ?? ( empty( $action_input ) ? null : $action_input ),
+					'state_before' => empty( $state_before ) ? null : $state_before,
+					'state_after'  => empty( $state_before ) ? null : $state_before,
+					'context'      => array_merge( $action_context, is_array( $trace['context'] ?? null ) ? $trace['context'] : array() ),
+					'error'        => $this->error_payload( $e ),
+					'duration_ms'  => $duration_ms,
+				)
+			);
 			throw $e;
 		}
 	}
@@ -387,9 +549,10 @@ class StateMachine {
 	 * @param int    $machine_id     Machine ID.
 	 * @param string $state_name     Action state name.
 	 * @param string $error_message  Failure message.
+	 * @param array  $runtime        Worker runtime metadata.
 	 * @throws \Throwable When the failure state cannot be persisted.
 	 */
-	public function fail_action( int $machine_id, string $state_name, string $error_message ): void {
+	public function fail_action( int $machine_id, string $state_name, string $error_message, array $runtime = array() ): void {
 		$context = $this->lock_machine( $machine_id );
 		try {
 			if ( StateMachineStatus::Completed === $context['status'] || StateMachineStatus::Cancelled === $context['status'] ) {
@@ -410,15 +573,27 @@ class StateMachine {
 				)
 			);
 
-			$this->record_machine_event(
-				$machine_id,
-				$state_name,
-				'action_failed',
-				null,
-				$context['state'],
-				null,
-				$error_message
-			);
+			if ( empty( $runtime['action_failed_recorded'] ) ) {
+				$this->record_machine_event(
+					$machine_id,
+					$state_name,
+					'action_failed',
+					null,
+					$context['state'],
+					null,
+					$error_message,
+					array(
+						'job_id'       => $runtime['job_id'] ?? null,
+						'queue'        => $runtime['queue'] ?? null,
+						'attempt'      => $runtime['attempt'] ?? null,
+						'state_before' => $context['state'],
+						'state_after'  => $context['state'],
+						'error'        => array(
+							'message' => $error_message,
+						),
+					)
+				);
+			}
 			$this->record_machine_event(
 				$machine_id,
 				$state_name,
@@ -426,7 +601,17 @@ class StateMachine {
 				null,
 				$context['state'],
 				null,
-				$error_message
+				$error_message,
+				array(
+					'job_id'       => $runtime['job_id'] ?? null,
+					'queue'        => $runtime['queue'] ?? null,
+					'attempt'      => $runtime['attempt'] ?? null,
+					'state_before' => $context['state'],
+					'state_after'  => $context['state'],
+					'error'        => array(
+						'message' => $error_message,
+					),
+				)
 			);
 
 			$context['pdo']->commit();
@@ -489,7 +674,10 @@ class StateMachine {
 	 * @throws \RuntimeException When the event is not allowed or the target state is missing.
 	 */
 	private function apply_transition_from_locked_context( array $context, array $state, string $event_name, array $event_payload ): void {
+		$machine_id = (int) $context['row']['id'];
 		$transition = $this->resolve_transition(
+			$machine_id,
+			$context['current_state'],
 			$context['state_def'],
 			$state,
 			$event_name,
@@ -518,7 +706,7 @@ class StateMachine {
 		}
 
 		$this->record_machine_event(
-			(int) $context['row']['id'],
+			$machine_id,
 			$context['current_state'],
 			'transitioned',
 			$event_name,
@@ -527,11 +715,27 @@ class StateMachine {
 				'from' => $context['current_state'],
 				'to'   => $target_state,
 				'name' => $transition['name'] ?? $event_name,
+			),
+			null,
+			array(
+				'transition_name' => $transition['name'] ?? $event_name,
+				'input'           => $event_payload,
+				'output'          => array(
+					'from'  => $context['current_state'],
+					'to'    => $target_state,
+					'name'  => $transition['name'] ?? $event_name,
+					'event' => $event_name,
+				),
+				'state_before'    => $state,
+				'state_after'     => $state,
+				'context'         => array(
+					'from' => $context['current_state'],
+					'to'   => $target_state,
+				),
 			)
 		);
 
 		$status       = $this->status_for_entered_state( $target_state_def );
-		$machine_id   = (int) $context['row']['id'];
 		$completed_at = null;
 		$failed_at    = null;
 		$error        = null;
@@ -556,15 +760,15 @@ class StateMachine {
 		);
 
 		if ( StateMachineStatus::Running === $status ) {
-			$this->enqueue_state_action( $machine_id, $context['definition'], $target_state, $event_name, $event_payload );
+			$this->enqueue_state_action( $machine_id, $context['definition'], $target_state, $event_name, $event_payload, $state );
 		} elseif ( StateMachineStatus::WaitingEvent === $status ) {
-			$this->record_machine_event( $machine_id, $target_state, 'machine_waiting', $event_name, $state, $event_payload );
+			$this->record_lifecycle_state_event( $machine_id, $target_state, 'machine_waiting', $event_name, $state, $event_payload );
 		} elseif ( StateMachineStatus::Completed === $status ) {
-			$this->record_machine_event( $machine_id, $target_state, 'machine_completed', $event_name, $state, $event_payload );
+			$this->record_lifecycle_state_event( $machine_id, $target_state, 'machine_completed', $event_name, $state, $event_payload );
 		} elseif ( StateMachineStatus::Failed === $status ) {
-			$this->record_machine_event( $machine_id, $target_state, 'machine_failed', $event_name, $state, $event_payload );
+			$this->record_lifecycle_state_event( $machine_id, $target_state, 'machine_failed', $event_name, $state, $event_payload );
 		} elseif ( StateMachineStatus::Cancelled === $status ) {
-			$this->record_machine_event( $machine_id, $target_state, 'machine_cancelled', $event_name, $state, $event_payload );
+			$this->record_lifecycle_state_event( $machine_id, $target_state, 'machine_cancelled', $event_name, $state, $event_payload );
 		}
 
 		$context['pdo']->commit();
@@ -573,13 +777,16 @@ class StateMachine {
 	/**
 	 * Resolve one transition for an incoming event.
 	 *
+	 * @param int    $machine_id     Machine ID.
+	 * @param string $current_state  Current state name.
 	 * @param array  $state_def      Current state definition.
 	 * @param array  $state          Current public state.
 	 * @param string $event_name     Event name.
 	 * @param array  $event_payload  Event payload.
 	 * @return array<string, mixed>|null
+	 * @throws \Throwable When a transition guard fails.
 	 */
-	private function resolve_transition( array $state_def, array $state, string $event_name, array $event_payload ): ?array {
+	private function resolve_transition( int $machine_id, string $current_state, array $state_def, array $state, string $event_name, array $event_payload ): ?array {
 		$transitions = is_array( $state_def['transitions'] ?? null ) ? $state_def['transitions'] : array();
 
 		foreach ( $transitions as $transition ) {
@@ -589,8 +796,84 @@ class StateMachine {
 
 			$guard_def = $this->transition_guard_definition( $transition );
 			if ( null !== $guard_def ) {
-				$guard = $this->instantiate_guard( $guard_def['class'] );
-				if ( ! $guard->allows( $state, $event_payload, $event_name, $guard_def['payload'] ) ) {
+				$transition_name = is_string( $transition['name'] ?? null ) ? $transition['name'] : $event_name;
+				$target_state    = (string) ( $transition['target_state'] ?? '' );
+				$guard_input     = array(
+					'state'         => $state,
+					'event'         => $event_name,
+					'event_payload' => $event_payload,
+					'payload'       => $guard_def['payload'],
+				);
+				$guard_context   = array(
+					'from'  => $current_state,
+					'to'    => $target_state,
+					'event' => $event_name,
+				);
+				$started_at      = hrtime( true );
+				$guard           = $this->instantiate_guard( $guard_def['class'] );
+				$this->record_machine_event(
+					$machine_id,
+					$current_state,
+					'guard_started',
+					$event_name,
+					$state,
+					$event_payload,
+					null,
+					array(
+						'handler'         => $guard_def['class'],
+						'transition_name' => $transition_name,
+						'input'           => $guard_input,
+						'state_before'    => $state,
+						'context'         => $guard_context,
+					)
+				);
+
+				try {
+					$allowed = $guard->allows( $state, $event_payload, $event_name, $guard_def['payload'] );
+				} catch ( \Throwable $e ) {
+					$this->record_machine_event(
+						$machine_id,
+						$current_state,
+						'guard_failed',
+						$event_name,
+						$state,
+						null,
+						$e->getMessage(),
+						array(
+							'handler'         => $guard_def['class'],
+							'transition_name' => $transition_name,
+							'input'           => $guard_input,
+							'state_before'    => $state,
+							'state_after'     => $state,
+							'context'         => $guard_context,
+							'error'           => $this->error_payload( $e ),
+							'duration_ms'     => (int) ( ( hrtime( true ) - $started_at ) / 1_000_000 ),
+						)
+					);
+					throw $e;
+				}
+
+				$this->record_machine_event(
+					$machine_id,
+					$current_state,
+					'guard_completed',
+					$event_name,
+					$state,
+					array( 'allowed' => $allowed ),
+					null,
+					array(
+						'handler'         => $guard_def['class'],
+						'transition_name' => $transition_name,
+						'input'           => $guard_input,
+						'output'          => array( 'allowed' => $allowed ),
+						'state_before'    => $state,
+						'state_after'     => $state,
+						'context'         => $guard_context,
+						'duration_ms'     => (int) ( ( hrtime( true ) - $started_at ) / 1_000_000 ),
+					)
+				);
+
+				if ( ! $allowed ) {
 					continue;
 				}
 			}
@@ -609,8 +892,9 @@ class StateMachine {
 	 * @param string               $state_name     Entered state name.
 	 * @param string|null          $event_name     Event that led into the state.
 	 * @param array                $event_payload  Event payload that led into the state.
+	 * @param array|null           $state          Public state when the action was queued.
 	 */
-	private function enqueue_state_action( int $machine_id, array $definition, string $state_name, ?string $event_name, array $event_payload ): void {
+	private function enqueue_state_action( int $machine_id, array $definition, string $state_name, ?string $event_name, array $event_payload, ?array $state = null ): void {
 		$state_def  = is_array( $definition['states'][ $state_name ] ?? null ) ? $definition['states'][ $state_name ] : array();
 		$action_def = $this->state_action_definition( $state_def );
 		if ( null === $action_def ) {
@@ -619,7 +903,9 @@ class StateMachine {
 		$action_class    = $action_def['class'];
 		$action_defaults = HandlerMetadata::from_class( $action_class );
 
-		$this->queue->dispatch(
+		$queue_name = (string) ( $definition['queue'] ?? 'default' );
+		$priority   = Priority::tryFrom( (int) ( $definition['priority'] ?? 0 ) ) ?? Priority::Low;
+		$job_id     = $this->queue->dispatch(
 			handler: '__queuety_state_machine_action',
 			payload: array(
 				'machine_id'    => $machine_id,
@@ -627,12 +913,50 @@ class StateMachine {
 				'event_name'    => $event_name,
 				'event_payload' => $event_payload,
 			),
-			queue: (string) ( $definition['queue'] ?? 'default' ),
-			priority: Priority::tryFrom( (int) ( $definition['priority'] ?? 0 ) ) ?? Priority::Low,
+			queue: $queue_name,
+			priority: $priority,
 			max_attempts: max( 1, (int) ( $definition['max_attempts'] ?? 3 ) ),
 			concurrency_group: $action_defaults['concurrency_group'],
 			concurrency_limit: $action_defaults['concurrency_limit'],
 			cost_units: $action_defaults['cost_units'] ?? 1,
+		);
+
+		$this->record_machine_event(
+			$machine_id,
+			$state_name,
+			'action_enqueued',
+			$event_name,
+			$state,
+			array(
+				'job_id'   => $job_id,
+				'handler'  => $action_class,
+				'queue'    => $queue_name,
+				'priority' => $priority->value,
+			),
+			null,
+			array(
+				'job_id'       => $job_id,
+				'handler'      => $action_class,
+				'queue'        => $queue_name,
+				'input'        => array(
+					'state'         => $state,
+					'event'         => $event_name,
+					'event_payload' => $event_payload,
+					'payload'       => $action_def['payload'],
+				),
+				'output'       => array(
+					'job_id'   => $job_id,
+					'handler'  => $action_class,
+					'queue'    => $queue_name,
+					'priority' => $priority->value,
+				),
+				'state_before' => $state,
+				'state_after'  => $state,
+				'context'      => array(
+					'state' => $state_name,
+					'event' => $event_name,
+				),
+			)
 		);
 	}
 
@@ -824,6 +1148,7 @@ class StateMachine {
 	 * @param array|null  $state_snapshot Public state snapshot.
 	 * @param array|null  $payload        Payload details.
 	 * @param string|null $error_message  Error message.
+	 * @param array       $details        Full trace event details.
 	 */
 	private function record_machine_event(
 		int $machine_id,
@@ -833,19 +1158,73 @@ class StateMachine {
 		?array $state_snapshot = null,
 		?array $payload = null,
 		?string $error_message = null,
+		array $details = array(),
 	): void {
 		if ( null === $this->event_log ) {
 			return;
 		}
 
-		$this->event_log->record(
+		$this->event_log->record_event(
+			array_merge(
+				array(
+					'machine_id'  => $machine_id,
+					'state_name'  => $state_name,
+					'event'       => $event,
+					'event_name'  => $event_name,
+					'output'      => $payload,
+					'state_after' => $state_snapshot,
+					'error'       => null === $error_message ? null : array(
+						'message' => $error_message,
+					),
+				),
+				$details
+			)
+		);
+	}
+
+	/**
+	 * Record a lifecycle state event with the normalized trace field shape.
+	 *
+	 * @param int         $machine_id Machine ID.
+	 * @param string      $state_name Machine state name.
+	 * @param string      $event      Lifecycle event type.
+	 * @param string|null $event_name Event that led to the lifecycle event.
+	 * @param array       $state      Public state snapshot.
+	 * @param array|null  $output     Lifecycle output details.
+	 */
+	private function record_lifecycle_state_event( int $machine_id, string $state_name, string $event, ?string $event_name, array $state, ?array $output = null ): void {
+		$this->record_machine_event(
 			$machine_id,
 			$state_name,
 			$event,
 			$event_name,
-			$state_snapshot,
-			$payload,
-			$error_message
+			$state,
+			$output,
+			null,
+			array(
+				'input'        => $output,
+				'output'       => $output,
+				'state_before' => $state,
+				'state_after'  => $state,
+				'context'      => array(
+					'state' => $state_name,
+					'event' => $event_name,
+				),
+			)
+		);
+	}
+
+	/**
+	 * Build a structured trace error payload.
+	 *
+	 * @param \Throwable $throwable Error.
+	 * @return array<string,string>
+	 */
+	private function error_payload( \Throwable $throwable ): array {
+		return array(
+			'message' => $throwable->getMessage(),
+			'class'   => get_class( $throwable ),
+			'trace'   => $throwable->getTraceAsString(),
 		);
 	}
 

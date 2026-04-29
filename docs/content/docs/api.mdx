@@ -712,6 +712,26 @@ $timeline = Queuety::machine_timeline( $machine_id );
 $page_two = Queuety::machine_timeline( $machine_id, 100, 100 );
 ```
 
+Each event row contains: `id`, `machine_id`, `job_id`, `state_name`, `handler`, `event`, `event_name`, `transition_name`, `queue`, `attempt`, `input`, `output`, `state_before`, `state_after`, `context`, `artifacts`, `chunks`, `error`, `duration_ms`, and `created_at`.
+
+### `Queuety::machine_trace( $machine_id )`
+
+Get a normalized trace bundle for a state-machine debugger UI.
+
+```php
+$trace = Queuety::machine_trace( $machine_id );
+```
+
+The trace contains `machine`, grouped `states`, raw `events`, correlated action `jobs`, `logs`, `artifacts`, and `chunks`.
+
+### `Queuety::machine_state_at( $machine_id, $event_id )`
+
+Get the public state after a specific machine trace event, or `null` if not found.
+
+```php
+$state = Queuety::machine_state_at( $machine_id, $event_id );
+```
+
 See [State Machines](/docs/state-machines) for the lifecycle model and usage patterns.
 
 ## Workflow templates
@@ -955,6 +975,16 @@ define( 'QUEUETY_CACHE_TTL', 10 );
 
 See [Caching](/docs/features/caching) for details on backends and auto-detection.
 
+## State-machine event log
+
+### `Queuety::machine_events()`
+
+Get the `StateMachineEventLog` instance.
+
+```php
+$log = Queuety::machine_events();
+```
+
 ## Workflow event log
 
 ### `Queuety::workflow_events()`
@@ -1021,6 +1051,7 @@ These methods return internal instances for advanced use cases.
 | `Queuety::connection()` | `Connection` | Database connection |
 | `Queuety::batch_manager()` | `BatchManager` | Batch lifecycle management (cancel, prune) |
 | `Queuety::chunk_store()` | `ChunkStore` | Chunk persistence for streaming steps |
+| `Queuety::machine_events()` | `StateMachineEventLog` | State-machine trace events and normalized trace bundles |
 | `Queuety::workflow_events()` | `WorkflowEventLog` | Workflow trace events and normalized trace bundles |
 | `Queuety::resource_manager()` | `ResourceManager` | Worker admission profiles, weighted budgets, and system-memory inspection |
 | `Queuety::cache()` | `Cache` | Cache backend instance |
@@ -1220,6 +1251,18 @@ Records workflow step transitions with full trace context. Access via `Queuety::
 | `get_timeline( int $workflow_id, ?int $limit = 100, int $offset = 0 )` | `array` | Get workflow trace events in order, with optional paging |
 | `get_trace( int $workflow_id )` | `array` | Get a normalized trace bundle |
 | `get_state_at_step( int $workflow_id, int $step_index )` | `array\|null` | Get the public state after a specific step completed or resumed |
+| `prune( int $older_than_days )` | `int` | Delete events older than the given number of days. Returns rows deleted. |
+
+### `StateMachineEventLog`
+
+Records state-machine lifecycle, action, transition, and guard events with the same trace fields as workflow events.
+
+| Method | Returns | Description |
+|---|---|---|
+| `record_event( array $event )` | `void` | Record a raw machine trace event |
+| `get_timeline( int $machine_id, ?int $limit = 100, int $offset = 0 )` | `array` | Get machine trace events in order, with optional paging |
+| `get_trace( int $machine_id )` | `array` | Get a normalized machine trace bundle |
+| `get_state_at_event( int $machine_id, int $event_id )` | `array\|null` | Get the public state after a specific machine trace event |
 | `prune( int $older_than_days )` | `int` | Delete events older than the given number of days. Returns rows deleted. |
 
 ### `Contracts\StreamingStep`

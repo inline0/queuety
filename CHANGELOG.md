@@ -2,6 +2,15 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.21.0] - 2026-04-29
+
+### Added
+
+- first-class state-machine tracing with action and guard input, output, state before, state after, context, artifacts, chunks, and structured errors
+- normalized `Queuety::machine_trace()` API for debugger UIs
+- `Queuety::machine_events()` and `Queuety::machine_state_at()` inspection helpers for state-machine traces
+- state-machine traces now include correlated action jobs and logs
+
 ## [0.20.0] - 2026-04-29
 
 ### Added

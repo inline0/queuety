@@ -1253,6 +1253,17 @@ class Queuety {
 	}
 
 	/**
+	 * Get the normalized trace bundle for one machine.
+	 *
+	 * @param int $machine_id Machine ID.
+	 * @return array<string,mixed>
+	 */
+	public static function machine_trace( int $machine_id ): array {
+		self::ensure_initialized();
+		return self::$state_machine->trace( $machine_id );
+	}
+
+	/**
 	 * Load and register workflow definitions from a directory.
 	 *
 	 * Each .php file in the directory should return a WorkflowBuilder.
@@ -1439,6 +1450,12 @@ class Queuety {
 		return self::$scheduler->tick();
 	}
 
+	/** State-machine event log. */
+	public static function machine_events(): StateMachineEventLog {
+		self::ensure_initialized();
+		return self::$state_machine_event_log;
+	}
+
 	/** Workflow event log. */
 	public static function workflow_events(): WorkflowEventLog {
 		self::ensure_initialized();
@@ -1578,6 +1595,18 @@ class Queuety {
 	public static function workflow_trace( int $workflow_id ): array {
 		self::ensure_initialized();
 		return self::$workflow_event_log->get_trace( $workflow_id );
+	}
+
+	/**
+	 * Get the public state after a specific machine trace event.
+	 *
+	 * @param int $machine_id Machine ID.
+	 * @param int $event_id   Trace event ID.
+	 * @return array|null The recorded state, or null if not found.
+	 */
+	public static function machine_state_at( int $machine_id, int $event_id ): ?array {
+		self::ensure_initialized();
+		return self::$state_machine_event_log->get_state_at_event( $machine_id, $event_id );
 	}
 
 	/**
