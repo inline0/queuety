@@ -34,7 +34,7 @@ class StateMachine {
 	 * Dispatch a state machine from a definition bundle.
 	 *
 	 * @param array<string, mixed> $definition    Machine definition.
-	 * @param array                $initial_state Initial public state.
+	 * @param array<string, mixed> $initial_state Initial public state.
 	 * @param array<string, mixed> $options       Dispatch options.
 	 * @return int
 	 * @throws \InvalidArgumentException When the idempotency key is invalid.
@@ -260,9 +260,9 @@ class StateMachine {
 	/**
 	 * Send one external event into a machine.
 	 *
-	 * @param int    $machine_id Machine ID.
-	 * @param string $event_name Event name.
-	 * @param array  $payload    Event payload.
+	 * @param int                  $machine_id Machine ID.
+	 * @param string               $event_name Event name.
+	 * @param array<string, mixed> $payload    Event payload.
 	 * @throws \InvalidArgumentException When the event name is empty.
 	 * @throws \RuntimeException When the machine is not waiting or the event is not allowed.
 	 * @throws \Throwable When a transition guard fails.
@@ -351,11 +351,11 @@ class StateMachine {
 	/**
 	 * Process one queued state-entry action.
 	 *
-	 * @param int         $machine_id     Machine ID.
-	 * @param string      $state_name     State name the action was queued for.
-	 * @param string|null $event_name     Event that led into the state, if any.
-	 * @param array       $event_payload  Event payload that led into the state.
-	 * @param array       $runtime        Worker runtime metadata.
+	 * @param int                  $machine_id    Machine ID.
+	 * @param string               $state_name    State name the action was queued for.
+	 * @param string|null          $event_name    Event that led into the state, if any.
+	 * @param array<string, mixed> $event_payload Event payload that led into the state.
+	 * @param array<string, mixed> $runtime       Worker runtime metadata.
 	 * @throws \RuntimeException When the queued state no longer defines an action.
 	 * @throws \Throwable When the action fails so worker retries apply.
 	 */
@@ -546,10 +546,10 @@ class StateMachine {
 	/**
 	 * Mark one machine as failed after a queued action is permanently buried.
 	 *
-	 * @param int    $machine_id     Machine ID.
-	 * @param string $state_name     Action state name.
-	 * @param string $error_message  Failure message.
-	 * @param array  $runtime        Worker runtime metadata.
+	 * @param int                  $machine_id    Machine ID.
+	 * @param string               $state_name    Action state name.
+	 * @param string               $error_message Failure message.
+	 * @param array<string, mixed> $runtime       Worker runtime metadata.
 	 * @throws \Throwable When the failure state cannot be persisted.
 	 */
 	public function fail_action( int $machine_id, string $state_name, string $error_message, array $runtime = array() ): void {
@@ -627,7 +627,7 @@ class StateMachine {
 	 * Lock one machine row and decode its persisted definition/state.
 	 *
 	 * @param int $machine_id Machine ID.
-	 * @return array{pdo: \PDO, row: array, definition: array, state: array, state_def: array, current_state: string, status: StateMachineStatus}
+	 * @return array{pdo: \PDO, row: array<string, mixed>, definition: array<string, mixed>, state: array<string, mixed>, state_def: array<string, mixed>, current_state: string, status: StateMachineStatus}
 	 * @throws \RuntimeException When the machine row or current state definition is missing.
 	 */
 	private function lock_machine( int $machine_id ): array {
@@ -667,10 +667,10 @@ class StateMachine {
 	/**
 	 * Apply one transition from the current locked machine context.
 	 *
-	 * @param array  $context       Locked machine context.
-	 * @param array  $state         Updated public state.
-	 * @param string $event_name    Event name.
-	 * @param array  $event_payload Event payload.
+	 * @param array<string, mixed> $context       Locked machine context.
+	 * @param array<string, mixed> $state         Updated public state.
+	 * @param string               $event_name    Event name.
+	 * @param array<string, mixed> $event_payload Event payload.
 	 * @throws \RuntimeException When the event is not allowed or the target state is missing.
 	 */
 	private function apply_transition_from_locked_context( array $context, array $state, string $event_name, array $event_payload ): void {
@@ -777,12 +777,12 @@ class StateMachine {
 	/**
 	 * Resolve one transition for an incoming event.
 	 *
-	 * @param int    $machine_id     Machine ID.
-	 * @param string $current_state  Current state name.
-	 * @param array  $state_def      Current state definition.
-	 * @param array  $state          Current public state.
-	 * @param string $event_name     Event name.
-	 * @param array  $event_payload  Event payload.
+	 * @param int                  $machine_id    Machine ID.
+	 * @param string               $current_state Current state name.
+	 * @param array<string, mixed> $state_def     Current state definition.
+	 * @param array<string, mixed> $state         Current public state.
+	 * @param string               $event_name    Event name.
+	 * @param array<string, mixed> $event_payload Event payload.
 	 * @return array<string, mixed>|null
 	 * @throws \Throwable When a transition guard fails.
 	 */
@@ -887,12 +887,12 @@ class StateMachine {
 	/**
 	 * Queue one entry action job for the entered state.
 	 *
-	 * @param int                  $machine_id     Machine ID.
-	 * @param array<string, mixed> $definition     Machine definition.
-	 * @param string               $state_name     Entered state name.
-	 * @param string|null          $event_name     Event that led into the state.
-	 * @param array                $event_payload  Event payload that led into the state.
-	 * @param array|null           $state          Public state when the action was queued.
+	 * @param int                       $machine_id    Machine ID.
+	 * @param array<string, mixed>      $definition    Machine definition.
+	 * @param string                    $state_name    Entered state name.
+	 * @param string|null               $event_name    Event that led into the state.
+	 * @param array<string, mixed>      $event_payload Event payload that led into the state.
+	 * @param array<string, mixed>|null $state         Public state when the action was queued.
 	 */
 	private function enqueue_state_action( int $machine_id, array $definition, string $state_name, ?string $event_name, array $event_payload, ?array $state = null ): void {
 		$state_def  = is_array( $definition['states'][ $state_name ] ?? null ) ? $definition['states'][ $state_name ] : array();
@@ -963,7 +963,7 @@ class StateMachine {
 	/**
 	 * Determine runtime status for an entered state definition.
 	 *
-	 * @param array $state_def State definition.
+	 * @param array<string, mixed> $state_def State definition.
 	 * @return StateMachineStatus
 	 */
 	private function status_for_entered_state( array $state_def ): StateMachineStatus {
@@ -1003,7 +1003,7 @@ class StateMachine {
 	/**
 	 * Resolve the action class for a state definition.
 	 *
-	 * @param array $state_def State definition.
+	 * @param array<string, mixed> $state_def State definition.
 	 * @return string|null
 	 */
 	private function state_action_class( array $state_def ): ?string {
@@ -1014,8 +1014,8 @@ class StateMachine {
 	/**
 	 * Resolve the structured action definition for a state.
 	 *
-	 * @param array $state_def State definition.
-	 * @return array{class:string,payload:array}|null
+	 * @param array<string, mixed> $state_def State definition.
+	 * @return array{class: string, payload: array<string, mixed>}|null
 	 */
 	private function state_action_definition( array $state_def ): ?array {
 		$action = $this->normalize_handler_definition( $state_def['action'] ?? null );
@@ -1037,8 +1037,8 @@ class StateMachine {
 	/**
 	 * Resolve the structured guard definition for a transition.
 	 *
-	 * @param array $transition Transition definition.
-	 * @return array{class:string,payload:array}|null
+	 * @param array<string, mixed> $transition Transition definition.
+	 * @return array{class: string, payload: array<string, mixed>}|null
 	 */
 	private function transition_guard_definition( array $transition ): ?array {
 		$guard = $this->normalize_handler_definition( $transition['guard'] ?? null );
@@ -1061,7 +1061,7 @@ class StateMachine {
 	 * Normalize a structured handler definition.
 	 *
 	 * @param mixed $definition Handler definition.
-	 * @return array{class:string,payload:array}|null
+	 * @return array{class: string, payload: array<string, mixed>}|null
 	 */
 	private function normalize_handler_definition( mixed $definition ): ?array {
 		if ( is_string( $definition ) && '' !== trim( $definition ) ) {
@@ -1141,14 +1141,14 @@ class StateMachine {
 	/**
 	 * Record one machine event if the log is available.
 	 *
-	 * @param int         $machine_id     Machine ID.
-	 * @param string      $state_name     State name.
-	 * @param string      $event          Event type.
-	 * @param string|null $event_name     Event name.
-	 * @param array|null  $state_snapshot Public state snapshot.
-	 * @param array|null  $payload        Payload details.
-	 * @param string|null $error_message  Error message.
-	 * @param array       $details        Full trace event details.
+	 * @param int                       $machine_id     Machine ID.
+	 * @param string                    $state_name     State name.
+	 * @param string                    $event          Event type.
+	 * @param string|null               $event_name     Event name.
+	 * @param array<string, mixed>|null $state_snapshot Public state snapshot.
+	 * @param array<string, mixed>|null $payload        Payload details.
+	 * @param string|null               $error_message  Error message.
+	 * @param array<string, mixed>      $details        Full trace event details.
 	 */
 	private function record_machine_event(
 		int $machine_id,
@@ -1185,12 +1185,12 @@ class StateMachine {
 	/**
 	 * Record a lifecycle state event with the normalized trace field shape.
 	 *
-	 * @param int         $machine_id Machine ID.
-	 * @param string      $state_name Machine state name.
-	 * @param string      $event      Lifecycle event type.
-	 * @param string|null $event_name Event that led to the lifecycle event.
-	 * @param array       $state      Public state snapshot.
-	 * @param array|null  $output     Lifecycle output details.
+	 * @param int                       $machine_id Machine ID.
+	 * @param string                    $state_name Machine state name.
+	 * @param string                    $event      Lifecycle event type.
+	 * @param string|null               $event_name Event that led to the lifecycle event.
+	 * @param array<string, mixed>      $state      Public state snapshot.
+	 * @param array<string, mixed>|null $output     Lifecycle output details.
 	 */
 	private function record_lifecycle_state_event( int $machine_id, string $state_name, string $event, ?string $event_name, array $state, ?array $output = null ): void {
 		$this->record_machine_event(

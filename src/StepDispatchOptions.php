@@ -25,13 +25,13 @@ final class StepDispatchOptions {
 	/**
 	 * Resolve dispatch options for one handler job.
 	 *
-	 * @param array|string $definition       Serialized step or branch definition.
-	 * @param string       $handler          Handler class or alias.
-	 * @param string       $workflow_queue   Workflow default queue.
-	 * @param Priority     $workflow_priority Workflow default priority.
-	 * @param int          $workflow_attempts Workflow default max attempts.
-	 * @param array        $payload          Public/internal job payload.
-	 * @param int          $default_cost_units Default cost when handler metadata has none.
+	 * @param array<string, mixed>|string $definition         Serialized step or branch definition.
+	 * @param string                      $handler            Handler class or alias.
+	 * @param string                      $workflow_queue     Workflow default queue.
+	 * @param Priority                    $workflow_priority  Workflow default priority.
+	 * @param int                         $workflow_attempts  Workflow default max attempts.
+	 * @param array<string, mixed>        $payload            Public/internal job payload.
+	 * @param int                         $default_cost_units Default cost when handler metadata has none.
 	 * @return array{
 	 *     queue: string,
 	 *     priority: Priority,
@@ -40,7 +40,7 @@ final class StepDispatchOptions {
 	 *     concurrency_group: string|null,
 	 *     concurrency_limit: int|null,
 	 *     cost_units: int,
-	 *     payload: array
+	 *     payload: array<string, mixed>
 	 * }
 	 */
 	public static function resolve(
@@ -119,8 +119,8 @@ final class StepDispatchOptions {
 	/**
 	 * Resolve structured or legacy parallel branch definitions.
 	 *
-	 * @param array $step_def Parallel step definition.
-	 * @return array<int,array<string,mixed>>
+	 * @param array<string, mixed> $step_def Parallel step definition.
+	 * @return array<int, array<string, mixed>>
 	 */
 	public static function parallel_branches( array $step_def ): array {
 		$branches = $step_def['branches'] ?? null;
@@ -150,7 +150,7 @@ final class StepDispatchOptions {
 	/**
 	 * Count branches for a serialized parallel step.
 	 *
-	 * @param array $step_def Parallel step definition.
+	 * @param array<string, mixed> $step_def Parallel step definition.
 	 * @return int
 	 */
 	public static function parallel_branch_count( array $step_def ): int {
@@ -201,8 +201,8 @@ final class StepDispatchOptions {
 	/**
 	 * Resolve an explicit payload from a serialized definition.
 	 *
-	 * @param array|string $definition Serialized definition.
-	 * @return array
+	 * @param array<string, mixed>|string $definition Serialized definition.
+	 * @return array<string, mixed>
 	 */
 	public static function payload( array|string $definition ): array {
 		if ( ! is_array( $definition ) ) {
@@ -215,8 +215,8 @@ final class StepDispatchOptions {
 	/**
 	 * Resolve runtime metadata from a job payload.
 	 *
-	 * @param array $payload Job payload.
-	 * @return array<string,mixed>
+	 * @param array<string, mixed> $payload Job payload.
+	 * @return array<string, mixed>
 	 */
 	public static function runtime_from_payload( array $payload ): array {
 		return is_array( $payload[ self::RUNTIME_PAYLOAD_KEY ] ?? null )
@@ -227,8 +227,8 @@ final class StepDispatchOptions {
 	/**
 	 * Remove reserved runtime metadata from a public payload.
 	 *
-	 * @param array $payload Job payload.
-	 * @return array
+	 * @param array<string, mixed> $payload Job payload.
+	 * @return array<string, mixed>
 	 */
 	public static function public_payload( array $payload ): array {
 		unset( $payload[ self::RUNTIME_PAYLOAD_KEY ] );
@@ -352,7 +352,7 @@ final class StepDispatchOptions {
 	 * Normalize a retry backoff value.
 	 *
 	 * @param mixed $value Backoff value.
-	 * @return string|array|null
+	 * @return string|array<int, int>|null
 	 */
 	private static function backoff_value( mixed $value ): string|array|null {
 		if ( is_string( $value ) && null !== BackoffStrategy::tryFrom( $value ) ) {

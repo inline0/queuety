@@ -24,9 +24,9 @@ class BatchManager {
 	/**
 	 * Create a new batch row.
 	 *
-	 * @param int         $total_jobs Total number of jobs in the batch.
-	 * @param string|null $name       Optional batch name.
-	 * @param array       $options    Batch options (callback classes, etc.).
+	 * @param int                  $total_jobs Total number of jobs in the batch.
+	 * @param string|null          $name       Optional batch name.
+	 * @param array<string, mixed> $options    Batch options (callback classes, etc.).
 	 * @return int The new batch ID.
 	 */
 	public function create( int $total_jobs, ?string $name = null, array $options = array() ): int {

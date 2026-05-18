@@ -18,11 +18,11 @@ interface StateAction {
 	 * Return public state updates. When the action decides the next transition,
 	 * include `_event` and optionally `_event_payload`.
 	 *
-	 * @param array       $state         Current public machine state.
-	 * @param string|null $event         Event that led into the state, if any.
-	 * @param array       $event_payload Payload that led into the state, if any.
-	 * @param array       $payload       Structured action payload from the machine definition.
-	 * @return array|string Public state updates, or a string event name shorthand.
+	 * @param array<string, mixed> $state         Current public machine state.
+	 * @param string|null          $event         Event that led into the state, if any.
+	 * @param array<string, mixed> $event_payload Payload that led into the state, if any.
+	 * @param array<string, mixed> $payload       Structured action payload from the machine definition.
+	 * @return array<string, mixed>|string Public state updates, or a string event name shorthand.
 	 */
 	public function handle( array $state, ?string $event = null, array $event_payload = array(), array $payload = array() ): array|string;
 }

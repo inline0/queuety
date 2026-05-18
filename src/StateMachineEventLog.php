@@ -43,13 +43,13 @@ class StateMachineEventLog {
 	 * This method is kept as a compact lifecycle-event adapter. New code should
 	 * prefer record_event() so it can provide the full trace shape.
 	 *
-	 * @param int         $machine_id      Machine ID.
-	 * @param string      $state_name      State name at the time of the event.
-	 * @param string      $event           Event type.
-	 * @param string|null $event_name      Incoming or emitted event name.
-	 * @param array|null  $state_snapshot  Public state snapshot.
-	 * @param array|null  $payload         Event output or transition metadata.
-	 * @param string|null $error_message   Failure message, if any.
+	 * @param int                       $machine_id     Machine ID.
+	 * @param string                    $state_name     State name at the time of the event.
+	 * @param string                    $event          Event type.
+	 * @param string|null               $event_name     Incoming or emitted event name.
+	 * @param array<string, mixed>|null $state_snapshot Public state snapshot.
+	 * @param array<string, mixed>|null $payload        Event output or transition metadata.
+	 * @param string|null               $error_message  Failure message, if any.
 	 */
 	public function record(
 		int $machine_id,
@@ -147,7 +147,7 @@ class StateMachineEventLog {
 	 *
 	 * @param int $machine_id Machine ID.
 	 * @param int $event_id   Trace event ID.
-	 * @return array|null
+	 * @return array<string, mixed>|null
 	 */
 	public function get_state_at_event( int $machine_id, int $event_id ): ?array {
 		$table = $this->conn->table( Config::table_state_machine_events() );

@@ -69,9 +69,9 @@ class BatchBuilder {
 	/**
 	 * Constructor.
 	 *
-	 * @param array        $jobs          Array of Contracts\Job instances or handler+payload arrays.
-	 * @param Queue        $queue_ops     Queue operations instance.
-	 * @param BatchManager $batch_manager Batch manager instance.
+	 * @param array<int, JobContract|array<string, mixed>> $jobs          Array of Contracts\Job instances or handler+payload arrays.
+	 * @param Queue                                        $queue_ops     Queue operations instance.
+	 * @param BatchManager                                 $batch_manager Batch manager instance.
 	 */
 	public function __construct(
 		private readonly array $jobs,
@@ -217,7 +217,7 @@ class BatchBuilder {
 	 * Resolve handler defaults for batch array jobs.
 	 *
 	 * @param string $handler Handler alias or class.
-	 * @return array{queue: string|null, max_attempts: int|null, backoff: string|array|null, rate_limit: array{int, int}|null}
+	 * @return array{queue: string|null, max_attempts: int|null, backoff: string|array<int|string, mixed>|null, rate_limit: array{int, int}|null, concurrency_group: string|null, concurrency_limit: int|null, cost_units: int|null}
 	 */
 	private function handler_defaults( string $handler ): array {
 		$class = null;

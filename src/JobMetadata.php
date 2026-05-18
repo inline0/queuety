@@ -23,7 +23,7 @@ class JobMetadata {
 	 *     tries: int|null,
 	 *     timeout: int|null,
 	 *     max_exceptions: int|null,
-	 *     backoff: array|null,
+	 *     backoff: array<int|string, mixed>|null,
 	 *     concurrency_group: string|null,
 	 *     concurrency_limit: int|null,
 	 *     cost_units: int|null

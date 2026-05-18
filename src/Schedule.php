@@ -20,7 +20,7 @@ readonly class Schedule {
 	 *
 	 * @param int                     $id              Schedule ID.
 	 * @param string                  $handler         Handler name or class.
-	 * @param array                   $payload         Job payload.
+	 * @param array<string, mixed>    $payload         Job payload.
 	 * @param string                  $queue           Queue name.
 	 * @param string                  $expression      Cron or interval expression.
 	 * @param ExpressionType          $expression_type Type of expression.
@@ -47,7 +47,7 @@ readonly class Schedule {
 	/**
 	 * Hydrate a Schedule from a database row.
 	 *
-	 * @param array $row Associative array from PDO fetch.
+	 * @param array<string, mixed> $row Associative array from PDO fetch.
 	 * @return self
 	 */
 	public static function from_row( array $row ): self {

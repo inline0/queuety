@@ -19,8 +19,8 @@ class WorkflowReplayer {
 	/**
 	 * Strip reserved keys from workflow state for public event snapshots.
 	 *
-	 * @param array $state Internal workflow state.
-	 * @return array
+	 * @param array<string, mixed> $state Internal workflow state.
+	 * @return array<string, mixed>
 	 */
 	private static function public_state( array $state ): array {
 		return array_filter(
@@ -50,8 +50,8 @@ class WorkflowReplayer {
 	 * Creates a new workflow from the export data, records historical event
 	 * log entries for completed steps, and enqueues the current step.
 	 *
-	 * @param array      $export_data The export data from WorkflowExporter::export().
-	 * @param Connection $conn        Database connection.
+	 * @param array<string, mixed> $export_data The export data from WorkflowExporter::export().
+	 * @param Connection           $conn        Database connection.
 	 * @return int The new workflow ID.
 	 * @throws \RuntimeException If the export data is invalid.
 	 * @throws \Throwable If the database transaction fails.
@@ -253,7 +253,7 @@ class WorkflowReplayer {
 				);
 			}
 
-			$replay_event = $pdo->prepare(
+			$replay_event   = $pdo->prepare(
 				"INSERT INTO {$ev_tbl}
 				(workflow_id, step_index, handler, event, output, state_after, context)
 				VALUES
@@ -310,17 +310,17 @@ class WorkflowReplayer {
 	/**
 	 * Dispatch one replayed workflow step job with serialized runtime metadata.
 	 *
-	 * @param Queue                   $queue        Queue operations.
-	 * @param array|string            $step_def     Step definition.
-	 * @param string                  $handler      Handler class or alias.
-	 * @param array                   $payload      Job payload.
-	 * @param int                     $workflow_id  Workflow ID.
-	 * @param int                     $step_index   Step index.
-	 * @param string                  $queue_name   Workflow queue name.
-	 * @param \Queuety\Enums\Priority $priority     Workflow priority.
-	 * @param int                     $max_attempts Workflow max attempts.
-	 * @param int                     $default_cost Default cost units when no metadata exists.
-	 * @param int|null                $delay        Explicit dispatch delay override.
+	 * @param Queue                       $queue        Queue operations.
+	 * @param array<string, mixed>|string $step_def     Step definition.
+	 * @param string                      $handler      Handler class or alias.
+	 * @param array<string, mixed>        $payload      Job payload.
+	 * @param int                         $workflow_id  Workflow ID.
+	 * @param int                         $step_index   Step index.
+	 * @param string                      $queue_name   Workflow queue name.
+	 * @param \Queuety\Enums\Priority     $priority     Workflow priority.
+	 * @param int                         $max_attempts Workflow max attempts.
+	 * @param int                         $default_cost Default cost units when no metadata exists.
+	 * @param int|null                    $delay        Explicit dispatch delay override.
 	 */
 	private static function dispatch_replay_job(
 		Queue $queue,
@@ -364,7 +364,7 @@ class WorkflowReplayer {
 	 * Enqueue a step for the replayed workflow.
 	 *
 	 * @param Queue                   $queue       Queue operations.
-	 * @param array                   $step_def    Step definition.
+	 * @param array<string, mixed>    $step_def    Step definition.
 	 * @param int                     $workflow_id Workflow ID.
 	 * @param int                     $step_index  Step index.
 	 * @param string                  $queue_name  Queue name.

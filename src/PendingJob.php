@@ -126,10 +126,10 @@ class PendingJob {
 	/**
 	 * Constructor.
 	 *
-	 * @param string           $handler      Handler name or class.
-	 * @param array            $payload      Job payload.
-	 * @param Queue            $queue_ops    Queue operations instance.
-	 * @param JobContract|null $job_instance Optional original Job instance for middleware.
+	 * @param string               $handler      Handler name or class.
+	 * @param array<string, mixed> $payload      Job payload.
+	 * @param Queue                $queue_ops    Queue operations instance.
+	 * @param JobContract|null     $job_instance Optional original Job instance for middleware.
 	 */
 	public function __construct(
 		private readonly string $handler,

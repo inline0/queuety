@@ -18,29 +18,29 @@ readonly class Job {
 	/**
 	 * Constructor.
 	 *
-	 * @param int                     $id            Job ID.
-	 * @param string                  $queue         Queue name.
-	 * @param string                  $handler       Handler name.
-	 * @param array                   $payload       Job payload.
-	 * @param Priority                $priority      Priority level.
-	 * @param JobStatus               $status        Current status.
-	 * @param int                     $attempts      Number of attempts so far.
-	 * @param int                     $max_attempts  Maximum retry attempts.
-	 * @param \DateTimeImmutable      $available_at  When the job becomes available.
-	 * @param \DateTimeImmutable|null $reserved_at   When the job was reserved.
-	 * @param \DateTimeImmutable|null $completed_at  When the job completed.
-	 * @param \DateTimeImmutable|null $failed_at     When the job failed.
-	 * @param string|null             $error_message Error message if failed.
-	 * @param int|null                $workflow_id   Parent workflow ID.
-	 * @param int|null                $step_index    Step index in workflow.
-	 * @param \DateTimeImmutable      $created_at    When the job was created.
-	 * @param string|null             $payload_hash  SHA-256 hash of the payload for unique job detection.
-	 * @param int|null                $depends_on    ID of the job this job depends on.
-	 * @param int|null                $batch_id      Batch ID if part of a batch.
-	 * @param array|null              $heartbeat_data Progress data from heartbeats.
-	 * @param string|null             $concurrency_group Optional global concurrency group name.
-	 * @param int|null                $concurrency_limit Optional maximum concurrent jobs for the group.
-	 * @param int                     $cost_units    Relative execution cost units for guardrails.
+	 * @param int                       $id                Job ID.
+	 * @param string                    $queue             Queue name.
+	 * @param string                    $handler           Handler name.
+	 * @param array<string, mixed>      $payload           Job payload.
+	 * @param Priority                  $priority          Priority level.
+	 * @param JobStatus                 $status            Current status.
+	 * @param int                       $attempts          Number of attempts so far.
+	 * @param int                       $max_attempts      Maximum retry attempts.
+	 * @param \DateTimeImmutable        $available_at      When the job becomes available.
+	 * @param \DateTimeImmutable|null   $reserved_at       When the job was reserved.
+	 * @param \DateTimeImmutable|null   $completed_at      When the job completed.
+	 * @param \DateTimeImmutable|null   $failed_at         When the job failed.
+	 * @param string|null               $error_message     Error message if failed.
+	 * @param int|null                  $workflow_id       Parent workflow ID.
+	 * @param int|null                  $step_index        Step index in workflow.
+	 * @param \DateTimeImmutable        $created_at        When the job was created.
+	 * @param string|null               $payload_hash      SHA-256 hash of the payload for unique job detection.
+	 * @param int|null                  $depends_on        ID of the job this job depends on.
+	 * @param int|null                  $batch_id          Batch ID if part of a batch.
+	 * @param array<string, mixed>|null $heartbeat_data    Progress data from heartbeats.
+	 * @param string|null               $concurrency_group Optional global concurrency group name.
+	 * @param int|null                  $concurrency_limit Optional maximum concurrent jobs for the group.
+	 * @param int                       $cost_units        Relative execution cost units for guardrails.
 	 */
 	public function __construct(
 		public int $id,
@@ -71,7 +71,7 @@ readonly class Job {
 	/**
 	 * Hydrate a Job from a database row.
 	 *
-	 * @param array $row Associative array from PDO fetch.
+	 * @param array<string, mixed> $row Associative array from PDO fetch.
 	 * @return self
 	 */
 	public static function from_row( array $row ): self {

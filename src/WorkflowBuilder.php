@@ -30,7 +30,7 @@ class WorkflowBuilder {
 	 * Each entry is an array with keys: type, class (for single), handlers (for parallel),
 	 * name (optional), builder (for run_workflow).
 	 *
-	 * @var array[]
+	 * @var array<int, array<string, mixed>>
 	 */
 	private array $steps = array();
 
@@ -193,7 +193,7 @@ class WorkflowBuilder {
 	 * All handlers in the group run concurrently. The workflow advances
 	 * only when all parallel jobs complete.
 	 *
-	 * @param array $handler_classes Array of fully qualified class names implementing Step.
+	 * @param array<int, string> $handler_classes Array of fully qualified class names implementing Step.
 	 * @return self
 	 */
 	public function parallel( array $handler_classes ): self {
@@ -432,11 +432,11 @@ class WorkflowBuilder {
 	 * external signal with the given name. If the signal has already been
 	 * sent before the step is reached, the workflow continues immediately.
 	 *
-	 * @param string      $name       The signal name to wait for.
-	 * @param string|null $result_key Optional state key for the signal payload.
-	 * @param string|null $step_name  Optional step name.
-	 * @param array       $match_payload Optional exact payload subset that signals must contain.
-	 * @param string|null $correlation_key Optional state/payload key that must match for a signal to count.
+	 * @param string               $name            The signal name to wait for.
+	 * @param string|null          $result_key      Optional state key for the signal payload.
+	 * @param string|null          $step_name       Optional step name.
+	 * @param array<string, mixed> $match_payload   Optional exact payload subset that signals must contain.
+	 * @param string|null          $correlation_key Optional state/payload key that must match for a signal to count.
 	 * @return self
 	 */
 	public function wait_for_signal(
@@ -459,12 +459,12 @@ class WorkflowBuilder {
 	/**
 	 * Add a signal wait step that resumes when the configured condition is satisfied.
 	 *
-	 * @param array       $signal_names Signal names to wait for.
-	 * @param WaitMode    $mode         Whether all signals or any signal should unblock the workflow.
-	 * @param string|null $result_key   Optional state key for the collected signal payloads.
-	 * @param string|null $name         Optional step name.
-	 * @param array       $match_payload Optional exact payload subset that signals must contain.
-	 * @param string|null $correlation_key Optional state/payload key that must match for a signal to count.
+	 * @param array<int, string>   $signal_names    Signal names to wait for.
+	 * @param WaitMode             $mode            Whether all signals or any signal should unblock the workflow.
+	 * @param string|null          $result_key      Optional state key for the collected signal payloads.
+	 * @param string|null          $name            Optional step name.
+	 * @param array<string, mixed> $match_payload   Optional exact payload subset that signals must contain.
+	 * @param string|null          $correlation_key Optional state/payload key that must match for a signal to count.
 	 * @return self
 	 * @throws \RuntimeException If no signal names are provided.
 	 */
@@ -510,11 +510,11 @@ class WorkflowBuilder {
 	/**
 	 * Add a signal wait step for human approval.
 	 *
-	 * @param string      $signal_name Approval signal name.
-	 * @param string|null $result_key  Optional state key for the approval payload.
-	 * @param string|null $name        Optional step name.
-	 * @param array       $match_payload Optional exact payload subset that signals must contain.
-	 * @param string|null $correlation_key Optional state/payload key that must match for a signal to count.
+	 * @param string               $signal_name     Approval signal name.
+	 * @param string|null          $result_key      Optional state key for the approval payload.
+	 * @param string|null          $name            Optional step name.
+	 * @param array<string, mixed> $match_payload   Optional exact payload subset that signals must contain.
+	 * @param string|null          $correlation_key Optional state/payload key that must match for a signal to count.
 	 * @return self
 	 */
 	public function wait_for_approval(
@@ -544,12 +544,12 @@ class WorkflowBuilder {
 	 * The stored result contains `outcome`, `signal`, and `data` keys so later
 	 * steps can branch on the human decision without hand-parsing raw signals.
 	 *
-	 * @param string      $approve_signal  Approval signal name.
-	 * @param string      $reject_signal   Rejection signal name.
-	 * @param string|null $result_key      Optional state key for the decision payload.
-	 * @param string|null $name            Optional step name.
-	 * @param array       $match_payload   Optional exact payload subset that signals must contain.
-	 * @param string|null $correlation_key Optional state/payload key that must match for a signal to count.
+	 * @param string               $approve_signal  Approval signal name.
+	 * @param string               $reject_signal   Rejection signal name.
+	 * @param string|null          $result_key      Optional state key for the decision payload.
+	 * @param string|null          $name            Optional step name.
+	 * @param array<string, mixed> $match_payload   Optional exact payload subset that signals must contain.
+	 * @param string|null          $correlation_key Optional state/payload key that must match for a signal to count.
 	 * @return self
 	 */
 	public function wait_for_decision(
@@ -582,11 +582,11 @@ class WorkflowBuilder {
 	/**
 	 * Add a signal wait step for human input.
 	 *
-	 * @param string      $signal_name Input signal name.
-	 * @param string|null $result_key  Optional state key for the input payload.
-	 * @param string|null $name        Optional step name.
-	 * @param array       $match_payload Optional exact payload subset that signals must contain.
-	 * @param string|null $correlation_key Optional state/payload key that must match for a signal to count.
+	 * @param string               $signal_name     Input signal name.
+	 * @param string|null          $result_key      Optional state key for the input payload.
+	 * @param string|null          $name            Optional step name.
+	 * @param array<string, mixed> $match_payload   Optional exact payload subset that signals must contain.
+	 * @param string|null          $correlation_key Optional state/payload key that must match for a signal to count.
 	 * @return self
 	 */
 	public function wait_for_input(
@@ -634,11 +634,11 @@ class WorkflowBuilder {
 	/**
 	 * Add a workflow dependency wait for one or more workflows.
 	 *
-	 * @param array|string $workflows  Workflow IDs or a public state key that resolves to IDs.
-	 * @param WaitMode     $mode       Whether all workflows or any workflow should unblock the step.
-	 * @param string|null  $result_key Optional state key for completed workflow state.
-	 * @param string|null  $name       Optional step name.
-	 * @param int|null     $quorum     Required completed workflow count when using WaitMode::Quorum.
+	 * @param array<int, int>|string $workflows  Workflow IDs or a public state key that resolves to IDs.
+	 * @param WaitMode               $mode       Whether all workflows or any workflow should unblock the step.
+	 * @param string|null            $result_key Optional state key for completed workflow state.
+	 * @param string|null            $name       Optional step name.
+	 * @param int|null               $quorum     Required completed workflow count when using WaitMode::Quorum.
 	 * @return self
 	 * @throws \RuntimeException If the provided state key is empty or quorum is invalid.
 	 */
@@ -821,11 +821,11 @@ class WorkflowBuilder {
 	/**
 	 * Wait for one or more started agent workflows.
 	 *
-	 * @param array|string $workflows  Agent workflow IDs or a public state key that resolves to IDs.
-	 * @param WaitMode     $mode       Whether all agent workflows or any agent workflow should unblock the step.
-	 * @param string|null  $result_key Optional state key for completed agent workflow state.
-	 * @param string|null  $name       Optional step name.
-	 * @param int|null     $quorum     Required completed workflow count when using WaitMode::Quorum.
+	 * @param array<int, int>|string $workflows  Agent workflow IDs or a public state key that resolves to IDs.
+	 * @param WaitMode               $mode       Whether all agent workflows or any agent workflow should unblock the step.
+	 * @param string|null            $result_key Optional state key for completed agent workflow state.
+	 * @param string|null            $name       Optional step name.
+	 * @param int|null               $quorum     Required completed workflow count when using WaitMode::Quorum.
 	 * @return self
 	 */
 	public function wait_for_agents(
@@ -1153,7 +1153,7 @@ class WorkflowBuilder {
 	 * Run-workflow builders are converted to their serialisable form.
 	 * The returned array is suitable for JSON-encoding in workflow state.
 	 *
-	 * @return array[]
+	 * @return array<int, array<string, mixed>>
 	 */
 	public function build_steps(): array {
 		$result = array();
@@ -1265,7 +1265,7 @@ class WorkflowBuilder {
 	 * The hash captures the parts of a workflow that materially affect runtime
 	 * behaviour so long-running runs can be identified across deploys.
 	 *
-	 * @param array $built_steps Serialised step definitions from build_steps().
+	 * @param array<int, array<string, mixed>> $built_steps Serialised step definitions from build_steps().
 	 * @return string
 	 */
 	private function definition_hash( array $built_steps ): string {
@@ -1310,7 +1310,7 @@ class WorkflowBuilder {
 	/**
 	 * Build a serialisable workflow definition bundle for nested orchestration.
 	 *
-	 * @return array
+	 * @return array<string, mixed>
 	 */
 	public function build_runtime_definition(): array {
 		$steps = $this->build_steps();
@@ -1335,7 +1335,7 @@ class WorkflowBuilder {
 	/**
 	 * Dispatch the workflow. Creates the workflow row and enqueues the first step.
 	 *
-	 * @param array $initial_payload Starting state for the workflow.
+	 * @param array<string, mixed> $initial_payload Starting state for the workflow.
 	 * @return int The workflow ID.
 	 * @throws \RuntimeException If the workflow has no steps.
 	 * @throws \PDOException If the idempotency key insert races with another dispatch.
@@ -1523,13 +1523,13 @@ class WorkflowBuilder {
 	/**
 	 * Dispatch one workflow step job with serialized runtime metadata.
 	 *
-	 * @param array|string $step_def     Step definition.
-	 * @param string       $handler      Handler class or alias.
-	 * @param array        $payload      Job payload.
-	 * @param int          $workflow_id  Workflow ID.
-	 * @param int          $step_index   Step index.
-	 * @param int          $default_cost Default cost units when no metadata exists.
-	 * @param int|null     $delay        Explicit dispatch delay override.
+	 * @param array<string, mixed>|string $step_def     Step definition.
+	 * @param string                      $handler      Handler class or alias.
+	 * @param array<string, mixed>        $payload      Job payload.
+	 * @param int                         $workflow_id  Workflow ID.
+	 * @param int                         $step_index   Step index.
+	 * @param int                         $default_cost Default cost units when no metadata exists.
+	 * @param int|null                    $delay        Explicit dispatch delay override.
 	 */
 	private function dispatch_step_job(
 		array|string $step_def,
@@ -1568,9 +1568,9 @@ class WorkflowBuilder {
 	/**
 	 * Enqueue a step definition as one or more jobs.
 	 *
-	 * @param array $step_def    The step definition from build_steps().
-	 * @param int   $workflow_id The workflow ID.
-	 * @param int   $step_index  The step index.
+	 * @param array<string, mixed> $step_def    The step definition from build_steps().
+	 * @param int                  $workflow_id The workflow ID.
+	 * @param int                  $step_index  The step index.
 	 */
 	private function enqueue_step( array $step_def, int $workflow_id, int $step_index ): void {
 		if ( 'parallel' === $step_def['type'] ) {

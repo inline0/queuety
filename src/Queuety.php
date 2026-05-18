@@ -283,8 +283,8 @@ class Queuety {
 	 * FQCN and public properties as the handler name and payload respectively.
 	 * The original instance is stored on the PendingJob for middleware extraction.
 	 *
-	 * @param string|JobContract $handler Handler name, class, or Job instance.
-	 * @param array              $payload Job payload (ignored when $handler is a Job instance).
+	 * @param string|JobContract   $handler Handler name, class, or Job instance.
+	 * @param array<string, mixed> $payload Job payload (ignored when $handler is a Job instance).
 	 * @return PendingJob Fluent builder for additional options.
 	 */
 	public static function dispatch( string|JobContract $handler, array $payload = array() ): PendingJob {
@@ -313,8 +313,8 @@ class Queuety {
 	/**
 	 * Execute a job synchronously without dispatching to the queue.
 	 *
-	 * @param string|JobContract $handler Handler name/class or Job instance.
-	 * @param array              $payload Job payload (ignored when $handler is a Job instance).
+	 * @param string|JobContract   $handler Handler name/class or Job instance.
+	 * @param array<string, mixed> $payload Job payload (ignored when $handler is a Job instance).
 	 */
 	public static function dispatch_sync( string|JobContract $handler, array $payload = array() ): void {
 		if ( $handler instanceof JobContract ) {
@@ -413,11 +413,11 @@ class Queuety {
 	/**
 	 * Dispatch one job and return its ID.
 	 *
-	 * @param string $handler  Handler name or class.
-	 * @param array  $payload  Job payload.
-	 * @param string $queue    Queue name.
-	 * @param int    $priority Priority value.
-	 * @param int    $delay    Delay in seconds.
+	 * @param string               $handler  Handler name or class.
+	 * @param array<string, mixed> $payload  Job payload.
+	 * @param string               $queue    Queue name.
+	 * @param int                  $priority Priority value.
+	 * @param int                  $delay    Delay in seconds.
 	 * @return int
 	 */
 	public static function dispatch_job( string $handler, array $payload = array(), string $queue = 'default', int $priority = 0, int $delay = 0 ): int {
@@ -576,7 +576,7 @@ class Queuety {
 	/**
 	 * Create a batch builder for dispatching a group of jobs with callbacks.
 	 *
-	 * @param array $jobs Array of Contracts\Job instances or handler+payload arrays.
+	 * @param array<int, JobContract|array<string, mixed>> $jobs Array of Contracts\Job instances or handler+payload arrays.
 	 * @return BatchBuilder Fluent builder for batch options.
 	 */
 	public static function create_batch( array $jobs ): BatchBuilder {
@@ -606,7 +606,7 @@ class Queuety {
 	/**
 	 * Create a chain builder for sequential job execution.
 	 *
-	 * @param array $jobs Array of Contracts\Job instances.
+	 * @param array<int, JobContract> $jobs Array of Contracts\Job instances.
 	 * @return ChainBuilder Fluent builder for chain options.
 	 */
 	public static function chain( array $jobs ): ChainBuilder {
@@ -624,8 +624,8 @@ class Queuety {
 	 * Each item in $jobs is an associative array with keys:
 	 * handler, payload, queue, priority, delay, max_attempts.
 	 *
-	 * @param array $jobs Array of job definitions.
-	 * @return int[] Array of new job IDs.
+	 * @param array<int, array<string, mixed>> $jobs Array of job definitions.
+	 * @return array<int, int> Array of new job IDs.
 	 */
 	public static function batch( array $jobs ): array {
 		if ( null !== self::$queue_fake ) {
@@ -716,7 +716,7 @@ class Queuety {
 	 * Get job counts grouped by status.
 	 *
 	 * @param string|null $queue Optional queue filter.
-	 * @return array
+	 * @return array{pending: int, processing: int, completed: int, failed: int, buried: int}
 	 */
 	public static function stats( ?string $queue = null ): array {
 		self::ensure_initialized();
@@ -808,9 +808,9 @@ class Queuety {
 	 * immediately. Otherwise, the signal is stored and will be picked up
 	 * when the workflow reaches the corresponding wait_for_signal step.
 	 *
-	 * @param int    $workflow_id The workflow ID.
-	 * @param string $name        The signal name.
-	 * @param array  $data        Optional payload data to merge into workflow state.
+	 * @param int                  $workflow_id The workflow ID.
+	 * @param string               $name        The signal name.
+	 * @param array<string, mixed> $data        Optional payload data to merge into workflow state.
 	 */
 	public static function signal( int $workflow_id, string $name, array $data = array() ): void {
 		self::ensure_initialized();
@@ -820,9 +820,9 @@ class Queuety {
 	/**
 	 * Send an approval signal to a workflow.
 	 *
-	 * @param int    $workflow_id Workflow ID.
-	 * @param array  $data        Optional approval payload.
-	 * @param string $signal_name Approval signal name.
+	 * @param int                  $workflow_id Workflow ID.
+	 * @param array<string, mixed> $data        Optional approval payload.
+	 * @param string               $signal_name Approval signal name.
 	 */
 	public static function approve_workflow( int $workflow_id, array $data = array(), string $signal_name = 'approval' ): void {
 		self::signal( $workflow_id, $signal_name, $data );
@@ -831,9 +831,9 @@ class Queuety {
 	/**
 	 * Send a rejection signal to a workflow.
 	 *
-	 * @param int    $workflow_id Workflow ID.
-	 * @param array  $data        Optional rejection payload.
-	 * @param string $signal_name Rejection signal name.
+	 * @param int                  $workflow_id Workflow ID.
+	 * @param array<string, mixed> $data        Optional rejection payload.
+	 * @param string               $signal_name Rejection signal name.
 	 */
 	public static function reject_workflow( int $workflow_id, array $data = array(), string $signal_name = 'rejected' ): void {
 		self::signal( $workflow_id, $signal_name, $data );
@@ -842,9 +842,9 @@ class Queuety {
 	/**
 	 * Send structured human input to a workflow.
 	 *
-	 * @param int    $workflow_id Workflow ID.
-	 * @param array  $data        Input payload.
-	 * @param string $signal_name Input signal name.
+	 * @param int                  $workflow_id Workflow ID.
+	 * @param array<string, mixed> $data        Input payload.
+	 * @param string               $signal_name Input signal name.
 	 */
 	public static function submit_workflow_input( int $workflow_id, array $data = array(), string $signal_name = 'input' ): void {
 		self::signal( $workflow_id, $signal_name, $data );
@@ -853,12 +853,12 @@ class Queuety {
 	/**
 	 * Store one artifact for a workflow.
 	 *
-	 * @param int      $workflow_id  Workflow ID.
-	 * @param string   $artifact_key Artifact key.
-	 * @param mixed    $content      Artifact content.
-	 * @param string   $kind         Artifact kind.
-	 * @param int|null $step_index   Related workflow step index, if any.
-	 * @param array    $metadata     Optional metadata.
+	 * @param int                  $workflow_id  Workflow ID.
+	 * @param string               $artifact_key Artifact key.
+	 * @param mixed                $content      Artifact content.
+	 * @param string               $kind         Artifact kind.
+	 * @param int|null             $step_index   Related workflow step index, if any.
+	 * @param array<string, mixed> $metadata     Optional metadata.
 	 * @throws \InvalidArgumentException If the artifact key or workflow ID is invalid.
 	 */
 	public static function put_artifact(
@@ -876,10 +876,10 @@ class Queuety {
 	/**
 	 * Store one artifact for the currently executing workflow step.
 	 *
-	 * @param string $artifact_key Artifact key.
-	 * @param mixed  $content      Artifact content.
-	 * @param string $kind         Artifact kind.
-	 * @param array  $metadata     Optional metadata.
+	 * @param string               $artifact_key Artifact key.
+	 * @param mixed                $content      Artifact content.
+	 * @param string               $kind         Artifact kind.
+	 * @param array<string, mixed> $metadata     Optional metadata.
 	 * @throws \RuntimeException If no workflow step is currently executing.
 	 */
 	public static function put_current_artifact(
@@ -1069,8 +1069,8 @@ class Queuety {
 	/**
 	 * Create a new recurring schedule.
 	 *
-	 * @param string $handler Handler name or class.
-	 * @param array  $payload Job payload.
+	 * @param string               $handler Handler name or class.
+	 * @param array<string, mixed> $payload Job payload.
 	 * @return PendingSchedule Fluent builder for schedule options.
 	 */
 	public static function schedule( string $handler, array $payload = array() ): PendingSchedule {
@@ -1144,9 +1144,9 @@ class Queuety {
 	/**
 	 * Dispatch a registered workflow template by name.
 	 *
-	 * @param string $name    Template name.
-	 * @param array  $payload Initial payload/state.
-	 * @param array  $options Per-dispatch options like idempotency_key.
+	 * @param string               $name    Template name.
+	 * @param array<string, mixed> $payload Initial payload/state.
+	 * @param array<string, mixed> $options Per-dispatch options like idempotency_key.
 	 * @return int The workflow ID.
 	 * @throws \RuntimeException If the template is not registered.
 	 */
@@ -1164,9 +1164,9 @@ class Queuety {
 	/**
 	 * Dispatch a workflow directly from a runtime definition bundle.
 	 *
-	 * @param array $definition Workflow definition bundle.
-	 * @param array $payload    Initial payload/state.
-	 * @param array $options    Per-dispatch options like idempotency_key.
+	 * @param array<string, mixed> $definition Workflow definition bundle.
+	 * @param array<string, mixed> $payload    Initial payload/state.
+	 * @param array<string, mixed> $options    Per-dispatch options like idempotency_key.
 	 * @return int The workflow ID.
 	 */
 	public static function dispatch_workflow_definition( array $definition, array $payload = array(), array $options = array() ): int {
@@ -1194,9 +1194,9 @@ class Queuety {
 	/**
 	 * Dispatch one state machine definition bundle directly.
 	 *
-	 * @param array $definition    Machine definition bundle.
-	 * @param array $initial_state Initial public state.
-	 * @param array $options       Per-dispatch options like idempotency_key.
+	 * @param array<string, mixed> $definition    Machine definition bundle.
+	 * @param array<string, mixed> $initial_state Initial public state.
+	 * @param array<string, mixed> $options       Per-dispatch options like idempotency_key.
 	 * @return int
 	 */
 	public static function dispatch_state_machine_definition( array $definition, array $initial_state = array(), array $options = array() ): int {
@@ -1218,9 +1218,9 @@ class Queuety {
 	/**
 	 * Send one external event into a machine.
 	 *
-	 * @param int    $machine_id Machine ID.
-	 * @param string $event_name Event name.
-	 * @param array  $payload    Event payload.
+	 * @param int                  $machine_id Machine ID.
+	 * @param string               $event_name Event name.
+	 * @param array<string, mixed> $payload    Event payload.
 	 */
 	public static function machine_event( int $machine_id, string $event_name, array $payload = array() ): void {
 		self::ensure_initialized();
@@ -1410,11 +1410,11 @@ class Queuety {
 	/**
 	 * Add a recurring schedule.
 	 *
-	 * @param string $handler    Handler name or class.
-	 * @param array  $payload    Job payload.
-	 * @param string $queue      Queue name.
-	 * @param string $expression Cron or interval expression.
-	 * @param string $type       Expression type value.
+	 * @param string               $handler    Handler name or class.
+	 * @param array<string, mixed> $payload    Job payload.
+	 * @param string               $queue      Queue name.
+	 * @param string               $expression Cron or interval expression.
+	 * @param string               $type       Expression type value.
 	 * @return int
 	 * @throws \InvalidArgumentException If the expression type is invalid.
 	 */
@@ -1504,7 +1504,7 @@ class Queuety {
 	 * Export a workflow's full execution history.
 	 *
 	 * @param int $workflow_id Workflow ID.
-	 * @return array JSON-serializable export data.
+	 * @return array<string, mixed> JSON-serializable export data.
 	 */
 	public static function export_workflow( int $workflow_id ): array {
 		self::ensure_initialized();
@@ -1538,7 +1538,7 @@ class Queuety {
 	/**
 	 * Replay an exported workflow in the current environment.
 	 *
-	 * @param array $data Export data from export_workflow().
+	 * @param array<string, mixed> $data Export data from export_workflow().
 	 * @return int The new workflow ID.
 	 */
 	public static function replay_workflow( array $data ): int {
@@ -1579,7 +1579,7 @@ class Queuety {
 	 * @param int      $workflow_id Workflow ID.
 	 * @param int|null $limit       Maximum events to return.
 	 * @param int      $offset      Timeline offset.
-	 * @return array Array of event rows, ordered by id.
+	 * @return array<int, array<string, mixed>> Array of event rows, ordered by id.
 	 */
 	public static function workflow_timeline( int $workflow_id, ?int $limit = 100, int $offset = 0 ): array {
 		self::ensure_initialized();
@@ -1590,7 +1590,7 @@ class Queuety {
 	 * Get the normalized trace bundle for a workflow.
 	 *
 	 * @param int $workflow_id Workflow ID.
-	 * @return array
+	 * @return array<string, mixed>
 	 */
 	public static function workflow_trace( int $workflow_id ): array {
 		self::ensure_initialized();
@@ -1602,7 +1602,7 @@ class Queuety {
 	 *
 	 * @param int $machine_id Machine ID.
 	 * @param int $event_id   Trace event ID.
-	 * @return array|null The recorded state, or null if not found.
+	 * @return array<string, mixed>|null The recorded state, or null if not found.
 	 */
 	public static function machine_state_at( int $machine_id, int $event_id ): ?array {
 		self::ensure_initialized();
@@ -1614,7 +1614,7 @@ class Queuety {
 	 *
 	 * @param int $workflow_id Workflow ID.
 	 * @param int $step_index  Step index.
-	 * @return array|null The recorded state, or null if not found.
+	 * @return array<string, mixed>|null The recorded state, or null if not found.
 	 */
 	public static function workflow_state_at( int $workflow_id, int $step_index ): ?array {
 		self::ensure_initialized();
@@ -1642,7 +1642,7 @@ class Queuety {
 	/**
 	 * Add trace context for the currently executing workflow step.
 	 *
-	 * @param array $context Trace context.
+	 * @param array<string, mixed> $context Trace context.
 	 */
 	public static function trace_context( array $context ): void {
 		ExecutionContext::add_trace_context( $context );

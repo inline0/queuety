@@ -25,10 +25,10 @@ class WebhookCommand extends \WP_CLI_Command {
 	 * <url>
 	 * : URL to POST notifications to.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function add( $args, $assoc_args ) {
+	public function add( $args, $assoc_args ): void {
 		$event = $args[0];
 		$url   = $args[1];
 
@@ -46,10 +46,10 @@ class WebhookCommand extends \WP_CLI_Command {
 	 *
 	 * @subcommand list
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function list_( $args, $assoc_args ) {
+	public function list_( $args, $assoc_args ): void {
 		$format   = $assoc_args['format'] ?? 'table';
 		$webhooks = Queuety::list_webhooks();
 
@@ -70,10 +70,10 @@ class WebhookCommand extends \WP_CLI_Command {
 	 * <id>
 	 * : Webhook ID to remove.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function remove( $args, $assoc_args ) {
+	public function remove( $args, $assoc_args ): void {
 		$id = (int) $args[0];
 		Queuety::remove_webhook( $id );
 		\WP_CLI::success( "Webhook #{$id} removed." );

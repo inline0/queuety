@@ -94,9 +94,9 @@ class HookDispatcher {
 	/**
 	 * Fire the workflow_completed hook.
 	 *
-	 * @param int    $workflow_id The workflow ID.
-	 * @param string $name        Workflow name.
-	 * @param array  $final_state Final accumulated state.
+	 * @param int                  $workflow_id The workflow ID.
+	 * @param string               $name        Workflow name.
+	 * @param array<string, mixed> $final_state Final accumulated state.
 	 */
 	public static function workflow_completed( int $workflow_id, string $name, array $final_state ): void {
 		self::fire( 'queuety_workflow_completed', $workflow_id, $name, $final_state );

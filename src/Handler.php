@@ -25,7 +25,7 @@ interface Handler {
 	/**
 	 * Execute the job.
 	 *
-	 * @param array $payload Job payload data.
+	 * @param array<string, mixed> $payload Job payload data.
 	 */
 	public function handle( array $payload ): void;
 
@@ -34,7 +34,7 @@ interface Handler {
 	 *
 	 * Supported keys: queue, max_attempts, backoff, rate_limit, concurrency_group, concurrency_limit, cost_units.
 	 *
-	 * @return array Configuration array.
+	 * @return array<string, mixed> Configuration array.
 	 */
 	public function config(): array;
 }

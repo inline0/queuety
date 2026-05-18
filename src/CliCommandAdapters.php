@@ -882,7 +882,7 @@ class CliCommandAdapters {
 	 *
 	 * @param array<string, mixed> $assoc_args Associative arguments.
 	 * @param string               $name Argument name.
-	 * @return array
+	 * @return array<int|string, mixed>
 	 */
 	private static function json_array_or_empty( array $assoc_args, string $name ): array {
 		$value = self::optional_assoc( $assoc_args, $name );
@@ -899,7 +899,7 @@ class CliCommandAdapters {
 	 *
 	 * @param array<string, mixed> $assoc_args Associative arguments.
 	 * @param string               $name Argument name.
-	 * @return array
+	 * @return array<int|string, mixed>
 	 *
 	 * @throws \InvalidArgumentException If the value is not a JSON array/object.
 	 */

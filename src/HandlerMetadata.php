@@ -28,7 +28,7 @@ class HandlerMetadata {
 	 * @return array{
 	 *     queue: string|null,
 	 *     max_attempts: int|null,
-	 *     backoff: string|array|null,
+	 *     backoff: string|array<string, mixed>|null,
 	 *     rate_limit: array{int, int}|null,
 	 *     concurrency_group: string|null,
 	 *     concurrency_limit: int|null,

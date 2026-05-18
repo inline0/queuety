@@ -31,20 +31,20 @@ class Queue {
 	/**
 	 * Dispatch a new job.
 	 *
-	 * @param string      $handler      Handler name or class.
-	 * @param array       $payload      Job payload.
-	 * @param string      $queue        Queue name.
-	 * @param Priority    $priority     Job priority.
-	 * @param int         $delay        Delay in seconds before the job becomes available.
-	 * @param int         $max_attempts Maximum retry attempts.
-	 * @param int|null    $workflow_id  Parent workflow ID, if part of a workflow.
-	 * @param int|null    $step_index   Step index within the workflow.
-	 * @param bool        $unique       When true, prevent duplicate jobs with the same handler and payload.
-	 * @param int|null    $depends_on   ID of a job that must complete before this one can be claimed.
-	 * @param int|null    $batch_id     Batch ID, if part of a batch.
-	 * @param string|null $concurrency_group Optional global concurrency group name.
-	 * @param int|null    $concurrency_limit Optional concurrency cap for the group.
-	 * @param int         $cost_units        Relative execution cost units.
+	 * @param string               $handler      Handler name or class.
+	 * @param array<string, mixed> $payload      Job payload.
+	 * @param string               $queue        Queue name.
+	 * @param Priority             $priority     Job priority.
+	 * @param int                  $delay        Delay in seconds before the job becomes available.
+	 * @param int                  $max_attempts Maximum retry attempts.
+	 * @param int|null             $workflow_id  Parent workflow ID, if part of a workflow.
+	 * @param int|null             $step_index   Step index within the workflow.
+	 * @param bool                 $unique       When true, prevent duplicate jobs with the same handler and payload.
+	 * @param int|null             $depends_on   ID of a job that must complete before this one can be claimed.
+	 * @param int|null             $batch_id     Batch ID, if part of a batch.
+	 * @param string|null          $concurrency_group Optional global concurrency group name.
+	 * @param int|null             $concurrency_limit Optional concurrency cap for the group.
+	 * @param int                  $cost_units        Relative execution cost units.
 	 * @return int The new job ID (or the existing job ID if unique and a duplicate exists).
 	 */
 	public function dispatch(
@@ -138,7 +138,7 @@ class Queue {
 	 * handler, payload, queue, priority, delay, max_attempts.
 	 * All keys are optional except handler.
 	 *
-	 * @param array $jobs Array of job definitions.
+	 * @param array<int, array<string, mixed>> $jobs Array of job definitions.
 	 * @return int[] Array of new job IDs.
 	 */
 	public function batch( array $jobs ): array {

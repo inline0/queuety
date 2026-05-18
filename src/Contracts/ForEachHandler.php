@@ -15,10 +15,10 @@ interface ForEachHandler {
 	/**
 	 * Process a single branch item.
 	 *
-	 * @param array $state Accumulated workflow state.
-	 * @param mixed $item  The branch item payload for this branch.
-	 * @param int   $index Zero-based branch index.
-	 * @return array Data to contribute to the for-each aggregate.
+	 * @param array<string, mixed> $state Accumulated workflow state.
+	 * @param mixed                $item  The branch item payload for this branch.
+	 * @param int                  $index Zero-based branch index.
+	 * @return array<string, mixed> Data to contribute to the for-each aggregate.
 	 */
 	public function handle_item( array $state, mixed $item, int $index ): array;
 
@@ -27,7 +27,7 @@ interface ForEachHandler {
 	 *
 	 * Supported keys: max_attempts, backoff, rate_limit, concurrency_group, concurrency_limit, cost_units.
 	 *
-	 * @return array
+	 * @return array<string, mixed>
 	 */
 	public function config(): array;
 }

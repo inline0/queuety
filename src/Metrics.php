@@ -188,8 +188,7 @@ class Metrics {
 	 * Get per-handler breakdown of stats.
 	 *
 	 * @param int $minutes Time window in minutes.
-	 * @return array Array of associative arrays with keys: handler, completed, failed,
-	 *               avg_ms, p95_ms, error_rate.
+	 * @return array<int, array{handler: string, completed: int, failed: int, avg_ms: float, p95_ms: float, error_rate: float}>
 	 */
 	public function handler_stats( int $minutes = 60 ): array {
 		$table = $this->conn->table( Config::table_logs() );

@@ -30,12 +30,12 @@ class Scheduler {
 	/**
 	 * Add a new schedule.
 	 *
-	 * @param string         $handler        Handler name or class.
-	 * @param array          $payload        Job payload.
-	 * @param string         $queue          Queue name.
-	 * @param string         $expression     Cron or interval expression.
-	 * @param ExpressionType $type           Type of expression.
-	 * @param OverlapPolicy  $overlap_policy Overlap policy for concurrent runs.
+	 * @param string               $handler        Handler name or class.
+	 * @param array<string, mixed> $payload        Job payload.
+	 * @param string               $queue          Queue name.
+	 * @param string               $expression     Cron or interval expression.
+	 * @param ExpressionType       $type           Type of expression.
+	 * @param OverlapPolicy        $overlap_policy Overlap policy for concurrent runs.
 	 * @return int The new schedule ID.
 	 */
 	public function add(

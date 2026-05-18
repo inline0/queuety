@@ -40,17 +40,17 @@ class WorkflowEventLog {
 	/**
 	 * Record a step_started event.
 	 *
-	 * @param int         $workflow_id  Workflow ID.
-	 * @param int         $step_index   Step index.
-	 * @param string      $handler      Handler class or placeholder.
-	 * @param string|null $step_name    Stable step name.
-	 * @param string|null $step_type    Step type.
-	 * @param int|null    $job_id       Job ID.
-	 * @param int|null    $attempt      Job attempt number.
-	 * @param string|null $queue        Queue name.
-	 * @param array|null  $input        Step input.
-	 * @param array|null  $state_before Public state before the step.
-	 * @param array|null  $context      Trace context.
+	 * @param int                       $workflow_id  Workflow ID.
+	 * @param int                       $step_index   Step index.
+	 * @param string                    $handler      Handler class or placeholder.
+	 * @param string|null               $step_name    Stable step name.
+	 * @param string|null               $step_type    Step type.
+	 * @param int|null                  $job_id       Job ID.
+	 * @param int|null                  $attempt      Job attempt number.
+	 * @param string|null               $queue        Queue name.
+	 * @param array<string, mixed>|null $input       Step input.
+	 * @param array<string, mixed>|null $state_before Public state before the step.
+	 * @param array<string, mixed>|null $context     Trace context.
 	 */
 	public function record_step_started(
 		int $workflow_id,
@@ -86,22 +86,22 @@ class WorkflowEventLog {
 	/**
 	 * Record a step_completed event.
 	 *
-	 * @param int         $workflow_id  Workflow ID.
-	 * @param int         $step_index   Step index.
-	 * @param string      $handler      Handler class or placeholder.
-	 * @param array       $state_before Public state before the step.
-	 * @param array       $state_after  Public state after the step.
-	 * @param array       $output       Step output.
-	 * @param int         $duration_ms  Step duration in milliseconds.
-	 * @param string|null $step_name    Stable step name.
-	 * @param string|null $step_type    Step type.
-	 * @param int|null    $job_id       Job ID.
-	 * @param int|null    $attempt      Job attempt number.
-	 * @param string|null $queue        Queue name.
-	 * @param array|null  $input        Step input.
-	 * @param array|null  $context      Trace context.
-	 * @param array|null  $artifacts    Step artifacts.
-	 * @param array|null  $chunks       Step chunks.
+	 * @param int                                   $workflow_id  Workflow ID.
+	 * @param int                                   $step_index   Step index.
+	 * @param string                                $handler      Handler class or placeholder.
+	 * @param array<string, mixed>                  $state_before Public state before the step.
+	 * @param array<string, mixed>                  $state_after  Public state after the step.
+	 * @param array<string, mixed>                  $output       Step output.
+	 * @param int                                   $duration_ms  Step duration in milliseconds.
+	 * @param string|null                           $step_name    Stable step name.
+	 * @param string|null                           $step_type    Step type.
+	 * @param int|null                              $job_id       Job ID.
+	 * @param int|null                              $attempt      Job attempt number.
+	 * @param string|null                           $queue        Queue name.
+	 * @param array<string, mixed>|null             $input     Step input.
+	 * @param array<string, mixed>|null             $context   Trace context.
+	 * @param array<int, array<string, mixed>>|null $artifacts Step artifacts (list of trace records).
+	 * @param array<int, array<string, mixed>>|null $chunks    Step chunks (list of trace records).
 	 */
 	public function record_step_completed(
 		int $workflow_id,
@@ -147,7 +147,7 @@ class WorkflowEventLog {
 	/**
 	 * Record a branch-level step completion event.
 	 *
-	 * @param array $event Event payload.
+	 * @param array<string, mixed> $event Event payload.
 	 */
 	public function record_step_branch_completed( array $event ): void {
 		$event['event'] = 'step_branch_completed';
@@ -157,7 +157,7 @@ class WorkflowEventLog {
 	/**
 	 * Record a for-each item completion event.
 	 *
-	 * @param array $event Event payload.
+	 * @param array<string, mixed> $event Event payload.
 	 */
 	public function record_step_item_completed( array $event ): void {
 		$event['event'] = 'step_item_completed';
@@ -167,20 +167,20 @@ class WorkflowEventLog {
 	/**
 	 * Record a step_failed event.
 	 *
-	 * @param int         $workflow_id  Workflow ID.
-	 * @param int         $step_index   Step index.
-	 * @param string      $handler      Handler class or placeholder.
-	 * @param array       $error        Error details.
-	 * @param int         $duration_ms  Step duration in milliseconds.
-	 * @param string|null $step_name    Stable step name.
-	 * @param string|null $step_type    Step type.
-	 * @param int|null    $job_id       Job ID.
-	 * @param int|null    $attempt      Job attempt number.
-	 * @param string|null $queue        Queue name.
-	 * @param array|null  $input        Step input.
-	 * @param array|null  $state_before Public state before the step.
-	 * @param array|null  $state_after  Public state after the failed step.
-	 * @param array|null  $context      Trace context.
+	 * @param int                       $workflow_id  Workflow ID.
+	 * @param int                       $step_index   Step index.
+	 * @param string                    $handler      Handler class or placeholder.
+	 * @param array<string, mixed>      $error        Error details.
+	 * @param int                       $duration_ms  Step duration in milliseconds.
+	 * @param string|null               $step_name    Stable step name.
+	 * @param string|null               $step_type    Step type.
+	 * @param int|null                  $job_id       Job ID.
+	 * @param int|null                  $attempt      Job attempt number.
+	 * @param string|null               $queue        Queue name.
+	 * @param array<string, mixed>|null $input        Step input.
+	 * @param array<string, mixed>|null $state_before Public state before the step.
+	 * @param array<string, mixed>|null $state_after  Public state after the failed step.
+	 * @param array<string, mixed>|null $context      Trace context.
 	 */
 	public function record_step_failed(
 		int $workflow_id,
@@ -222,16 +222,16 @@ class WorkflowEventLog {
 	/**
 	 * Record that a workflow entered a durable wait state.
 	 *
-	 * @param int         $workflow_id  Workflow ID.
-	 * @param int         $step_index   Wait step index.
-	 * @param string      $handler      Wait placeholder handler.
-	 * @param array       $state_before Public state before waiting.
-	 * @param array       $state_after  Public state while waiting.
-	 * @param string      $wait_type    Wait primitive type.
-	 * @param array       $waiting_for  Wait targets.
-	 * @param array       $details      Wait metadata.
-	 * @param string|null $step_name    Stable step name.
-	 * @param string|null $step_type    Step type.
+	 * @param int                  $workflow_id  Workflow ID.
+	 * @param int                  $step_index   Wait step index.
+	 * @param string               $handler      Wait placeholder handler.
+	 * @param array<string, mixed> $state_before Public state before waiting.
+	 * @param array<string, mixed> $state_after  Public state while waiting.
+	 * @param string               $wait_type    Wait primitive type.
+	 * @param array<int, mixed>    $waiting_for  Wait targets.
+	 * @param array<string, mixed> $details      Wait metadata.
+	 * @param string|null          $step_name    Stable step name.
+	 * @param string|null          $step_type    Step type.
 	 */
 	public function record_workflow_waiting(
 		int $workflow_id,
@@ -273,14 +273,14 @@ class WorkflowEventLog {
 	/**
 	 * Record that a workflow resumed from a durable wait.
 	 *
-	 * @param int         $workflow_id  Workflow ID.
-	 * @param int         $step_index   Wait step index.
-	 * @param string      $handler      Wait placeholder handler.
-	 * @param array       $state_before Public state before resuming.
-	 * @param array       $state_after  Public state after resuming.
-	 * @param array       $output       Output produced by the wait.
-	 * @param string|null $step_name    Stable step name.
-	 * @param string|null $step_type    Step type.
+	 * @param int                  $workflow_id  Workflow ID.
+	 * @param int                  $step_index   Wait step index.
+	 * @param string               $handler      Wait placeholder handler.
+	 * @param array<string, mixed> $state_before Public state before resuming.
+	 * @param array<string, mixed> $state_after  Public state after resuming.
+	 * @param array<string, mixed> $output       Output produced by the wait.
+	 * @param string|null          $step_name    Stable step name.
+	 * @param string|null          $step_type    Step type.
 	 */
 	public function record_workflow_resumed(
 		int $workflow_id,
@@ -311,10 +311,10 @@ class WorkflowEventLog {
 	/**
 	 * Record that a workflow was recreated from an export.
 	 *
-	 * @param int   $workflow_id Workflow ID.
-	 * @param int   $step_index  Current step index.
-	 * @param array $state_after Public state after replay.
-	 * @param array $context     Replay context.
+	 * @param int                  $workflow_id Workflow ID.
+	 * @param int                  $step_index  Current step index.
+	 * @param array<string, mixed> $state_after Public state after replay.
+	 * @param array<string, mixed> $context     Replay context.
 	 */
 	public function record_workflow_replayed(
 		int $workflow_id,
@@ -338,7 +338,7 @@ class WorkflowEventLog {
 	/**
 	 * Insert one workflow trace event row.
 	 *
-	 * @param array $event Event payload.
+	 * @param array<string, mixed> $event Event payload.
 	 */
 	public function record_event( array $event ): void {
 		$table = $this->conn->table( Config::table_workflow_events() );
@@ -408,7 +408,7 @@ class WorkflowEventLog {
 	 *
 	 * @param int $workflow_id Workflow ID.
 	 * @param int $step_index  Step index.
-	 * @return array|null
+	 * @return array<string, mixed>|null
 	 */
 	public function get_state_at_step( int $workflow_id, int $step_index ): ?array {
 		$table = $this->conn->table( Config::table_workflow_events() );
@@ -457,8 +457,8 @@ class WorkflowEventLog {
 	/**
 	 * Normalize an event before storage.
 	 *
-	 * @param array $event Event payload.
-	 * @return array<string,mixed>
+	 * @param array<string, mixed> $event Event payload.
+	 * @return array<string, mixed>
 	 */
 	private function normalize_event( array $event ): array {
 		$defaults = array(
@@ -496,8 +496,8 @@ class WorkflowEventLog {
 	/**
 	 * Decode a persisted event row.
 	 *
-	 * @param array $row Event row.
-	 * @return array<string,mixed>
+	 * @param array<string, mixed> $row Event row.
+	 * @return array<string, mixed>
 	 */
 	private function decode_event_row( array $row ): array {
 		foreach ( self::JSON_COLUMNS as $column ) {
@@ -540,8 +540,8 @@ class WorkflowEventLog {
 	/**
 	 * Group events by step index for UI consumers.
 	 *
-	 * @param array $events Trace events.
-	 * @return array<int,array<string,mixed>>
+	 * @param array<int, array<string, mixed>> $events Trace events.
+	 * @return array<int, array<string, mixed>>
 	 */
 	private function group_events_by_step( array $events ): array {
 		$steps = array();
@@ -572,7 +572,7 @@ class WorkflowEventLog {
 	 * Fetch jobs for a workflow trace.
 	 *
 	 * @param int $workflow_id Workflow ID.
-	 * @return array
+	 * @return array<int, array<string, mixed>>
 	 */
 	private function get_jobs( int $workflow_id ): array {
 		$table = $this->conn->table( Config::table_jobs() );
@@ -593,7 +593,7 @@ class WorkflowEventLog {
 	 * Fetch logs for a workflow trace.
 	 *
 	 * @param int $workflow_id Workflow ID.
-	 * @return array
+	 * @return array<int, array<string, mixed>>
 	 */
 	private function get_logs( int $workflow_id ): array {
 		$table = $this->conn->table( Config::table_logs() );
@@ -613,7 +613,7 @@ class WorkflowEventLog {
 	 * Fetch artifacts for a workflow trace.
 	 *
 	 * @param int $workflow_id Workflow ID.
-	 * @return array
+	 * @return array<int, array<string, mixed>>
 	 */
 	private function get_artifacts( int $workflow_id ): array {
 		$table = $this->conn->table( Config::table_artifacts() );
@@ -633,7 +633,7 @@ class WorkflowEventLog {
 	 * Fetch chunks for a workflow trace.
 	 *
 	 * @param int $workflow_id Workflow ID.
-	 * @return array
+	 * @return array<int, array<string, mixed>>
 	 */
 	private function get_chunks( int $workflow_id ): array {
 		$table = $this->conn->table( Config::table_chunks() );
@@ -646,7 +646,7 @@ class WorkflowEventLog {
 	 * Fetch signals for a workflow trace.
 	 *
 	 * @param int $workflow_id Workflow ID.
-	 * @return array
+	 * @return array<int, array<string, mixed>>
 	 */
 	private function get_signals( int $workflow_id ): array {
 		$table = $this->conn->table( Config::table_signals() );
@@ -666,7 +666,7 @@ class WorkflowEventLog {
 	 * Fetch workflow dependencies for a workflow trace.
 	 *
 	 * @param int $workflow_id Workflow ID.
-	 * @return array
+	 * @return array<int, array<string, mixed>>
 	 */
 	private function get_wait_dependencies( int $workflow_id ): array {
 		$table = $this->conn->table( Config::table_workflow_dependencies() );

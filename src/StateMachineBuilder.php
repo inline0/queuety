@@ -18,7 +18,7 @@ class StateMachineBuilder {
 	/**
 	 * State definitions keyed by state name.
 	 *
-	 * @var array<string, array{name: string, action: array{class:string,payload:array}|null, action_class: string|null, terminal_status: string|null, transitions: array<int, array{event: string, target_state: string, guard: array{class:string,payload:array}|null, guard_class: string|null, name: string}>}>
+	 * @var array<string, array{name: string, action: array{class: string, payload: array<string, mixed>}|null, action_class: string|null, terminal_status: string|null, transitions: array<int, array{event: string, target_state: string, guard: array{class: string, payload: array<string, mixed>}|null, guard_class: string|null, name: string}>}>
 	 */
 	private array $states = array();
 
@@ -141,12 +141,12 @@ class StateMachineBuilder {
 	/**
 	 * Register one queued entry action on the current state.
 	 *
-	 * @param string|array $action_class Action class or structured action definition implementing Contracts\StateAction.
+	 * @param string|array{class?: string, payload?: array<string, mixed>, config?: array<string, mixed>} $action_class Action class or structured action definition implementing Contracts\StateAction.
 	 * @return self
 	 */
 	public function action( string|array $action_class ): self {
-		$state_name     = $this->current_state_name();
-		$action         = self::handler_definition( $action_class, 'State machine action' );
+		$state_name                                  = $this->current_state_name();
+		$action                                      = self::handler_definition( $action_class, 'State machine action' );
 		$this->states[ $state_name ]['action']       = $action;
 		$this->states[ $state_name ]['action_class'] = $action['class'];
 		return $this;
@@ -155,10 +155,10 @@ class StateMachineBuilder {
 	/**
 	 * Register one event transition on the current state.
 	 *
-	 * @param string            $event       Event name.
-	 * @param string            $target      Target state name.
-	 * @param string|array|null $guard_class Optional guard class or structured guard definition implementing Contracts\StateGuard.
-	 * @param string|null       $name        Optional transition name for docs and inspection.
+	 * @param string                                                                                           $event       Event name.
+	 * @param string                                                                                           $target      Target state name.
+	 * @param string|array{class?: string, payload?: array<string, mixed>, config?: array<string, mixed>}|null $guard_class Optional guard class or structured guard definition implementing Contracts\StateGuard.
+	 * @param string|null                                                                                      $name        Optional transition name for docs and inspection.
 	 * @return self
 	 * @throws \InvalidArgumentException When the event name or target state name is empty.
 	 */
@@ -325,7 +325,7 @@ class StateMachineBuilder {
 	/**
 	 * Dispatch the state machine.
 	 *
-	 * @param array $initial_state Initial public machine state.
+	 * @param array<string, mixed> $initial_state Initial public machine state.
 	 * @return int
 	 */
 	public function dispatch( array $initial_state = array() ): int {
@@ -354,9 +354,9 @@ class StateMachineBuilder {
 	/**
 	 * Normalize a state action or guard definition.
 	 *
-	 * @param string|array $definition Handler class string or structured definition.
-	 * @param string       $label      Error label.
-	 * @return array{class:string,payload:array}
+	 * @param string|array{class?: string, payload?: array<string, mixed>, config?: array<string, mixed>} $definition Handler class string or structured definition.
+	 * @param string                                                                                      $label      Error label.
+	 * @return array{class: string, payload: array<string, mixed>}
 	 * @throws \InvalidArgumentException When the handler definition is invalid.
 	 */
 	private static function handler_definition( string|array $definition, string $label ): array {

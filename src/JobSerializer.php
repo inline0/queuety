@@ -43,7 +43,7 @@ class JobSerializer {
 	 * Backed enums are serialized to their underlying value.
 	 *
 	 * @param Job $job The job instance to serialize.
-	 * @return array{handler: string, payload: array} Handler FQCN and payload data.
+	 * @return array{handler: string, payload: array<string, mixed>} Handler FQCN and payload data.
 	 */
 	public static function serialize( Job $job ): array {
 		$reflection = new \ReflectionClass( $job );
@@ -70,8 +70,8 @@ class JobSerializer {
 	 * Uses reflection to match payload keys to constructor parameter names.
 	 * Backed enums are restored from their underlying value.
 	 *
-	 * @param string $handler_class Fully qualified class name implementing Contracts\Job.
-	 * @param array  $payload       Payload data keyed by property/parameter names.
+	 * @param string               $handler_class Fully qualified class name implementing Contracts\Job.
+	 * @param array<string, mixed> $payload       Payload data keyed by property/parameter names.
 	 * @return Job The reconstructed job instance.
 	 * @throws \RuntimeException If the class cannot be instantiated.
 	 */

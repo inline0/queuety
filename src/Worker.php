@@ -68,7 +68,7 @@ class Worker {
 	 * Accepts a single queue name, a comma-separated string (e.g. "critical,default,low"),
 	 * or an array of queue names. Returns an array in priority order.
 	 *
-	 * @param string|array $queue_name Queue name(s).
+	 * @param string|array<int, string> $queue_name Queue name(s).
 	 * @return string[] Ordered list of queue names.
 	 */
 	private function parse_queue_names( string|array $queue_name ): array {
@@ -164,9 +164,9 @@ class Worker {
 	 * string or array is provided, the worker tries to claim from each queue in order,
 	 * processing the first available job.
 	 *
-	 * @param string|array $queue_name Queue name(s) to process. Supports comma-separated
-	 *                                 strings (e.g. "critical,default,low") or arrays.
-	 * @param bool         $once       If true, process one batch and exit.
+	 * @param string|array<int, string> $queue_name Queue name(s) to process. Supports comma-separated
+	 *                                              strings (e.g. "critical,default,low") or arrays.
+	 * @param bool                      $once       If true, process one batch and exit.
 	 */
 	public function run( string|array $queue_name = 'default', bool $once = false ): void {
 		$queues               = $this->parse_queue_names( $queue_name );
@@ -268,8 +268,8 @@ class Worker {
 	 * The worker claims from the highest-priority queue first and falls through
 	 * to lower-priority queues only when higher ones are empty.
 	 *
-	 * @param string|array $queue_name Queue name(s) to flush. Supports comma-separated
-	 *                                 strings (e.g. "critical,default,low") or arrays.
+	 * @param string|array<int, string> $queue_name Queue name(s) to flush. Supports comma-separated
+	 *                                              strings (e.g. "critical,default,low") or arrays.
 	 * @return int Total jobs processed.
 	 */
 	public function flush( string|array $queue_name = 'default' ): int {
@@ -1085,7 +1085,7 @@ class Worker {
 	 *     tries: int|null,
 	 *     timeout: int|null,
 	 *     max_exceptions: int|null,
-	 *     backoff: array|null,
+	 *     backoff: array<int|string, mixed>|null,
 	 *     concurrency_group: string|null,
 	 *     concurrency_limit: int|null,
 	 *     cost_units: int|null
@@ -1326,8 +1326,8 @@ class Worker {
 	/**
 	 * Strip internal keys from workflow state for trace exposure.
 	 *
-	 * @param array $state Workflow state.
-	 * @return array
+	 * @param array<string, mixed> $state Workflow state.
+	 * @return array<string, mixed>
 	 */
 	private function public_workflow_state( array $state ): array {
 		return array_filter(
@@ -1340,8 +1340,8 @@ class Worker {
 	/**
 	 * Resolve a stable step name from a definition.
 	 *
-	 * @param array|string|null $step_def   Step definition.
-	 * @param int               $step_index Step index.
+	 * @param array<string, mixed>|string|null $step_def   Step definition.
+	 * @param int                              $step_index Step index.
 	 * @return string
 	 */
 	private function step_name_from_definition( array|string|null $step_def, int $step_index ): string {
@@ -1355,7 +1355,7 @@ class Worker {
 	/**
 	 * Resolve a step type from a definition.
 	 *
-	 * @param array|string|null $step_def Step definition.
+	 * @param array<string, mixed>|string|null $step_def Step definition.
 	 * @return string
 	 */
 	private function step_type_from_definition( array|string|null $step_def ): string {
@@ -1369,8 +1369,8 @@ class Worker {
 	/**
 	 * Strip internal metadata keys before invoking a classic handler.
 	 *
-	 * @param array $payload Job payload.
-	 * @return array
+	 * @param array<string, mixed> $payload Job payload.
+	 * @return array<string, mixed>
 	 */
 	private function public_payload( array $payload ): array {
 		unset( $payload['__chain_catch'] );
@@ -1382,7 +1382,7 @@ class Worker {
 	 * Resolve retry defaults from classic handler or step metadata.
 	 *
 	 * @param string $handler Handler alias or class.
-	 * @return array{max_attempts: int|null, backoff: string|array|null}
+	 * @return array{max_attempts: int|null, backoff: string|array<int|string, mixed>|null}
 	 */
 	private function resolve_handler_retry_settings( string $handler ): array {
 		$class = $this->registry->class_name( $handler ) ?? ( class_exists( $handler ) ? $handler : null );
@@ -1434,7 +1434,7 @@ class Worker {
 	 * Extract state machine metadata from an internal action job payload.
 	 *
 	 * @param Job $job Job record.
-	 * @return array{machine_id: int, state_name: string, event_name: string|null, event_payload: array}|null
+	 * @return array{machine_id: int, state_name: string, event_name: string|null, event_payload: array<string, mixed>}|null
 	 */
 	private function state_machine_action_meta( Job $job ): ?array {
 		if ( ! $this->is_state_machine_action_job( $job ) ) {
@@ -1522,8 +1522,8 @@ class Worker {
 	/**
 	 * Send a webhook notification if a notifier is configured.
 	 *
-	 * @param string $event Event name.
-	 * @param array  $data  Payload data.
+	 * @param string               $event Event name.
+	 * @param array<string, mixed> $data  Payload data.
 	 */
 	private function notify_webhook( string $event, array $data ): void {
 		if ( null === $this->webhook_notifier ) {

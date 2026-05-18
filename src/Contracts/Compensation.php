@@ -15,7 +15,7 @@ interface Compensation {
 	/**
 	 * Execute the compensating action.
 	 *
-	 * @param array $state Public workflow state snapshot captured after the step completed.
+	 * @param array<string, mixed> $state Public workflow state snapshot captured after the step completed.
 	 */
 	public function handle( array $state ): void;
 }

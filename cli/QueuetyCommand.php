@@ -45,10 +45,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 *     # Process multiple queues in priority order
 	 *     wp queuety work --queue=critical,default,low
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function work( $args, $assoc_args ) {
+	public function work( $args, $assoc_args ): void {
 		$queue       = $assoc_args['queue'] ?? 'default';
 		$once        = isset( $assoc_args['once'] );
 		$workers     = isset( $assoc_args['workers'] ) ? (int) $assoc_args['workers'] : 0;
@@ -103,10 +103,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * : Queue(s) to flush, in priority order. Comma-separated values are
 	 *   supported. Default: 'default'.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function flush( $args, $assoc_args ) {
+	public function flush( $args, $assoc_args ): void {
 		$queue = $assoc_args['queue'] ?? 'default';
 		$count = Queuety::flush_queue( $queue );
 
@@ -133,10 +133,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * [--delay=<seconds>]
 	 * : Delay in seconds. Default: 0.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function dispatch( $args, $assoc_args ) {
+	public function dispatch( $args, $assoc_args ): void {
 		$handler  = $args[0];
 		$payload  = json_decode( $assoc_args['payload'] ?? '{}', true ) ?: array();
 		$queue    = $assoc_args['queue'] ?? 'default';
@@ -154,10 +154,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * [--queue=<queue>]
 	 * : Filter by queue name.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function status( $args, $assoc_args ) {
+	public function status( $args, $assoc_args ): void {
 		$queue = $assoc_args['queue'] ?? null;
 		$stats = Queuety::stats( $queue );
 
@@ -191,10 +191,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 *
 	 * @subcommand list
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function list_( $args, $assoc_args ) {
+	public function list_( $args, $assoc_args ): void {
 		$format = $assoc_args['format'] ?? 'table';
 		$rows   = Queuety::list_jobs(
 			$assoc_args['queue'] ?? null,
@@ -211,10 +211,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * <id>
 	 * : Job ID to retry.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function retry( $args, $assoc_args ) {
+	public function retry( $args, $assoc_args ): void {
 		Queuety::retry( (int) $args[0] );
 		\WP_CLI::success( "Job #{$args[0]} scheduled for retry." );
 	}
@@ -224,10 +224,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 *
 	 * @subcommand retry-buried
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function retry_buried( $args, $assoc_args ) {
+	public function retry_buried( $args, $assoc_args ): void {
 		$count = Queuety::retry_buried();
 		\WP_CLI::success( "Retried {$count} buried jobs." );
 	}
@@ -238,10 +238,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * <id>
 	 * : Job ID to bury.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function bury( $args, $assoc_args ) {
+	public function bury( $args, $assoc_args ): void {
 		Queuety::bury_job( (int) $args[0], 'Manually buried via CLI.' );
 		\WP_CLI::success( "Job #{$args[0]} buried." );
 	}
@@ -252,10 +252,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * <id>
 	 * : Job ID to delete.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function delete( $args, $assoc_args ) {
+	public function delete( $args, $assoc_args ): void {
 		Queuety::delete_job( (int) $args[0] );
 		\WP_CLI::success( "Job #{$args[0]} deleted." );
 	}
@@ -263,10 +263,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	/**
 	 * Recover stale jobs.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function recover( $args, $assoc_args ) {
+	public function recover( $args, $assoc_args ): void {
 		$count = Queuety::recover_stale_jobs();
 		\WP_CLI::success( "Recovered {$count} stale jobs." );
 	}
@@ -279,10 +279,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * [--older-than=<days>]
 	 * : Delete jobs older than N days. Default: config value.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function purge( $args, $assoc_args ) {
+	public function purge( $args, $assoc_args ): void {
 		$days  = isset( $assoc_args['older-than'] ) ? (int) $assoc_args['older-than'] : null;
 		$count = Queuety::purge( $days );
 		\WP_CLI::success( "Purged {$count} completed jobs." );
@@ -296,10 +296,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * <queue>
 	 * : Queue name to pause.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function pause( $args, $assoc_args ) {
+	public function pause( $args, $assoc_args ): void {
 		$queue = $args[0];
 		Queuety::pause( $queue );
 		\WP_CLI::success( "Queue '{$queue}' paused." );
@@ -313,10 +313,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * <queue>
 	 * : Queue name to resume.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function resume( $args, $assoc_args ) {
+	public function resume( $args, $assoc_args ): void {
 		$queue = $args[0];
 		Queuety::resume( $queue );
 		\WP_CLI::success( "Queue '{$queue}' resumed." );
@@ -330,10 +330,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * <id>
 	 * : Job ID to inspect.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function inspect( $args, $assoc_args ) {
+	public function inspect( $args, $assoc_args ): void {
 		$job_id = (int) $args[0];
 		$data   = Queuety::inspect_job( $job_id );
 
@@ -397,10 +397,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * [--format=<format>]
 	 * : Output format. Default: 'table'.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function metrics( $args, $assoc_args ) {
+	public function metrics( $args, $assoc_args ): void {
 		$minutes = (int) ( $assoc_args['minutes'] ?? 60 );
 		$format  = $assoc_args['format'] ?? 'table';
 		$stats   = Queuety::handler_metrics( $minutes );
@@ -428,10 +428,10 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * [--register]
 	 * : Actually register discovered handlers.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function discover( $args, $assoc_args ) {
+	public function discover( $args, $assoc_args ): void {
 		$directory  = $args[0];
 		$namespace  = $args[1];
 		$register   = isset( $assoc_args['register'] );

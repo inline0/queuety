@@ -57,7 +57,7 @@ class Heartbeat {
 	/**
 	 * Send a heartbeat, updating reserved_at and optionally storing progress data.
 	 *
-	 * @param array $progress Optional progress data to store in heartbeat_data.
+	 * @param array<string, mixed> $progress Optional progress data to store in heartbeat_data.
 	 */
 	public static function beat( array $progress = array() ): void {
 		if ( null === self::$current_job_id || null === self::$conn ) {

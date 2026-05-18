@@ -67,9 +67,9 @@ class PendingSchedule {
 	/**
 	 * Constructor.
 	 *
-	 * @param string    $handler   Handler name or class.
-	 * @param array     $payload   Job payload.
-	 * @param Scheduler $scheduler Scheduler instance.
+	 * @param string               $handler   Handler name or class.
+	 * @param array<string, mixed> $payload   Job payload.
+	 * @param Scheduler            $scheduler Scheduler instance.
 	 */
 	public function __construct(
 		private readonly string $handler,

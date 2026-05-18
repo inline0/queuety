@@ -59,7 +59,7 @@ class WebhookNotifier {
 	/**
 	 * List all registered webhooks.
 	 *
-	 * @return array Array of webhook rows.
+	 * @return array<int, array<string, mixed>> Array of webhook rows.
 	 */
 	public function list(): array {
 		$table = $this->conn->table( Config::table_webhooks() );
@@ -74,8 +74,8 @@ class WebhookNotifier {
 	 *
 	 * This is non-blocking (fire-and-forget). Failures are silently ignored.
 	 *
-	 * @param string $event Event name.
-	 * @param array  $data  Payload data to send as JSON.
+	 * @param string               $event Event name.
+	 * @param array<string, mixed> $data  Payload data to send as JSON.
 	 */
 	public function notify( string $event, array $data ): void {
 		$table = $this->conn->table( Config::table_webhooks() );

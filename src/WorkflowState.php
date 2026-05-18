@@ -17,25 +17,25 @@ readonly class WorkflowState {
 	/**
 	 * Constructor.
 	 *
-	 * @param int            $workflow_id        The workflow ID.
-	 * @param string         $name               The workflow name.
-	 * @param WorkflowStatus $status             Current workflow status.
-	 * @param int            $current_step       The current step index.
-	 * @param int            $total_steps        Total number of steps.
-	 * @param array          $state              Accumulated state data.
-	 * @param int|null       $parent_workflow_id Parent workflow ID, if this is a run-workflow.
-	 * @param int|null       $parent_step_index  Parent step index, if this is a run-workflow.
-	 * @param string|null    $wait_type          Wait primitive currently blocking the workflow, if any.
-	 * @param array|null     $waiting_for        Wait targets currently blocking the workflow, if any.
-	 * @param string|null    $definition_version Application-level workflow definition version, if set.
-	 * @param string|null    $definition_hash    Deterministic hash of the workflow definition.
-	 * @param string|null    $idempotency_key    Durable dispatch key, if set.
-	 * @param array|null     $budget             Public budget summary for the run, if configured.
-	 * @param string|null    $current_step_name  Current step name, if available.
-	 * @param string|null    $wait_mode          Wait mode currently blocking the workflow, if any.
-	 * @param array|null     $wait_details       Additional wait details for inspection, if any.
-	 * @param int|null       $artifact_count     Number of stored artifacts, if available.
-	 * @param array|null     $artifact_keys      Stored artifact keys, if available.
+	 * @param int                           $workflow_id        The workflow ID.
+	 * @param string                        $name               The workflow name.
+	 * @param WorkflowStatus                $status             Current workflow status.
+	 * @param int                           $current_step       The current step index.
+	 * @param int                           $total_steps        Total number of steps.
+	 * @param array<string, mixed>          $state              Accumulated state data.
+	 * @param int|null                      $parent_workflow_id Parent workflow ID, if this is a run-workflow.
+	 * @param int|null                      $parent_step_index  Parent step index, if this is a run-workflow.
+	 * @param string|null                   $wait_type          Wait primitive currently blocking the workflow, if any.
+	 * @param array<int|string, mixed>|null $waiting_for        Wait targets currently blocking the workflow, if any.
+	 * @param string|null                   $definition_version Application-level workflow definition version, if set.
+	 * @param string|null                   $definition_hash    Deterministic hash of the workflow definition.
+	 * @param string|null                   $idempotency_key    Durable dispatch key, if set.
+	 * @param array<string, mixed>|null     $budget             Public budget summary for the run, if configured.
+	 * @param string|null                   $current_step_name  Current step name, if available.
+	 * @param string|null                   $wait_mode          Wait mode currently blocking the workflow, if any.
+	 * @param array<string, mixed>|null     $wait_details       Additional wait details for inspection, if any.
+	 * @param int|null                      $artifact_count     Number of stored artifacts, if available.
+	 * @param array<int, string>|null       $artifact_keys      Stored artifact keys, if available.
 	 */
 	public function __construct(
 		public int $workflow_id,

@@ -20,8 +20,8 @@ readonly class Batch {
 	 * @param int                     $total_jobs     Total number of jobs in the batch.
 	 * @param int                     $pending_jobs   Number of jobs still pending.
 	 * @param int                     $failed_jobs    Number of failed jobs.
-	 * @param array                   $failed_job_ids IDs of failed jobs.
-	 * @param array                   $options        Batch options (callbacks, etc.).
+	 * @param array<int, int>         $failed_job_ids IDs of failed jobs.
+	 * @param array<string, mixed>    $options        Batch options (callbacks, etc.).
 	 * @param \DateTimeImmutable|null $cancelled_at   When the batch was cancelled.
 	 * @param \DateTimeImmutable      $created_at     When the batch was created.
 	 * @param \DateTimeImmutable|null $finished_at    When the batch finished.
@@ -83,7 +83,7 @@ readonly class Batch {
 	/**
 	 * Hydrate a Batch from a database row.
 	 *
-	 * @param array $row Associative array from PDO fetch.
+	 * @param array<string, mixed> $row Associative array from PDO fetch.
 	 * @return self
 	 */
 	public static function from_row( array $row ): self {

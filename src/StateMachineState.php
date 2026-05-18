@@ -17,18 +17,18 @@ readonly class StateMachineState {
 	/**
 	 * Constructor.
 	 *
-	 * @param int                $machine_id          Machine ID.
-	 * @param string             $name                Machine definition name.
-	 * @param StateMachineStatus $status              Current machine status.
-	 * @param string             $current_state       Current state name.
-	 * @param array              $state               Public machine state.
-	 * @param array              $available_events    Valid incoming events in the current state.
-	 * @param string|null        $definition_version  Optional definition version.
-	 * @param string|null        $definition_hash     Deterministic definition hash.
-	 * @param string|null        $idempotency_key     Durable dispatch key, if set.
-	 * @param string|null        $error_message       Terminal error message, if any.
-	 * @param string|null        $current_action      Entry action class for the current state, if any.
-	 * @param string|null        $terminal_status     Terminal status for the current state, if it is terminal.
+	 * @param int                  $machine_id          Machine ID.
+	 * @param string               $name                Machine definition name.
+	 * @param StateMachineStatus   $status              Current machine status.
+	 * @param string               $current_state       Current state name.
+	 * @param array<string, mixed> $state             Public machine state.
+	 * @param array<int, string>   $available_events    Valid incoming events in the current state.
+	 * @param string|null          $definition_version  Optional definition version.
+	 * @param string|null          $definition_hash     Deterministic definition hash.
+	 * @param string|null          $idempotency_key     Durable dispatch key, if set.
+	 * @param string|null          $error_message       Terminal error message, if any.
+	 * @param string|null          $current_action      Entry action class for the current state, if any.
+	 * @param string|null          $terminal_status     Terminal status for the current state, if it is terminal.
 	 */
 	public function __construct(
 		public int $machine_id,

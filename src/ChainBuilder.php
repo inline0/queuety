@@ -41,8 +41,8 @@ class ChainBuilder {
 	/**
 	 * Constructor.
 	 *
-	 * @param array $jobs     Array of Contracts\Job instances.
-	 * @param Queue $queue_ops Queue operations instance.
+	 * @param array<int, JobContract|array{handler: string, payload?: array<string, mixed>}> $jobs     Array of Contracts\Job instances or handler/payload arrays.
+	 * @param Queue                                                                          $queue_ops Queue operations instance.
 	 */
 	public function __construct(
 		private readonly array $jobs,

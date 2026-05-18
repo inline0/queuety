@@ -24,8 +24,9 @@ class ScheduleCommand extends \WP_CLI_Command {
 	 *
 	 * @subcommand list
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function list_( $args, $assoc_args ) {
 		$format    = $assoc_args['format'] ?? 'table';
@@ -72,8 +73,9 @@ class ScheduleCommand extends \WP_CLI_Command {
 	 * [--queue=<queue>]
 	 * : Queue name. Default: 'default'.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function add( $args, $assoc_args ) {
 		$handler = $args[0];
@@ -101,8 +103,9 @@ class ScheduleCommand extends \WP_CLI_Command {
 	 * <handler>
 	 * : Handler name to remove.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function remove( $args, $assoc_args ) {
 		$handler = $args[0];
@@ -118,8 +121,9 @@ class ScheduleCommand extends \WP_CLI_Command {
 	/**
 	 * Manually trigger a scheduler tick.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function run( $args, $assoc_args ) {
 		$count = Queuety::run_scheduler();

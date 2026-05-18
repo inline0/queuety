@@ -21,7 +21,7 @@ class WorkflowExporter {
 	 *
 	 * @param int        $workflow_id The workflow ID to export.
 	 * @param Connection $conn        Database connection.
-	 * @return array JSON-serializable export data.
+	 * @return array<string, mixed> JSON-serializable export data.
 	 * @throws \RuntimeException If the workflow is not found.
 	 */
 	public static function export( int $workflow_id, Connection $conn ): array {

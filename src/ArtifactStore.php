@@ -24,12 +24,12 @@ class ArtifactStore {
 	/**
 	 * Store or replace one artifact for a workflow.
 	 *
-	 * @param int      $workflow_id  Workflow ID.
-	 * @param string   $artifact_key Artifact key.
-	 * @param mixed    $content      Artifact content.
-	 * @param string   $kind         Artifact kind, such as json, text, or markdown.
-	 * @param int|null $step_index   Related workflow step index, if any.
-	 * @param array    $metadata     Optional metadata.
+	 * @param int                  $workflow_id  Workflow ID.
+	 * @param string               $artifact_key Artifact key.
+	 * @param mixed                $content      Artifact content.
+	 * @param string               $kind         Artifact kind, such as json, text, or markdown.
+	 * @param int|null             $step_index   Related workflow step index, if any.
+	 * @param array<string, mixed> $metadata     Optional metadata.
 	 * @throws \InvalidArgumentException If the workflow ID, key, or kind is invalid.
 	 */
 	public function put(
@@ -242,8 +242,8 @@ class ArtifactStore {
 	/**
 	 * Decode one artifact row for public consumption.
 	 *
-	 * @param array $row             Raw database row.
-	 * @param bool  $include_content Whether to include decoded content.
+	 * @param array<string, mixed> $row             Raw database row.
+	 * @param bool                 $include_content Whether to include decoded content.
 	 * @return array<string,mixed>
 	 */
 	private function map_row( array $row, bool $include_content ): array {

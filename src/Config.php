@@ -111,12 +111,20 @@ class Config {
 		return defined( 'QUEUETY_RESOURCE_SYSTEM_MEMORY_HEADROOM_MB' ) ? max( 0, (int) QUEUETY_RESOURCE_SYSTEM_MEMORY_HEADROOM_MB ) : 32;
 	}
 
-	/** Weighted cost budgets per queue. */
+	/**
+	 * Weighted cost budgets per queue.
+	 *
+	 * @return array<string, int>
+	 */
 	public static function resource_queue_cost_budgets(): array {
 		return self::normalize_int_map_constant( 'QUEUETY_RESOURCE_QUEUE_COST_BUDGETS' );
 	}
 
-	/** Weighted cost budgets per concurrency group. */
+	/**
+	 * Weighted cost budgets per concurrency group.
+	 *
+	 * @return array<string, int>
+	 */
 	public static function resource_group_cost_budgets(): array {
 		return self::normalize_int_map_constant( 'QUEUETY_RESOURCE_GROUP_COST_BUDGETS' );
 	}

@@ -17,9 +17,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	/**
 	 * Decode a JSON assoc arg into an array payload.
 	 *
-	 * @param array  $assoc_args Associative command arguments.
-	 * @param string $key        Argument key.
-	 * @return array
+	 * @param array<string, mixed> $assoc_args Associative command arguments.
+	 * @param string               $key        Argument key.
+	 * @return array<string, mixed>
 	 */
 	private function decode_json_assoc_arg( array $assoc_args, string $key ): array {
 		$value = $assoc_args[ $key ] ?? null;
@@ -41,8 +41,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * <id>
 	 * : Workflow ID.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function status( $args, $assoc_args ) {
 		$state = Queuety::workflow_status( (int) $args[0] );
@@ -108,8 +109,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * <id>
 	 * : Workflow ID.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function retry( $args, $assoc_args ) {
 		Queuety::retry_workflow( (int) $args[0] );
@@ -130,8 +132,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * [--signal=<name>]
 	 * : Override the approval signal name. Default: approval
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function approve( $args, $assoc_args ) {
 		$data   = $this->decode_json_assoc_arg( $assoc_args, 'data' );
@@ -155,8 +158,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * [--signal=<name>]
 	 * : Override the rejection signal name. Default: rejected
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function reject( $args, $assoc_args ) {
 		$data   = $this->decode_json_assoc_arg( $assoc_args, 'data' );
@@ -180,8 +184,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * [--signal=<name>]
 	 * : Override the input signal name. Default: input
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function input( $args, $assoc_args ) {
 		$data   = $this->decode_json_assoc_arg( $assoc_args, 'data' );
@@ -208,8 +213,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * [--with-content]
 	 * : Include artifact content in the output.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function artifacts( $args, $assoc_args ) {
 		$workflow_id     = (int) $args[0];
@@ -251,8 +257,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * <key>
 	 * : Artifact key.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function artifact( $args, $assoc_args ) {
 		$artifact = Queuety::workflow_artifact( (int) $args[0], (string) $args[1] );
@@ -271,8 +278,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * <id>
 	 * : Workflow ID.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function pause( $args, $assoc_args ) {
 		Queuety::pause_workflow( (int) $args[0] );
@@ -285,8 +293,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * <id>
 	 * : Workflow ID.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function cancel( $args, $assoc_args ) {
 		try {
@@ -303,8 +312,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * <id>
 	 * : Workflow ID.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function resume( $args, $assoc_args ) {
 		Queuety::resume_workflow( (int) $args[0] );
@@ -324,8 +334,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 *
 	 * @subcommand list
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function list_( $args, $assoc_args ) {
 		$format        = $assoc_args['format'] ?? 'table';
@@ -378,8 +389,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * [--offset=<offset>]
 	 * : Number of earlier events to skip. Default: 0.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function timeline( $args, $assoc_args ) {
 		$workflow_id = (int) $args[0];
@@ -422,8 +434,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * <step>
 	 * : Step index to rewind to (0-based).
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function rewind( $args, $assoc_args ) {
 		try {
@@ -440,8 +453,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * <id>
 	 * : Workflow ID.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function fork( $args, $assoc_args ) {
 		try {
@@ -463,8 +477,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * [--output=<file>]
 	 * : File path to write the JSON to. Defaults to stdout.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function export( $args, $assoc_args ) {
 		try {
@@ -492,8 +507,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * <file>
 	 * : Path to the exported JSON file.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function replay( $args, $assoc_args ) {
 		try {
@@ -521,8 +537,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 *
 	 * @subcommand state-at
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function state_at( $args, $assoc_args ) {
 		$workflow_id = (int) $args[0];

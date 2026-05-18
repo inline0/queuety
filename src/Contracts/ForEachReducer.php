@@ -15,9 +15,9 @@ interface ForEachReducer {
 	/**
 	 * Reduce the for-each aggregate into workflow state output.
 	 *
-	 * @param array $state    Current workflow state.
-	 * @param array $for_each  Structured for-each aggregate.
-	 * @return array Data to merge into workflow state. May include `_next_step`.
+	 * @param array<string, mixed> $state    Current workflow state.
+	 * @param array<string, mixed> $for_each Structured for-each aggregate.
+	 * @return array<string, mixed> Data to merge into workflow state. May include `_next_step`.
 	 */
 	public function reduce( array $state, array $for_each ): array;
 }
