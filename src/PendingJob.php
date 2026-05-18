@@ -300,10 +300,14 @@ class PendingJob {
 	 * Get the dispatched job ID. Forces dispatch if not yet done.
 	 *
 	 * @return int
+	 * @throws \RuntimeException If dispatch did not produce a job ID.
 	 */
 	public function id(): int {
 		if ( ! $this->dispatched ) {
 			$this->do_dispatch();
+		}
+		if ( null === $this->job_id ) {
+			throw new \RuntimeException( 'Job dispatch did not produce an ID.' );
 		}
 		return $this->job_id;
 	}

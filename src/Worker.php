@@ -398,7 +398,7 @@ class Worker {
 			)
 		);
 
-		if ( null !== $this->event_log && $job->is_workflow_step() && null !== $job->step_index ) {
+		if ( null !== $this->event_log && $job->is_workflow_step() ) {
 			$this->event_log->record_step_started(
 				workflow_id: $job->workflow_id,
 				step_index: $job->step_index,
@@ -798,7 +798,7 @@ class Worker {
 		} catch ( \Throwable $e ) {
 			$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
-			if ( null !== $this->event_log && $job->is_workflow_step() && null !== $job->step_index ) {
+			if ( null !== $this->event_log && $job->is_workflow_step() ) {
 				$trace = ExecutionContext::consume_trace();
 				$this->event_log->record_step_failed(
 					workflow_id: $job->workflow_id,
@@ -1029,14 +1029,15 @@ class Worker {
 				);
 
 				if ( $job->is_workflow_step() ) {
+					$workflow_id = $job->workflow_id;
 					if ( $is_for_each_terminal ) {
 						$this->workflow->handle_for_each_terminal_failure(
-							$job->workflow_id,
+							$workflow_id,
 							$job->id,
 							'Stale: worker died without completing.',
 						);
 					} else {
-						$this->workflow->fail( $job->workflow_id, $job->id, 'Stale: worker died without completing.' );
+						$this->workflow->fail( $workflow_id, $job->id, 'Stale: worker died without completing.' );
 					}
 				} elseif ( $this->is_state_machine_action_job( $job ) ) {
 					$meta = $this->state_machine_action_meta( $job );
@@ -1143,6 +1144,10 @@ class Worker {
 	private function process_streaming_step( Job $job, StreamingStep $handler, int|float $start_time ): void {
 		if ( null === $this->chunk_store ) {
 			throw new \RuntimeException( 'ChunkStore is required for streaming steps. Pass it to the Worker constructor.' );
+		}
+
+		if ( ! $job->is_workflow_step() ) {
+			throw new \RuntimeException( 'Streaming steps must run inside a workflow.' );
 		}
 
 		$state = $this->workflow->get_state( $job->workflow_id ) ?? array();
@@ -1288,10 +1293,13 @@ class Worker {
 	 * @return array<string,mixed>
 	 */
 	private function workflow_step_trace_info( Job $job ): array {
+		if ( ! $job->is_workflow_step() ) {
+			return array();
+		}
 		$state        = $this->workflow->get_state( $job->workflow_id ) ?? array();
 		$public_state = $this->public_workflow_state( $state );
 		$steps        = $state['_steps'] ?? array();
-		$step_def     = null !== $job->step_index ? ( $steps[ $job->step_index ] ?? null ) : null;
+		$step_def     = $steps[ $job->step_index ] ?? null;
 		$step_name    = $this->step_name_from_definition( $step_def, (int) ( $job->step_index ?? 0 ) );
 		$step_type    = $this->step_type_from_definition( $step_def );
 		$context      = array();
@@ -1413,7 +1421,7 @@ class Worker {
 	 * @return bool
 	 */
 	private function is_for_each_workflow_job( Job $job ): bool {
-		if ( ! $job->is_workflow_step() || null === $job->step_index ) {
+		if ( ! $job->is_workflow_step() ) {
 			return false;
 		}
 

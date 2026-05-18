@@ -204,12 +204,12 @@ class Queuety {
 		self::$workflow_event_log      = new WorkflowEventLog( $conn );
 		self::$artifact_store          = new ArtifactStore( $conn );
 		self::$state_machine_event_log = new StateMachineEventLog( $conn );
-		self::$workflow                = new Workflow( $conn, self::$queue, self::$logger, self::$cache, self::$workflow_event_log, self::$artifact_store );
-		self::$state_machine           = new StateMachine( $conn, self::$queue, self::$state_machine_event_log );
+		self::$workflow                = new Workflow( $conn, self::queue_(), self::logger_(), self::$cache, self::workflow_event_log_(), self::artifact_store_() );
+		self::$state_machine           = new StateMachine( $conn, self::queue_(), self::state_machine_event_log_() );
 		self::$registry                = new HandlerRegistry();
 		self::$rate_limiter            = new RateLimiter( $conn, self::$cache );
 		self::$resource_manager        = new ResourceManager( $conn, self::$cache );
-		self::$scheduler               = new Scheduler( $conn, self::$queue );
+		self::$scheduler               = new Scheduler( $conn, self::queue_() );
 		self::$workflow_registry       = new WorkflowRegistry();
 		self::$metrics                 = new Metrics( $conn );
 		self::$webhook_notifier        = new WebhookNotifier( $conn );
@@ -217,19 +217,19 @@ class Queuety {
 		self::$chunk_store             = new ChunkStore( $conn );
 		self::$worker                  = new Worker(
 			$conn,
-			self::$queue,
-			self::$logger,
-			self::$workflow,
-			self::$registry,
+			self::queue_(),
+			self::logger_(),
+			self::workflow_(),
+			self::registry_(),
 			new Config(),
-			self::$rate_limiter,
-			self::$scheduler,
-			self::$webhook_notifier,
-			self::$batch_manager,
-			self::$chunk_store,
-			self::$workflow_event_log,
-			self::$state_machine,
-			self::$resource_manager,
+			self::rate_limiter_(),
+			self::scheduler_(),
+			self::webhook_notifier_(),
+			self::batch_manager_(),
+			self::chunk_store_(),
+			self::workflow_event_log_(),
+			self::state_machine_(),
+			self::resource_manager_(),
 		);
 	}
 
@@ -252,7 +252,7 @@ class Queuety {
 	 */
 	public static function ensure_schema(): void {
 		self::ensure_initialized();
-		Schema::install( self::$conn );
+		Schema::install( self::conn_() );
 	}
 
 	/**
@@ -303,11 +303,11 @@ class Queuety {
 
 		if ( $handler instanceof JobContract ) {
 			$serialized = JobSerializer::serialize( $handler );
-			$pending    = new PendingJob( $serialized['handler'], $serialized['payload'], self::$queue, $handler );
+			$pending    = new PendingJob( $serialized['handler'], $serialized['payload'], self::queue_(), $handler );
 			return self::apply_pending_defaults( $pending, $handler );
 		}
 
-		return self::apply_pending_defaults( new PendingJob( $handler, $payload, self::$queue ), $handler );
+		return self::apply_pending_defaults( new PendingJob( $handler, $payload, self::queue_() ), $handler );
 	}
 
 	/**
@@ -332,7 +332,7 @@ class Queuety {
 		}
 
 		self::ensure_initialized();
-		$resolved = self::$registry->resolve( $handler );
+		$resolved = self::registry_()->resolve( $handler );
 		if ( $resolved instanceof JobContract ) {
 			$resolved->handle();
 		} elseif ( $resolved instanceof Handler ) {
@@ -349,7 +349,7 @@ class Queuety {
 	 */
 	public static function run_worker( string|array $queue = 'default', bool $once = false ): void {
 		self::ensure_initialized();
-		self::$worker->run( $queue, $once );
+		self::worker_()->run( $queue, $once );
 	}
 
 	/**
@@ -368,9 +368,9 @@ class Queuety {
 			DB_NAME,
 			DB_USER,
 			DB_PASSWORD,
-			self::$conn->prefix(),
+			self::conn_()->prefix(),
 			null,
-			self::$conn->table_prefix(),
+			self::conn_()->table_prefix(),
 		);
 		$pool->run( $queue );
 	}
@@ -392,9 +392,9 @@ class Queuety {
 			DB_NAME,
 			DB_USER,
 			DB_PASSWORD,
-			self::$conn->prefix(),
+			self::conn_()->prefix(),
 			$max_workers,
-			self::$conn->table_prefix(),
+			self::conn_()->table_prefix(),
 		);
 		$pool->run( $queue );
 	}
@@ -407,7 +407,7 @@ class Queuety {
 	 */
 	public static function flush_queue( string|array $queue = 'default' ): int {
 		self::ensure_initialized();
-		return self::$worker->flush( $queue );
+		return self::worker_()->flush( $queue );
 	}
 
 	/**
@@ -439,7 +439,7 @@ class Queuety {
 	public static function list_jobs( ?string $queue = null, ?string $status = null, int $limit = 50 ): array {
 		self::ensure_initialized();
 
-		$table  = self::$conn->table( Config::table_jobs() );
+		$table  = self::conn_()->table( Config::table_jobs() );
 		$sql    = "SELECT id, queue, handler, status, attempts, priority, created_at FROM {$table} WHERE 1=1";
 		$params = array();
 
@@ -455,7 +455,7 @@ class Queuety {
 
 		$limit = max( 1, $limit );
 		$sql  .= " ORDER BY id DESC LIMIT {$limit}";
-		$stmt  = self::$conn->pdo()->prepare( $sql );
+		$stmt  = self::conn_()->pdo()->prepare( $sql );
 		$stmt->execute( $params );
 
 		return $stmt->fetchAll();
@@ -470,7 +470,7 @@ class Queuety {
 	public static function inspect_job( int $job_id ): ?array {
 		self::ensure_initialized();
 
-		$job = self::$queue->find( $job_id );
+		$job = self::queue_()->find( $job_id );
 		if ( null === $job ) {
 			return null;
 		}
@@ -495,7 +495,7 @@ class Queuety {
 				'step_index'    => $job->step_index,
 				'depends_on'    => $job->depends_on,
 			),
-			'logs' => self::$logger->for_job( $job_id ),
+			'logs' => self::logger_()->for_job( $job_id ),
 		);
 	}
 
@@ -508,7 +508,7 @@ class Queuety {
 	 */
 	public static function bury_job( int $job_id, string $error_message = 'Manually buried via CLI.' ): void {
 		self::ensure_initialized();
-		self::$queue->bury( $job_id, $error_message );
+		self::queue_()->bury( $job_id, $error_message );
 	}
 
 	/**
@@ -520,8 +520,8 @@ class Queuety {
 	public static function delete_job( int $job_id ): bool {
 		self::ensure_initialized();
 
-		$table = self::$conn->table( Config::table_jobs() );
-		$stmt  = self::$conn->pdo()->prepare( "DELETE FROM {$table} WHERE id = :id" );
+		$table = self::conn_()->table( Config::table_jobs() );
+		$stmt  = self::conn_()->pdo()->prepare( "DELETE FROM {$table} WHERE id = :id" );
 		$stmt->execute( array( 'id' => $job_id ) );
 
 		return $stmt->rowCount() > 0;
@@ -534,7 +534,7 @@ class Queuety {
 	 */
 	public static function recover_stale_jobs(): int {
 		self::ensure_initialized();
-		return self::$worker->recover_stale();
+		return self::worker_()->recover_stale();
 	}
 
 	/**
@@ -545,7 +545,7 @@ class Queuety {
 	 */
 	public static function handler_metrics( int $minutes = 60 ): array {
 		self::ensure_initialized();
-		return self::$metrics->handler_stats( $minutes );
+		return self::metrics_()->handler_stats( $minutes );
 	}
 
 	/**
@@ -564,7 +564,7 @@ class Queuety {
 		$registered = 0;
 
 		if ( $register ) {
-			$registered = $discovery->register_all( $directory, $namespace, self::$registry );
+			$registered = $discovery->register_all( $directory, $namespace, self::registry_() );
 		}
 
 		return array(
@@ -585,7 +585,7 @@ class Queuety {
 		}
 
 		self::ensure_initialized();
-		return new BatchBuilder( $jobs, self::$queue, self::$batch_manager );
+		return new BatchBuilder( $jobs, self::queue_(), self::batch_manager_() );
 	}
 
 	/**
@@ -600,7 +600,7 @@ class Queuety {
 		}
 
 		self::ensure_initialized();
-		return self::$batch_manager->find( $id );
+		return self::batch_manager_()->find( $id );
 	}
 
 	/**
@@ -615,7 +615,7 @@ class Queuety {
 		}
 
 		self::ensure_initialized();
-		return new ChainBuilder( $jobs, self::$queue );
+		return new ChainBuilder( $jobs, self::queue_() );
 	}
 
 	/**
@@ -633,7 +633,7 @@ class Queuety {
 		}
 
 		self::ensure_initialized();
-		return self::$queue->batch( $jobs );
+		return self::queue_()->batch( $jobs );
 	}
 
 	/**
@@ -643,7 +643,7 @@ class Queuety {
 	 */
 	public static function pause( string $queue ): void {
 		self::ensure_initialized();
-		self::$queue->pause_queue( $queue );
+		self::queue_()->pause_queue( $queue );
 	}
 
 	/**
@@ -653,7 +653,7 @@ class Queuety {
 	 */
 	public static function resume( string $queue ): void {
 		self::ensure_initialized();
-		self::$queue->resume_queue( $queue );
+		self::queue_()->resume_queue( $queue );
 	}
 
 	/**
@@ -664,7 +664,7 @@ class Queuety {
 	 */
 	public static function is_paused( string $queue ): bool {
 		self::ensure_initialized();
-		return self::$queue->is_queue_paused( $queue );
+		return self::queue_()->is_queue_paused( $queue );
 	}
 
 	/**
@@ -675,7 +675,7 @@ class Queuety {
 	 */
 	public static function workflow( string $name ): WorkflowBuilder {
 		self::ensure_initialized();
-		return new WorkflowBuilder( $name, self::$conn, self::$queue, self::$logger );
+		return new WorkflowBuilder( $name, self::conn_(), self::queue_(), self::logger_() );
 	}
 
 	/**
@@ -709,7 +709,7 @@ class Queuety {
 	 */
 	public static function register( string $name, string $class ): void {
 		self::ensure_initialized();
-		self::$registry->register( $name, $class );
+		self::registry_()->register( $name, $class );
 	}
 
 	/**
@@ -720,7 +720,7 @@ class Queuety {
 	 */
 	public static function stats( ?string $queue = null ): array {
 		self::ensure_initialized();
-		return self::$queue->stats( $queue );
+		return self::queue_()->stats( $queue );
 	}
 
 	/**
@@ -731,7 +731,7 @@ class Queuety {
 	 */
 	public static function buried( ?string $queue = null ): array {
 		self::ensure_initialized();
-		return self::$queue->buried( $queue );
+		return self::queue_()->buried( $queue );
 	}
 
 	/**
@@ -741,10 +741,10 @@ class Queuety {
 	 */
 	public static function retry_buried(): int {
 		self::ensure_initialized();
-		$buried = self::$queue->buried();
+		$buried = self::queue_()->buried();
 		$count  = 0;
 		foreach ( $buried as $job ) {
-			self::$queue->retry( $job->id );
+			self::queue_()->retry( $job->id );
 			++$count;
 		}
 		return $count;
@@ -757,7 +757,7 @@ class Queuety {
 	 */
 	public static function retry( int $job_id ): void {
 		self::ensure_initialized();
-		self::$queue->retry( $job_id );
+		self::queue_()->retry( $job_id );
 	}
 
 	/**
@@ -769,7 +769,7 @@ class Queuety {
 	public static function purge( ?int $older_than_days = null ): int {
 		self::ensure_initialized();
 		$days = $older_than_days ?? Config::retention_days();
-		return self::$queue->purge_completed( $days );
+		return self::queue_()->purge_completed( $days );
 	}
 
 	/**
@@ -780,7 +780,7 @@ class Queuety {
 	 */
 	public static function workflow_status( int $workflow_id ): ?WorkflowState {
 		self::ensure_initialized();
-		return self::$workflow->status( $workflow_id );
+		return self::workflow_()->status( $workflow_id );
 	}
 
 	/**
@@ -798,7 +798,7 @@ class Queuety {
 			$status_filter = WorkflowStatus::tryFrom( $status );
 		}
 
-		return self::$workflow->list( $status_filter, $limit );
+		return self::workflow_()->list( $status_filter, $limit );
 	}
 
 	/**
@@ -814,7 +814,7 @@ class Queuety {
 	 */
 	public static function signal( int $workflow_id, string $name, array $data = array() ): void {
 		self::ensure_initialized();
-		self::$workflow->handle_signal( $workflow_id, $name, $data );
+		self::workflow_()->handle_signal( $workflow_id, $name, $data );
 	}
 
 	/**
@@ -870,7 +870,7 @@ class Queuety {
 		array $metadata = array(),
 	): void {
 		self::ensure_initialized();
-		self::$artifact_store->put( $workflow_id, $artifact_key, $content, $kind, $step_index, $metadata );
+		self::artifact_store_()->put( $workflow_id, $artifact_key, $content, $kind, $step_index, $metadata );
 	}
 
 	/**
@@ -912,7 +912,7 @@ class Queuety {
 	 */
 	public static function workflow_artifact( int $workflow_id, string $artifact_key ): ?array {
 		self::ensure_initialized();
-		return self::$artifact_store->get( $workflow_id, $artifact_key );
+		return self::artifact_store_()->get( $workflow_id, $artifact_key );
 	}
 
 	/**
@@ -924,7 +924,7 @@ class Queuety {
 	 */
 	public static function workflow_artifacts( int $workflow_id, bool $include_content = false ): array {
 		self::ensure_initialized();
-		return self::$artifact_store->list( $workflow_id, $include_content );
+		return self::artifact_store_()->list( $workflow_id, $include_content );
 	}
 
 	/**
@@ -935,7 +935,7 @@ class Queuety {
 	 */
 	public static function delete_workflow_artifact( int $workflow_id, string $artifact_key ): void {
 		self::ensure_initialized();
-		self::$artifact_store->delete( $workflow_id, $artifact_key );
+		self::artifact_store_()->delete( $workflow_id, $artifact_key );
 	}
 
 	/**
@@ -963,7 +963,7 @@ class Queuety {
 	 */
 	public static function cancel_workflow( int $workflow_id ): void {
 		self::ensure_initialized();
-		self::$workflow->cancel( $workflow_id );
+		self::workflow_()->cancel( $workflow_id );
 	}
 
 	/**
@@ -973,7 +973,7 @@ class Queuety {
 	 */
 	public static function retry_workflow( int $workflow_id ): void {
 		self::ensure_initialized();
-		self::$workflow->retry( $workflow_id );
+		self::workflow_()->retry( $workflow_id );
 	}
 
 	/**
@@ -983,7 +983,7 @@ class Queuety {
 	 */
 	public static function pause_workflow( int $workflow_id ): void {
 		self::ensure_initialized();
-		self::$workflow->pause( $workflow_id );
+		self::workflow_()->pause( $workflow_id );
 	}
 
 	/**
@@ -993,55 +993,55 @@ class Queuety {
 	 */
 	public static function resume_workflow( int $workflow_id ): void {
 		self::ensure_initialized();
-		self::$workflow->resume( $workflow_id );
+		self::workflow_()->resume( $workflow_id );
 	}
 
 	/** Queue operations. */
 	public static function queue(): Queue {
 		self::ensure_initialized();
-		return self::$queue;
+		return self::queue_();
 	}
 
 	/** Logger instance. */
 	public static function logger(): Logger {
 		self::ensure_initialized();
-		return self::$logger;
+		return self::logger_();
 	}
 
 	/** Worker instance. */
 	public static function worker(): Worker {
 		self::ensure_initialized();
-		return self::$worker;
+		return self::worker_();
 	}
 
 	/** Workflow manager. */
 	public static function workflow_manager(): Workflow {
 		self::ensure_initialized();
-		return self::$workflow;
+		return self::workflow_();
 	}
 
 	/** State-machine manager. */
 	public static function machines(): StateMachine {
 		self::ensure_initialized();
-		return self::$state_machine;
+		return self::state_machine_();
 	}
 
 	/** Handler registry. */
 	public static function registry(): HandlerRegistry {
 		self::ensure_initialized();
-		return self::$registry;
+		return self::registry_();
 	}
 
 	/** Rate limiter. */
 	public static function rate_limiter(): RateLimiter {
 		self::ensure_initialized();
-		return self::$rate_limiter;
+		return self::rate_limiter_();
 	}
 
 	/** Resource manager. */
 	public static function resource_manager(): ResourceManager {
 		self::ensure_initialized();
-		return self::$resource_manager;
+		return self::resource_manager_();
 	}
 
 	/** Batch manager. */
@@ -1051,19 +1051,19 @@ class Queuety {
 		}
 
 		self::ensure_initialized();
-		return self::$batch_manager;
+		return self::batch_manager_();
 	}
 
 	/** Streaming chunk store. */
 	public static function chunk_store(): ChunkStore {
 		self::ensure_initialized();
-		return self::$chunk_store;
+		return self::chunk_store_();
 	}
 
 	/** Workflow artifact store. */
 	public static function artifacts(): ArtifactStore {
 		self::ensure_initialized();
-		return self::$artifact_store;
+		return self::artifact_store_();
 	}
 
 	/**
@@ -1075,19 +1075,23 @@ class Queuety {
 	 */
 	public static function schedule( string $handler, array $payload = array() ): PendingSchedule {
 		self::ensure_initialized();
-		return new PendingSchedule( $handler, $payload, self::$scheduler );
+		return new PendingSchedule( $handler, $payload, self::scheduler_() );
 	}
 
 	/** Scheduler instance. */
 	public static function scheduler(): Scheduler {
 		self::ensure_initialized();
-		return self::$scheduler;
+		return self::scheduler_();
 	}
 
-	/** Cache backend. */
+	/**
+	 * Cache backend.
+	 *
+	 * @throws \RuntimeException If the cache backend is not initialized.
+	 */
 	public static function cache(): Cache {
 		self::ensure_initialized();
-		return self::$cache;
+		return self::$cache ?? throw new \RuntimeException( 'Queuety cache not initialized.' );
 	}
 
 	/**
@@ -1106,7 +1110,7 @@ class Queuety {
 	/** Database connection. */
 	public static function connection(): Connection {
 		self::ensure_initialized();
-		return self::$conn;
+		return self::conn_();
 	}
 
 	/**
@@ -1118,7 +1122,7 @@ class Queuety {
 	 */
 	public static function define_workflow( string $name ): WorkflowBuilder {
 		self::ensure_initialized();
-		return new WorkflowBuilder( $name, self::$conn, self::$queue, self::$logger );
+		return new WorkflowBuilder( $name, self::conn_(), self::queue_(), self::logger_() );
 	}
 
 	/**
@@ -1138,7 +1142,7 @@ class Queuety {
 			definition: $builder->build_runtime_definition(),
 		);
 
-		self::$workflow_registry->register( $builder->get_name(), $template );
+		self::workflow_registry_()->register( $builder->get_name(), $template );
 	}
 
 	/**
@@ -1153,7 +1157,7 @@ class Queuety {
 	public static function run_workflow( string $name, array $payload = array(), array $options = array() ): int {
 		self::ensure_initialized();
 
-		$template = self::$workflow_registry->get( $name );
+		$template = self::workflow_registry_()->get( $name );
 		if ( null === $template ) {
 			throw new \RuntimeException( "Workflow template '{$name}' is not registered." );
 		}
@@ -1171,13 +1175,13 @@ class Queuety {
 	 */
 	public static function dispatch_workflow_definition( array $definition, array $payload = array(), array $options = array() ): int {
 		self::ensure_initialized();
-		return self::$workflow->dispatch_definition( $definition, $payload, $options );
+		return self::workflow_()->dispatch_definition( $definition, $payload, $options );
 	}
 
 	/** Workflow template registry. */
 	public static function workflow_templates(): WorkflowRegistry {
 		self::ensure_initialized();
-		return self::$workflow_registry;
+		return self::workflow_registry_();
 	}
 
 	/**
@@ -1188,7 +1192,7 @@ class Queuety {
 	 */
 	public static function machine( string $name ): StateMachineBuilder {
 		self::ensure_initialized();
-		return new StateMachineBuilder( $name, self::$state_machine );
+		return new StateMachineBuilder( $name, self::state_machine_() );
 	}
 
 	/**
@@ -1201,7 +1205,7 @@ class Queuety {
 	 */
 	public static function dispatch_state_machine_definition( array $definition, array $initial_state = array(), array $options = array() ): int {
 		self::ensure_initialized();
-		return self::$state_machine->dispatch_definition( $definition, $initial_state, $options );
+		return self::state_machine_()->dispatch_definition( $definition, $initial_state, $options );
 	}
 
 	/**
@@ -1212,7 +1216,7 @@ class Queuety {
 	 */
 	public static function machine_status( int $machine_id ): ?StateMachineState {
 		self::ensure_initialized();
-		return self::$state_machine->get_status( $machine_id );
+		return self::state_machine_()->get_status( $machine_id );
 	}
 
 	/**
@@ -1224,7 +1228,7 @@ class Queuety {
 	 */
 	public static function machine_event( int $machine_id, string $event_name, array $payload = array() ): void {
 		self::ensure_initialized();
-		self::$state_machine->send_event( $machine_id, $event_name, $payload );
+		self::state_machine_()->send_event( $machine_id, $event_name, $payload );
 	}
 
 	/**
@@ -1236,7 +1240,7 @@ class Queuety {
 	 */
 	public static function list_machines( int $limit = 50, ?string $status = null ): array {
 		self::ensure_initialized();
-		return self::$state_machine->list( $limit, $status );
+		return self::state_machine_()->list( $limit, $status );
 	}
 
 	/**
@@ -1249,7 +1253,7 @@ class Queuety {
 	 */
 	public static function machine_timeline( int $machine_id, ?int $limit = 100, int $offset = 0 ): array {
 		self::ensure_initialized();
-		return self::$state_machine->timeline( $machine_id, $limit, $offset );
+		return self::state_machine_()->timeline( $machine_id, $limit, $offset );
 	}
 
 	/**
@@ -1260,7 +1264,7 @@ class Queuety {
 	 */
 	public static function machine_trace( int $machine_id ): array {
 		self::ensure_initialized();
-		return self::$state_machine->trace( $machine_id );
+		return self::state_machine_()->trace( $machine_id );
 	}
 
 	/**
@@ -1293,7 +1297,7 @@ class Queuety {
 	/** Metrics collector. */
 	public static function metrics(): Metrics {
 		self::ensure_initialized();
-		return self::$metrics;
+		return self::metrics_();
 	}
 
 	/**
@@ -1308,29 +1312,29 @@ class Queuety {
 		self::ensure_initialized();
 
 		if ( array_key_exists( 'job_id', $filters ) && null !== $filters['job_id'] ) {
-			return self::$logger->for_job( (int) $filters['job_id'] );
+			return self::logger_()->for_job( (int) $filters['job_id'] );
 		}
 
 		if ( array_key_exists( 'workflow_id', $filters ) && null !== $filters['workflow_id'] ) {
-			return self::$logger->for_workflow( (int) $filters['workflow_id'] );
+			return self::logger_()->for_workflow( (int) $filters['workflow_id'] );
 		}
 
 		$limit = isset( $filters['limit'] ) ? (int) $filters['limit'] : 50;
 
 		if ( array_key_exists( 'handler', $filters ) && null !== $filters['handler'] ) {
-			return self::$logger->for_handler( (string) $filters['handler'], $limit );
+			return self::logger_()->for_handler( (string) $filters['handler'], $limit );
 		}
 
 		if ( array_key_exists( 'event', $filters ) && null !== $filters['event'] ) {
 			$event = LogEvent::tryFrom( (string) $filters['event'] );
-			return null !== $event ? self::$logger->for_event( $event, $limit ) : array();
+			return null !== $event ? self::logger_()->for_event( $event, $limit ) : array();
 		}
 
 		if ( array_key_exists( 'since', $filters ) && null !== $filters['since'] ) {
-			return self::$logger->since( new \DateTimeImmutable( (string) $filters['since'] ), $limit );
+			return self::logger_()->since( new \DateTimeImmutable( (string) $filters['since'] ), $limit );
 		}
 
-		return self::$logger->since( new \DateTimeImmutable( '-24 hours' ), $limit );
+		return self::logger_()->since( new \DateTimeImmutable( '-24 hours' ), $limit );
 	}
 
 	/**
@@ -1341,13 +1345,13 @@ class Queuety {
 	 */
 	public static function purge_logs( int $older_than_days ): int {
 		self::ensure_initialized();
-		return self::$logger->purge( $older_than_days );
+		return self::logger_()->purge( $older_than_days );
 	}
 
 	/** Webhook notifier. */
 	public static function webhook_notifier(): WebhookNotifier {
 		self::ensure_initialized();
-		return self::$webhook_notifier;
+		return self::webhook_notifier_();
 	}
 
 	/**
@@ -1359,7 +1363,7 @@ class Queuety {
 	 */
 	public static function register_webhook( string $event, string $url ): int {
 		self::ensure_initialized();
-		return self::$webhook_notifier->register( $event, $url );
+		return self::webhook_notifier_()->register( $event, $url );
 	}
 
 	/**
@@ -1369,7 +1373,7 @@ class Queuety {
 	 */
 	public static function list_webhooks(): array {
 		self::ensure_initialized();
-		return self::$webhook_notifier->list();
+		return self::webhook_notifier_()->list();
 	}
 
 	/**
@@ -1380,7 +1384,7 @@ class Queuety {
 	 */
 	public static function remove_webhook( int $id ): void {
 		self::ensure_initialized();
-		self::$webhook_notifier->remove( $id );
+		self::webhook_notifier_()->remove( $id );
 	}
 
 	/**
@@ -1394,7 +1398,7 @@ class Queuety {
 	public static function discover_handlers( string $directory, string $namespace ): int {
 		self::ensure_initialized();
 		$discovery = new HandlerDiscovery();
-		return $discovery->register_all( $directory, $namespace, self::$registry );
+		return $discovery->register_all( $directory, $namespace, self::registry_() );
 	}
 
 	/**
@@ -1404,7 +1408,7 @@ class Queuety {
 	 */
 	public static function list_schedules(): array {
 		self::ensure_initialized();
-		return self::$scheduler->list();
+		return self::scheduler_()->list();
 	}
 
 	/**
@@ -1426,7 +1430,7 @@ class Queuety {
 			throw new \InvalidArgumentException( sprintf( 'Invalid expression type: %s', $type ) );
 		}
 
-		return self::$scheduler->add( $handler, $payload, $queue, $expression, $expression_type );
+		return self::scheduler_()->add( $handler, $payload, $queue, $expression, $expression_type );
 	}
 
 	/**
@@ -1437,7 +1441,7 @@ class Queuety {
 	 */
 	public static function remove_schedule( string $handler ): bool {
 		self::ensure_initialized();
-		return self::$scheduler->remove( $handler );
+		return self::scheduler_()->remove( $handler );
 	}
 
 	/**
@@ -1447,19 +1451,19 @@ class Queuety {
 	 */
 	public static function run_scheduler(): int {
 		self::ensure_initialized();
-		return self::$scheduler->tick();
+		return self::scheduler_()->tick();
 	}
 
 	/** State-machine event log. */
 	public static function machine_events(): StateMachineEventLog {
 		self::ensure_initialized();
-		return self::$state_machine_event_log;
+		return self::state_machine_event_log_();
 	}
 
 	/** Workflow event log. */
 	public static function workflow_events(): WorkflowEventLog {
 		self::ensure_initialized();
-		return self::$workflow_event_log;
+		return self::workflow_event_log_();
 	}
 
 	/**
@@ -1470,7 +1474,7 @@ class Queuety {
 	 */
 	public static function rewind_workflow( int $workflow_id, int $to_step ): void {
 		self::ensure_initialized();
-		self::$workflow->rewind( $workflow_id, $to_step );
+		self::workflow_()->rewind( $workflow_id, $to_step );
 	}
 
 	/**
@@ -1481,7 +1485,7 @@ class Queuety {
 	 */
 	public static function fork_workflow( int $workflow_id ): int {
 		self::ensure_initialized();
-		return self::$workflow->fork( $workflow_id );
+		return self::workflow_()->fork( $workflow_id );
 	}
 
 	/**
@@ -1508,7 +1512,7 @@ class Queuety {
 	 */
 	public static function export_workflow( int $workflow_id ): array {
 		self::ensure_initialized();
-		return WorkflowExporter::export( $workflow_id, self::$conn );
+		return WorkflowExporter::export( $workflow_id, self::conn_() );
 	}
 
 	/**
@@ -1543,7 +1547,7 @@ class Queuety {
 	 */
 	public static function replay_workflow( array $data ): int {
 		self::ensure_initialized();
-		return WorkflowReplayer::replay( $data, self::$conn );
+		return WorkflowReplayer::replay( $data, self::conn_() );
 	}
 
 	/**
@@ -1583,7 +1587,7 @@ class Queuety {
 	 */
 	public static function workflow_timeline( int $workflow_id, ?int $limit = 100, int $offset = 0 ): array {
 		self::ensure_initialized();
-		return self::$workflow_event_log->get_timeline( $workflow_id, $limit, $offset );
+		return self::workflow_event_log_()->get_timeline( $workflow_id, $limit, $offset );
 	}
 
 	/**
@@ -1594,7 +1598,7 @@ class Queuety {
 	 */
 	public static function workflow_trace( int $workflow_id ): array {
 		self::ensure_initialized();
-		return self::$workflow_event_log->get_trace( $workflow_id );
+		return self::workflow_event_log_()->get_trace( $workflow_id );
 	}
 
 	/**
@@ -1606,7 +1610,7 @@ class Queuety {
 	 */
 	public static function machine_state_at( int $machine_id, int $event_id ): ?array {
 		self::ensure_initialized();
-		return self::$state_machine_event_log->get_state_at_event( $machine_id, $event_id );
+		return self::state_machine_event_log_()->get_state_at_event( $machine_id, $event_id );
 	}
 
 	/**
@@ -1618,7 +1622,7 @@ class Queuety {
 	 */
 	public static function workflow_state_at( int $workflow_id, int $step_index ): ?array {
 		self::ensure_initialized();
-		return self::$workflow_event_log->get_state_at_step( $workflow_id, $step_index );
+		return self::workflow_event_log_()->get_state_at_step( $workflow_id, $step_index );
 	}
 
 	/**
@@ -1709,22 +1713,192 @@ class Queuety {
 		}
 	}
 
-	/** Fake queue driver. */
+	/**
+	 * Typed accessor for the database connection.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function conn_(): Connection {
+		return self::$conn ?? throw new \RuntimeException( 'Queuety not initialized. Call Queuety::init() first.' );
+	}
+
+	/**
+	 * Typed accessor for the queue.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function queue_(): Queue {
+		return self::$queue ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for the logger.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function logger_(): Logger {
+		return self::$logger ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for the workflow engine.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function workflow_(): Workflow {
+		return self::$workflow ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for the worker.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function worker_(): Worker {
+		return self::$worker ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for the handler registry.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function registry_(): HandlerRegistry {
+		return self::$registry ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for the rate limiter.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function rate_limiter_(): RateLimiter {
+		return self::$rate_limiter ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for the scheduler.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function scheduler_(): Scheduler {
+		return self::$scheduler ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for the workflow registry.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function workflow_registry_(): WorkflowRegistry {
+		return self::$workflow_registry ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for metrics.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function metrics_(): Metrics {
+		return self::$metrics ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for the webhook notifier.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function webhook_notifier_(): WebhookNotifier {
+		return self::$webhook_notifier ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for the batch manager.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function batch_manager_(): BatchManager {
+		return self::$batch_manager ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for the chunk store.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function chunk_store_(): ChunkStore {
+		return self::$chunk_store ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for the workflow event log.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function workflow_event_log_(): WorkflowEventLog {
+		return self::$workflow_event_log ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for the artifact store.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function artifact_store_(): ArtifactStore {
+		return self::$artifact_store ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for the state machine event log.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function state_machine_event_log_(): StateMachineEventLog {
+		return self::$state_machine_event_log ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for the state machine runtime.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function state_machine_(): StateMachine {
+		return self::$state_machine ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Typed accessor for the resource manager.
+	 *
+	 * @throws \RuntimeException If Queuety has not been initialized.
+	 */
+	private static function resource_manager_(): ResourceManager {
+		return self::$resource_manager ?? throw new \RuntimeException( 'Queuety not initialized.' );
+	}
+
+	/**
+	 * Fake queue driver.
+	 *
+	 * @throws \RuntimeException If the fake queue cannot be initialized.
+	 */
 	private static function fake_queue(): FakeQueue {
 		if ( null === self::$fake_queue || null === self::$queue_fake ) {
 			self::fake();
 		}
 
-		return self::$fake_queue;
+		return self::$fake_queue ?? throw new \RuntimeException( 'Fake queue not initialized.' );
 	}
 
-	/** Fake batch manager. */
+	/**
+	 * Fake batch manager.
+	 *
+	 * @throws \RuntimeException If the fake batch manager cannot be initialized.
+	 */
 	private static function fake_batch_manager(): FakeBatchManager {
 		if ( null === self::$fake_batch_manager || null === self::$queue_fake ) {
 			self::fake();
 		}
 
-		return self::$fake_batch_manager;
+		return self::$fake_batch_manager ?? throw new \RuntimeException( 'Fake batch manager not initialized.' );
 	}
 
 	/**
@@ -1754,10 +1928,11 @@ class Queuety {
 			}
 
 			return $pending;
-		} elseif ( null !== self::$registry ) {
-			$class = self::$registry->class_name( $handler );
-		} elseif ( class_exists( $handler ) ) {
-			$class = $handler;
+		} else {
+			$class = self::registry_()->class_name( $handler );
+			if ( null === $class && class_exists( $handler ) ) {
+				$class = $handler;
+			}
 		}
 
 		if ( null === $class ) {

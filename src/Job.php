@@ -111,6 +111,8 @@ readonly class Job {
 	/**
 	 * Whether this job is part of a workflow.
 	 *
+	 * @phpstan-assert-if-true !null $this->workflow_id
+	 * @phpstan-assert-if-true !null $this->step_index
 	 * @return bool
 	 */
 	public function is_workflow_step(): bool {

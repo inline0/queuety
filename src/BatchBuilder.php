@@ -154,6 +154,7 @@ class BatchBuilder {
 	 * Dispatch the batch: create the batch row and all jobs.
 	 *
 	 * @return Batch The created batch.
+	 * @throws \RuntimeException If the batch could not be reloaded after creation.
 	 */
 	public function dispatch(): Batch {
 		$options = array();
@@ -210,7 +211,11 @@ class BatchBuilder {
 			}
 		}
 
-		return $this->batch_manager->find( $batch_id );
+		$batch = $this->batch_manager->find( $batch_id );
+		if ( null === $batch ) {
+			throw new \RuntimeException( "Batch {$batch_id} was created but could not be reloaded." );
+		}
+		return $batch;
 	}
 
 	/**
