@@ -53,10 +53,10 @@ class ConfigParser {
 		}
 
 		return array(
-			'host'     => $values['host'] ?? '',
-			'name'     => $values['name'] ?? '',
-			'user'     => $values['user'] ?? '',
-			'password' => $values['password'] ?? '',
+			'host'     => $values['host'],
+			'name'     => $values['name'],
+			'user'     => $values['user'],
+			'password' => $values['password'],
 			'prefix'   => $prefix,
 		);
 	}
