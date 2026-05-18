@@ -47,11 +47,19 @@ class WorkflowLoader {
 			: new \DirectoryIterator( $directory );
 
 		foreach ( $files as $file ) {
+			if ( ! ( $file instanceof \SplFileInfo ) ) {
+				continue;
+			}
 			if ( $file->isDir() || 'php' !== $file->getExtension() ) {
 				continue;
 			}
 
-			$result = self::load_file( $file->getRealPath() );
+			$real_path = $file->getRealPath();
+			if ( false === $real_path ) {
+				continue;
+			}
+
+			$result = self::load_file( $real_path );
 			if ( null !== $result ) {
 				++$count;
 			}

@@ -137,8 +137,16 @@ class QueuetyCommand extends \WP_CLI_Command {
 	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
 	public function dispatch( $args, $assoc_args ): void {
-		$handler  = $args[0];
-		$payload  = json_decode( $assoc_args['payload'] ?? '{}', true ) ?: array();
+		$handler         = $args[0];
+		$decoded_payload = json_decode( $assoc_args['payload'] ?? '{}', true );
+		$payload         = array();
+		if ( is_array( $decoded_payload ) ) {
+			foreach ( $decoded_payload as $payload_key => $payload_value ) {
+				if ( is_string( $payload_key ) ) {
+					$payload[ $payload_key ] = $payload_value;
+				}
+			}
+		}
 		$queue    = $assoc_args['queue'] ?? 'default';
 		$priority = (int) ( $assoc_args['priority'] ?? 0 );
 		$delay    = (int) ( $assoc_args['delay'] ?? 0 );
@@ -343,47 +351,90 @@ class QueuetyCommand extends \WP_CLI_Command {
 		}
 
 		$job = $data['job'];
+		if ( ! is_array( $job ) ) {
+			\WP_CLI::error( "Job #{$job_id} is malformed." );
+			return;
+		}
 
-		\WP_CLI::line( "Job #{$job['id']}" );
-		\WP_CLI::line( "Handler:      {$job['handler']}" );
-		\WP_CLI::line( "Queue:        {$job['queue']}" );
-		\WP_CLI::line( "Status:       {$job['status']}" );
-		\WP_CLI::line( "Priority:     {$job['priority']}" );
-		\WP_CLI::line( "Attempts:     {$job['attempts']}/{$job['max_attempts']}" );
-		\WP_CLI::line( "Created:      {$job['created_at']}" );
-		\WP_CLI::line( "Available at: {$job['available_at']}" );
+		$id_display           = self::display_value( $job['id'] ?? null );
+		$handler_display      = self::display_value( $job['handler'] ?? null );
+		$queue_display        = self::display_value( $job['queue'] ?? null );
+		$status_display       = self::display_value( $job['status'] ?? null );
+		$priority_display     = self::display_value( $job['priority'] ?? null );
+		$attempts_display     = self::display_value( $job['attempts'] ?? null );
+		$max_attempts_display = self::display_value( $job['max_attempts'] ?? null );
+		$created_display      = self::display_value( $job['created_at'] ?? null );
+		$available_display    = self::display_value( $job['available_at'] ?? null );
 
-		if ( null !== $job['reserved_at'] ) {
-			\WP_CLI::line( "Reserved at:  {$job['reserved_at']}" );
+		\WP_CLI::line( "Job #{$id_display}" );
+		\WP_CLI::line( "Handler:      {$handler_display}" );
+		\WP_CLI::line( "Queue:        {$queue_display}" );
+		\WP_CLI::line( "Status:       {$status_display}" );
+		\WP_CLI::line( "Priority:     {$priority_display}" );
+		\WP_CLI::line( "Attempts:     {$attempts_display}/{$max_attempts_display}" );
+		\WP_CLI::line( "Created:      {$created_display}" );
+		\WP_CLI::line( "Available at: {$available_display}" );
+
+		if ( null !== ( $job['reserved_at'] ?? null ) ) {
+			$reserved_display = self::display_value( $job['reserved_at'] );
+			\WP_CLI::line( "Reserved at:  {$reserved_display}" );
 		}
-		if ( null !== $job['completed_at'] ) {
-			\WP_CLI::line( "Completed at: {$job['completed_at']}" );
+		if ( null !== ( $job['completed_at'] ?? null ) ) {
+			$completed_display = self::display_value( $job['completed_at'] );
+			\WP_CLI::line( "Completed at: {$completed_display}" );
 		}
-		if ( null !== $job['failed_at'] ) {
-			\WP_CLI::line( "Failed at:    {$job['failed_at']}" );
+		if ( null !== ( $job['failed_at'] ?? null ) ) {
+			$failed_display = self::display_value( $job['failed_at'] );
+			\WP_CLI::line( "Failed at:    {$failed_display}" );
 		}
-		if ( null !== $job['error_message'] ) {
-			\WP_CLI::line( "Error:        {$job['error_message']}" );
+		if ( null !== ( $job['error_message'] ?? null ) ) {
+			$error_display = self::display_value( $job['error_message'] );
+			\WP_CLI::line( "Error:        {$error_display}" );
 		}
-		if ( null !== $job['workflow_id'] ) {
-			\WP_CLI::line( "Workflow ID:  {$job['workflow_id']}" );
-			\WP_CLI::line( "Step index:   {$job['step_index']}" );
+		if ( null !== ( $job['workflow_id'] ?? null ) ) {
+			$workflow_id_display = self::display_value( $job['workflow_id'] );
+			$step_index_display  = self::display_value( $job['step_index'] ?? null );
+			\WP_CLI::line( "Workflow ID:  {$workflow_id_display}" );
+			\WP_CLI::line( "Step index:   {$step_index_display}" );
 		}
-		if ( null !== $job['depends_on'] ) {
-			\WP_CLI::line( "Depends on:   {$job['depends_on']}" );
+		if ( null !== ( $job['depends_on'] ?? null ) ) {
+			$depends_display = self::display_value( $job['depends_on'] );
+			\WP_CLI::line( "Depends on:   {$depends_display}" );
 		}
 
 		\WP_CLI::line( '' );
 		\WP_CLI::line( 'Payload:' );
-		\WP_CLI::line( (string) json_encode( $job['payload'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
+		\WP_CLI::line( (string) json_encode( $job['payload'] ?? null, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
 
 		$logs = $data['logs'];
-		if ( ! empty( $logs ) ) {
+		if ( is_array( $logs ) && ! empty( $logs ) ) {
 			\WP_CLI::line( '' );
 			\WP_CLI::line( 'Log history:' );
-			$fields = array( 'id', 'event', 'attempt', 'duration_ms', 'error_message', 'created_at' );
-			\WP_CLI\Utils\format_items( 'table', $logs, $fields );
+			$fields    = array( 'id', 'event', 'attempt', 'duration_ms', 'error_message', 'created_at' );
+			$log_items = array();
+			foreach ( $logs as $log_entry ) {
+				if ( is_array( $log_entry ) ) {
+					$normalized_log = array();
+					foreach ( $log_entry as $log_key => $log_value ) {
+						if ( is_string( $log_key ) ) {
+							$normalized_log[ $log_key ] = $log_value;
+						}
+					}
+					$log_items[] = $normalized_log;
+				}
+			}
+			\WP_CLI\Utils\format_items( 'table', $log_items, $fields );
 		}
+	}
+
+	/**
+	 * Render an unknown value for safe terminal display.
+	 *
+	 * @param mixed $value Raw value.
+	 * @return string
+	 */
+	private static function display_value( mixed $value ): string {
+		return is_scalar( $value ) ? (string) $value : '';
 	}
 
 	/**

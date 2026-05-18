@@ -168,7 +168,12 @@ class ActionWorkflowBridge {
 				$reflection = new \ReflectionFunction( $callable );
 			}
 		} elseif ( is_array( $callable ) ) {
-			$reflection = new \ReflectionMethod( $callable[0], $callable[1] );
+			$target = $callable[0] ?? null;
+			$method = $callable[1] ?? null;
+			if ( ( ! is_object( $target ) && ! is_string( $target ) ) || ! is_string( $method ) ) {
+				return 0;
+			}
+			$reflection = new \ReflectionMethod( $target, $method );
 		} elseif ( is_object( $callable ) ) {
 			$reflection = new \ReflectionMethod( $callable, '__invoke' );
 		} else {

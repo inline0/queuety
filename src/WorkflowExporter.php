@@ -39,25 +39,29 @@ class WorkflowExporter {
 		$stmt->execute( array( 'id' => $workflow_id ) );
 		$wf_row = $stmt->fetch();
 
-		if ( ! $wf_row ) {
+		if ( ! is_array( $wf_row ) ) {
 			throw new \RuntimeException( "Workflow {$workflow_id} not found." );
 		}
 
-		$workflow_state = json_decode( $wf_row['state'], true ) ?: array();
+		$state_raw         = $wf_row['state'] ?? '';
+		$workflow_state    = is_string( $state_raw ) ? json_decode( $state_raw, true ) : array();
+		$workflow_state    = is_array( $workflow_state ) ? $workflow_state : array();
+		$parent_workflow   = $wf_row['parent_workflow_id'] ?? null;
+		$parent_step_index = $wf_row['parent_step_index'] ?? null;
 
 		$wf_data = array(
-			'id'                 => (int) $wf_row['id'],
-			'name'               => $wf_row['name'],
-			'status'             => $wf_row['status'],
+			'id'                 => is_scalar( $wf_row['id'] ?? null ) ? (int) $wf_row['id'] : 0,
+			'name'               => $wf_row['name'] ?? null,
+			'status'             => $wf_row['status'] ?? null,
 			'state'              => $workflow_state,
-			'current_step'       => (int) $wf_row['current_step'],
-			'total_steps'        => (int) $wf_row['total_steps'],
-			'parent_workflow_id' => $wf_row['parent_workflow_id'] ? (int) $wf_row['parent_workflow_id'] : null,
-			'parent_step_index'  => $wf_row['parent_step_index'] !== null ? (int) $wf_row['parent_step_index'] : null,
-			'started_at'         => $wf_row['started_at'],
-			'completed_at'       => $wf_row['completed_at'],
-			'failed_at'          => $wf_row['failed_at'],
-			'error_message'      => $wf_row['error_message'],
+			'current_step'       => is_scalar( $wf_row['current_step'] ?? null ) ? (int) $wf_row['current_step'] : 0,
+			'total_steps'        => is_scalar( $wf_row['total_steps'] ?? null ) ? (int) $wf_row['total_steps'] : 0,
+			'parent_workflow_id' => is_scalar( $parent_workflow ) && $parent_workflow ? (int) $parent_workflow : null,
+			'parent_step_index'  => is_scalar( $parent_step_index ) ? (int) $parent_step_index : null,
+			'started_at'         => $wf_row['started_at'] ?? null,
+			'completed_at'       => $wf_row['completed_at'] ?? null,
+			'failed_at'          => $wf_row['failed_at'] ?? null,
+			'error_message'      => $wf_row['error_message'] ?? null,
 			'deadline_at'        => $wf_row['deadline_at'] ?? null,
 			'definition_version' => $workflow_state['_definition_version'] ?? null,
 			'definition_hash'    => $workflow_state['_definition_hash'] ?? null,

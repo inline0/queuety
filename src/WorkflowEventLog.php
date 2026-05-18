@@ -248,7 +248,7 @@ class WorkflowEventLog {
 		$output = array_merge(
 			array(
 				'wait_type'   => $wait_type,
-				'waiting_for' => array_values( array_map( 'strval', $waiting_for ) ),
+				'waiting_for' => array_values( array_map( static fn( mixed $value ): string => is_scalar( $value ) ? (string) $value : '', $waiting_for ) ),
 			),
 			$details
 		);
@@ -429,11 +429,23 @@ class WorkflowEventLog {
 		);
 
 		$row = $stmt->fetch();
-		if ( ! $row || null === $row['state_after'] ) {
+		if ( ! is_array( $row ) || ! isset( $row['state_after'] ) || ! is_string( $row['state_after'] ) ) {
 			return null;
 		}
 
-		return json_decode( $row['state_after'], true );
+		$decoded = json_decode( $row['state_after'], true );
+		if ( ! is_array( $decoded ) ) {
+			return null;
+		}
+
+		$state = array();
+		foreach ( $decoded as $state_key => $state_value ) {
+			if ( is_string( $state_key ) ) {
+				$state[ $state_key ] = $state_value;
+			}
+		}
+
+		return $state;
 	}
 
 	/**
@@ -501,9 +513,12 @@ class WorkflowEventLog {
 	 */
 	private function decode_event_row( array $row ): array {
 		foreach ( self::JSON_COLUMNS as $column ) {
-			$row[ $column ] = null === $row[ $column ]
-				? null
-				: json_decode( (string) $row[ $column ], true );
+			$value = $row[ $column ] ?? null;
+			if ( null === $value ) {
+				$row[ $column ] = null;
+				continue;
+			}
+			$row[ $column ] = json_decode( is_string( $value ) ? $value : '', true );
 		}
 
 		$error                = is_array( $row['error'] ) ? $row['error'] : array();
@@ -525,16 +540,28 @@ class WorkflowEventLog {
 		$stmt->execute( array( 'id' => $workflow_id ) );
 		$row = $stmt->fetch();
 
-		if ( ! $row ) {
+		if ( ! is_array( $row ) ) {
 			throw new \RuntimeException( "Workflow {$workflow_id} not found." );
 		}
 
-		$row['id']           = (int) $row['id'];
-		$row['current_step'] = (int) $row['current_step'];
-		$row['total_steps']  = (int) $row['total_steps'];
-		$row['state']        = json_decode( (string) $row['state'], true ) ?: array();
+		$id_value           = $row['id'] ?? 0;
+		$current_step_value = $row['current_step'] ?? 0;
+		$total_steps_value  = $row['total_steps'] ?? 0;
+		$state_value        = $row['state'] ?? '';
 
-		return $row;
+		$row['id']           = is_scalar( $id_value ) ? (int) $id_value : 0;
+		$row['current_step'] = is_scalar( $current_step_value ) ? (int) $current_step_value : 0;
+		$row['total_steps']  = is_scalar( $total_steps_value ) ? (int) $total_steps_value : 0;
+		$row['state']        = is_string( $state_value ) ? ( json_decode( $state_value, true ) ?: array() ) : array();
+
+		$normalized = array();
+		foreach ( $row as $row_key => $row_value ) {
+			if ( is_string( $row_key ) ) {
+				$normalized[ $row_key ] = $row_value;
+			}
+		}
+
+		return $normalized;
 	}
 
 	/**
@@ -547,7 +574,8 @@ class WorkflowEventLog {
 		$steps = array();
 
 		foreach ( $events as $event ) {
-			$step_index = null === $event['step_index'] ? -1 : (int) $event['step_index'];
+			$step_index_value = $event['step_index'] ?? null;
+			$step_index       = null === $step_index_value || ! is_scalar( $step_index_value ) ? -1 : (int) $step_index_value;
 			if ( ! isset( $steps[ $step_index ] ) ) {
 				$steps[ $step_index ] = array(
 					'step_index' => $step_index,

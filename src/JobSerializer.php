@@ -144,7 +144,7 @@ class JobSerializer {
 
 		$type_name = $type->getName();
 
-		if ( ! $type->isBuiltin() && enum_exists( $type_name ) ) {
+		if ( ! $type->isBuiltin() && enum_exists( $type_name ) && ( is_int( $value ) || is_string( $value ) ) ) {
 			$reflection = new \ReflectionEnum( $type_name );
 			if ( $reflection->isBacked() ) {
 				/**

@@ -42,7 +42,8 @@ class StateMachine {
 	 * @throws \Throwable When transactional persistence fails unexpectedly.
 	 */
 	public function dispatch_definition( array $definition, array $initial_state = array(), array $options = array() ): int {
-		$initial_state_name = trim( (string) ( $definition['initial_state'] ?? '' ) );
+		$initial_raw        = $definition['initial_state'] ?? '';
+		$initial_state_name = is_scalar( $initial_raw ) ? trim( (string) $initial_raw ) : '';
 		$states             = $definition['states'] ?? array();
 
 		if ( '' === $initial_state_name || ! is_array( $states ) || ! isset( $states[ $initial_state_name ] ) ) {
@@ -53,11 +54,14 @@ class StateMachine {
 			$options['idempotency_key'] ?? ( $definition['idempotency_key'] ?? null )
 		);
 
-		$initial_state_def = $states[ $initial_state_name ];
-		$status            = $this->status_for_entered_state( $initial_state_def );
-		$error_message     = null;
-		$completed_at      = null;
-		$failed_at         = null;
+		$initial_state_def_raw = $states[ $initial_state_name ];
+		$initial_state_def     = is_array( $initial_state_def_raw ) ? $initial_state_def_raw : array();
+		$status                = $this->status_for_entered_state( $initial_state_def );
+		$name_raw              = $definition['name'] ?? 'machine';
+		$machine_name          = is_scalar( $name_raw ) ? (string) $name_raw : 'machine';
+		$error_message         = null;
+		$completed_at          = null;
+		$failed_at             = null;
 
 		if ( StateMachineStatus::Completed === $status || StateMachineStatus::Cancelled === $status ) {
 			$completed_at = gmdate( 'Y-m-d H:i:s' );
@@ -86,7 +90,7 @@ class StateMachine {
 			);
 			$stmt->execute(
 				array(
-					'name'               => (string) ( $definition['name'] ?? 'machine' ),
+					'name'               => $machine_name,
 					'status'             => $status->value,
 					'current_state'      => $initial_state_name,
 					'state'              => json_encode( $initial_state, JSON_THROW_ON_ERROR ),
@@ -114,7 +118,7 @@ class StateMachine {
 					'output'      => array( 'status' => $status->value ),
 					'state_after' => $initial_state,
 					'context'     => array(
-						'name'            => (string) ( $definition['name'] ?? 'machine' ),
+						'name'            => $machine_name,
 						'initial_state'   => $initial_state_name,
 						'definition_hash' => $definition['definition_hash'] ?? null,
 					),
@@ -181,29 +185,44 @@ class StateMachine {
 			return null;
 		}
 
-		$definition        = $row['definition'] ? ( json_decode( (string) $row['definition'], true ) ?: array() ) : array();
-		$current_state     = (string) $row['current_state'];
-		$current_state_def = is_array( $definition['states'][ $current_state ] ?? null ) ? $definition['states'][ $current_state ] : array();
+		$definition_raw    = $row['definition'] ?? null;
+		$definition_decode = is_string( $definition_raw ) ? json_decode( $definition_raw, true ) : null;
+		$definition        = is_array( $definition_decode ) ? $definition_decode : array();
+		$current_state_raw = $row['current_state'] ?? '';
+		$current_state     = is_scalar( $current_state_raw ) ? (string) $current_state_raw : '';
+		$states_map        = is_array( $definition['states'] ?? null ) ? $definition['states'] : array();
+		$current_state_def = is_array( $states_map[ $current_state ] ?? null ) ? $states_map[ $current_state ] : array();
+		$transitions_list  = is_array( $current_state_def['transitions'] ?? null ) ? $current_state_def['transitions'] : array();
 		$available_events  = array_values(
 			array_unique(
 				array_map(
-					static fn( array $transition ): string => (string) $transition['event'],
-					is_array( $current_state_def['transitions'] ?? null ) ? $current_state_def['transitions'] : array()
+					static function ( $transition ): string {
+						if ( ! is_array( $transition ) ) {
+							return '';
+						}
+						$event_raw = $transition['event'] ?? '';
+						return is_scalar( $event_raw ) ? (string) $event_raw : '';
+					},
+					$transitions_list
 				)
 			)
 		);
 
+		$state_raw    = $row['state'] ?? null;
+		$state_decode = is_string( $state_raw ) ? json_decode( $state_raw, true ) : null;
+		$state        = is_array( $state_decode ) ? $state_decode : array();
+
 		return new StateMachineState(
-			machine_id: (int) $row['id'],
-			name: (string) $row['name'],
-			status: StateMachineStatus::from( (string) $row['status'] ),
+			machine_id: is_scalar( $row['id'] ?? null ) ? (int) $row['id'] : 0,
+			name: is_scalar( $row['name'] ?? null ) ? (string) $row['name'] : '',
+			status: StateMachineStatus::from( is_scalar( $row['status'] ?? null ) ? (string) $row['status'] : '' ),
 			current_state: $current_state,
-			state: $row['state'] ? ( json_decode( (string) $row['state'], true ) ?: array() ) : array(),
+			state: $state,
 			available_events: $available_events,
-			definition_version: $row['definition_version'] ? (string) $row['definition_version'] : null,
-			definition_hash: $row['definition_hash'] ? (string) $row['definition_hash'] : null,
-			idempotency_key: $row['idempotency_key'] ? (string) $row['idempotency_key'] : null,
-			error_message: $row['error_message'] ? (string) $row['error_message'] : null,
+			definition_version: ! empty( $row['definition_version'] ) && is_scalar( $row['definition_version'] ) ? (string) $row['definition_version'] : null,
+			definition_hash: ! empty( $row['definition_hash'] ) && is_scalar( $row['definition_hash'] ) ? (string) $row['definition_hash'] : null,
+			idempotency_key: ! empty( $row['idempotency_key'] ) && is_scalar( $row['idempotency_key'] ) ? (string) $row['idempotency_key'] : null,
+			error_message: ! empty( $row['error_message'] ) && is_scalar( $row['error_message'] ) ? (string) $row['error_message'] : null,
 			current_action: $this->state_action_class( $current_state_def ),
 			terminal_status: is_string( $current_state_def['terminal_status'] ?? null ) ? $current_state_def['terminal_status'] : null,
 		);
@@ -467,7 +486,7 @@ class StateMachine {
 				)
 			);
 
-			$emitted_event = isset( $result['_event'] ) ? trim( (string) $result['_event'] ) : '';
+			$emitted_event = isset( $result['_event'] ) && is_scalar( $result['_event'] ) ? trim( (string) $result['_event'] ) : '';
 			if ( '' !== $emitted_event ) {
 				if ( empty( $transition_payload ) ) {
 					$transition_payload = $public_updates;
@@ -644,23 +663,44 @@ class StateMachine {
 			throw new \RuntimeException( "State machine {$machine_id} not found." );
 		}
 
-		$definition    = $row['definition'] ? ( json_decode( (string) $row['definition'], true ) ?: array() ) : array();
-		$current_state = (string) $row['current_state'];
-		$state_def     = is_array( $definition['states'][ $current_state ] ?? null ) ? $definition['states'][ $current_state ] : null;
+		$row_assoc = array();
+		foreach ( $row as $key => $value ) {
+			$row_assoc[ (string) $key ] = $value;
+		}
+
+		$definition_raw    = $row_assoc['definition'] ?? null;
+		$definition_decode = is_string( $definition_raw ) ? json_decode( $definition_raw, true ) : null;
+		$definition        = is_array( $definition_decode ) ? $definition_decode : array();
+		$current_state_raw = $row_assoc['current_state'] ?? '';
+		$current_state     = is_scalar( $current_state_raw ) ? (string) $current_state_raw : '';
+		$states_map        = is_array( $definition['states'] ?? null ) ? $definition['states'] : array();
+		$state_def_raw     = $states_map[ $current_state ] ?? null;
+		$state_def         = is_array( $state_def_raw ) ? $state_def_raw : null;
 
 		if ( null === $state_def ) {
 			$pdo->rollBack();
 			throw new \RuntimeException( "State machine {$machine_id} is missing persisted state definition '{$current_state}'." );
 		}
 
+		$state_def_assoc = array();
+		foreach ( $state_def as $key => $value ) {
+			$state_def_assoc[ (string) $key ] = $value;
+		}
+
+		$state_raw    = $row_assoc['state'] ?? null;
+		$state_decode = is_string( $state_raw ) ? json_decode( $state_raw, true ) : null;
+		$state        = is_array( $state_decode ) ? $state_decode : array();
+		$status_raw   = $row_assoc['status'] ?? '';
+		$status_value = is_scalar( $status_raw ) ? (string) $status_raw : '';
+
 		return array(
 			'pdo'           => $pdo,
-			'row'           => $row,
+			'row'           => $row_assoc,
 			'definition'    => $definition,
-			'state'         => $row['state'] ? ( json_decode( (string) $row['state'], true ) ?: array() ) : array(),
-			'state_def'     => $state_def,
+			'state'         => $state,
+			'state_def'     => $state_def_assoc,
 			'current_state' => $current_state,
-			'status'        => StateMachineStatus::from( (string) $row['status'] ),
+			'status'        => StateMachineStatus::from( $status_value ),
 		);
 	}
 
@@ -674,11 +714,21 @@ class StateMachine {
 	 * @throws \RuntimeException When the event is not allowed or the target state is missing.
 	 */
 	private function apply_transition_from_locked_context( array $context, array $state, string $event_name, array $event_payload ): void {
-		$machine_id = (int) $context['row']['id'];
+		$pdo           = $context['pdo'] ?? null;
+		$row           = is_array( $context['row'] ?? null ) ? $context['row'] : array();
+		$definition    = is_array( $context['definition'] ?? null ) ? $context['definition'] : array();
+		$state_def     = is_array( $context['state_def'] ?? null ) ? $context['state_def'] : array();
+		$current_state = is_scalar( $context['current_state'] ?? null ) ? (string) $context['current_state'] : '';
+		$machine_id    = isset( $row['id'] ) && is_scalar( $row['id'] ) ? (int) $row['id'] : 0;
+
+		if ( ! $pdo instanceof \PDO ) {
+			throw new \RuntimeException( 'State machine context is missing a PDO handle.' );
+		}
+
 		$transition = $this->resolve_transition(
 			$machine_id,
-			$context['current_state'],
-			$context['state_def'],
+			$current_state,
+			$state_def,
 			$state,
 			$event_name,
 			$event_payload
@@ -688,14 +738,16 @@ class StateMachine {
 			throw new \RuntimeException(
 				sprintf(
 					"State '%s' does not allow event '%s'.",
-					$context['current_state'],
+					$current_state,
 					$event_name
 				)
 			);
 		}
 
-		$target_state     = (string) $transition['target_state'];
-		$target_state_def = $context['definition']['states'][ $target_state ] ?? null;
+		$target_state_raw = $transition['target_state'] ?? '';
+		$target_state     = is_scalar( $target_state_raw ) ? (string) $target_state_raw : '';
+		$states_map       = is_array( $definition['states'] ?? null ) ? $definition['states'] : array();
+		$target_state_def = $states_map[ $target_state ] ?? null;
 		if ( ! is_array( $target_state_def ) ) {
 			throw new \RuntimeException(
 				sprintf(
@@ -705,37 +757,44 @@ class StateMachine {
 			);
 		}
 
+		$target_state_def_assoc = array();
+		foreach ( $target_state_def as $key => $value ) {
+			$target_state_def_assoc[ (string) $key ] = $value;
+		}
+
+		$transition_name = $transition['name'] ?? $event_name;
+
 		$this->record_machine_event(
 			$machine_id,
-			$context['current_state'],
+			$current_state,
 			'transitioned',
 			$event_name,
 			$state,
 			array(
-				'from' => $context['current_state'],
+				'from' => $current_state,
 				'to'   => $target_state,
-				'name' => $transition['name'] ?? $event_name,
+				'name' => $transition_name,
 			),
 			null,
 			array(
-				'transition_name' => $transition['name'] ?? $event_name,
+				'transition_name' => $transition_name,
 				'input'           => $event_payload,
 				'output'          => array(
-					'from'  => $context['current_state'],
+					'from'  => $current_state,
 					'to'    => $target_state,
-					'name'  => $transition['name'] ?? $event_name,
+					'name'  => $transition_name,
 					'event' => $event_name,
 				),
 				'state_before'    => $state,
 				'state_after'     => $state,
 				'context'         => array(
-					'from' => $context['current_state'],
+					'from' => $current_state,
 					'to'   => $target_state,
 				),
 			)
 		);
 
-		$status       = $this->status_for_entered_state( $target_state_def );
+		$status       = $this->status_for_entered_state( $target_state_def_assoc );
 		$completed_at = null;
 		$failed_at    = null;
 		$error        = null;
@@ -747,7 +806,7 @@ class StateMachine {
 		}
 
 		$this->update_machine_row(
-			$context['pdo'],
+			$pdo,
 			$machine_id,
 			array(
 				'status'        => $status->value,
@@ -760,7 +819,7 @@ class StateMachine {
 		);
 
 		if ( StateMachineStatus::Running === $status ) {
-			$this->enqueue_state_action( $machine_id, $context['definition'], $target_state, $event_name, $event_payload, $state );
+			$this->enqueue_state_action( $machine_id, $definition, $target_state, $event_name, $event_payload, $state );
 		} elseif ( StateMachineStatus::WaitingEvent === $status ) {
 			$this->record_lifecycle_state_event( $machine_id, $target_state, 'machine_waiting', $event_name, $state, $event_payload );
 		} elseif ( StateMachineStatus::Completed === $status ) {
@@ -771,7 +830,7 @@ class StateMachine {
 			$this->record_lifecycle_state_event( $machine_id, $target_state, 'machine_cancelled', $event_name, $state, $event_payload );
 		}
 
-		$context['pdo']->commit();
+		$pdo->commit();
 	}
 
 	/**
@@ -790,14 +849,25 @@ class StateMachine {
 		$transitions = is_array( $state_def['transitions'] ?? null ) ? $state_def['transitions'] : array();
 
 		foreach ( $transitions as $transition ) {
-			if ( $event_name !== (string) ( $transition['event'] ?? '' ) ) {
+			if ( ! is_array( $transition ) ) {
 				continue;
 			}
 
-			$guard_def = $this->transition_guard_definition( $transition );
+			$transition_assoc = array();
+			foreach ( $transition as $t_key => $t_value ) {
+				$transition_assoc[ (string) $t_key ] = $t_value;
+			}
+
+			$event_raw = $transition_assoc['event'] ?? '';
+			if ( $event_name !== ( is_scalar( $event_raw ) ? (string) $event_raw : '' ) ) {
+				continue;
+			}
+
+			$guard_def = $this->transition_guard_definition( $transition_assoc );
 			if ( null !== $guard_def ) {
-				$transition_name = is_string( $transition['name'] ?? null ) ? $transition['name'] : $event_name;
-				$target_state    = (string) ( $transition['target_state'] ?? '' );
+				$transition_name = is_string( $transition_assoc['name'] ?? null ) ? $transition_assoc['name'] : $event_name;
+				$target_raw      = $transition_assoc['target_state'] ?? '';
+				$target_state    = is_scalar( $target_raw ) ? (string) $target_raw : '';
 				$guard_input     = array(
 					'state'         => $state,
 					'event'         => $event_name,
@@ -878,7 +948,7 @@ class StateMachine {
 				}
 			}
 
-			return $transition;
+			return $transition_assoc;
 		}
 
 		return null;
@@ -895,7 +965,13 @@ class StateMachine {
 	 * @param array<string, mixed>|null $state         Public state when the action was queued.
 	 */
 	private function enqueue_state_action( int $machine_id, array $definition, string $state_name, ?string $event_name, array $event_payload, ?array $state = null ): void {
-		$state_def  = is_array( $definition['states'][ $state_name ] ?? null ) ? $definition['states'][ $state_name ] : array();
+		$states_map      = is_array( $definition['states'] ?? null ) ? $definition['states'] : array();
+		$state_def_raw   = $states_map[ $state_name ] ?? array();
+		$state_def_array = is_array( $state_def_raw ) ? $state_def_raw : array();
+		$state_def       = array();
+		foreach ( $state_def_array as $s_key => $s_value ) {
+			$state_def[ (string) $s_key ] = $s_value;
+		}
 		$action_def = $this->state_action_definition( $state_def );
 		if ( null === $action_def ) {
 			return;
@@ -903,9 +979,14 @@ class StateMachine {
 		$action_class    = $action_def['class'];
 		$action_defaults = HandlerMetadata::from_class( $action_class );
 
-		$queue_name = (string) ( $definition['queue'] ?? 'default' );
-		$priority   = Priority::tryFrom( (int) ( $definition['priority'] ?? 0 ) ) ?? Priority::Low;
-		$job_id     = $this->queue->dispatch(
+		$queue_raw    = $definition['queue'] ?? 'default';
+		$queue_name   = is_scalar( $queue_raw ) ? (string) $queue_raw : 'default';
+		$priority_raw = $definition['priority'] ?? 0;
+		$priority_int = is_scalar( $priority_raw ) ? (int) $priority_raw : 0;
+		$priority     = Priority::tryFrom( $priority_int ) ?? Priority::Low;
+		$attempts_raw = $definition['max_attempts'] ?? 3;
+		$max_attempts = max( 1, is_scalar( $attempts_raw ) ? (int) $attempts_raw : 3 );
+		$job_id       = $this->queue->dispatch(
 			handler: '__queuety_state_machine_action',
 			payload: array(
 				'machine_id'    => $machine_id,
@@ -915,7 +996,7 @@ class StateMachine {
 			),
 			queue: $queue_name,
 			priority: $priority,
-			max_attempts: max( 1, (int) ( $definition['max_attempts'] ?? 3 ) ),
+			max_attempts: $max_attempts,
 			concurrency_group: $action_defaults['concurrency_group'],
 			concurrency_limit: $action_defaults['concurrency_limit'],
 			cost_units: $action_defaults['cost_units'] ?? 1,

@@ -250,13 +250,20 @@ final class StepDispatchOptions {
 			return null;
 		}
 
-		$handler = self::branch_handler( $branch );
+		$normalized = array();
+		foreach ( $branch as $branch_key => $branch_value ) {
+			if ( is_string( $branch_key ) ) {
+				$normalized[ $branch_key ] = $branch_value;
+			}
+		}
+
+		$handler = self::branch_handler( $normalized );
 		if ( '' === $handler ) {
 			return null;
 		}
 
-		$branch['class'] = $handler;
-		return $branch;
+		$normalized['class'] = $handler;
+		return $normalized;
 	}
 
 	/**
@@ -409,12 +416,17 @@ final class StepDispatchOptions {
 			return 0;
 		}
 
+		$seconds = $duration['seconds'] ?? 0;
+		$minutes = $duration['minutes'] ?? 0;
+		$hours   = $duration['hours'] ?? 0;
+		$days    = $duration['days'] ?? 0;
+
 		return max(
 			0,
-			(int) ( $duration['seconds'] ?? 0 )
-			+ ( (int) ( $duration['minutes'] ?? 0 ) * 60 )
-			+ ( (int) ( $duration['hours'] ?? 0 ) * 3600 )
-			+ ( (int) ( $duration['days'] ?? 0 ) * 86400 )
+			( is_scalar( $seconds ) ? (int) $seconds : 0 )
+			+ ( ( is_scalar( $minutes ) ? (int) $minutes : 0 ) * 60 )
+			+ ( ( is_scalar( $hours ) ? (int) $hours : 0 ) * 3600 )
+			+ ( ( is_scalar( $days ) ? (int) $days : 0 ) * 86400 )
 		);
 	}
 }

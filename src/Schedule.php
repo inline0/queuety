@@ -51,18 +51,37 @@ readonly class Schedule {
 	 * @return self
 	 */
 	public static function from_row( array $row ): self {
+		$id              = isset( $row['id'] ) && is_scalar( $row['id'] ) ? (int) $row['id'] : 0;
+		$handler         = isset( $row['handler'] ) && is_scalar( $row['handler'] ) ? (string) $row['handler'] : '';
+		$payload_json    = isset( $row['payload'] ) && is_string( $row['payload'] ) ? $row['payload'] : '';
+		$payload_decoded = '' !== $payload_json ? json_decode( $payload_json, true ) : array();
+		$payload         = is_array( $payload_decoded ) ? $payload_decoded : array();
+		$queue           = isset( $row['queue'] ) && is_scalar( $row['queue'] ) ? (string) $row['queue'] : '';
+		$expression      = isset( $row['expression'] ) && is_scalar( $row['expression'] ) ? (string) $row['expression'] : '';
+		$expression_type = $row['expression_type'] ?? '';
+		if ( ! is_int( $expression_type ) && ! is_string( $expression_type ) ) {
+			$expression_type = '';
+		}
+		$last_run_raw   = $row['last_run'] ?? null;
+		$next_run_raw   = $row['next_run'] ?? null;
+		$created_at_raw = $row['created_at'] ?? null;
+		$overlap_raw    = $row['overlap_policy'] ?? 'allow';
+		if ( ! is_int( $overlap_raw ) && ! is_string( $overlap_raw ) ) {
+			$overlap_raw = 'allow';
+		}
+
 		return new self(
-			id: (int) $row['id'],
-			handler: $row['handler'],
-			payload: json_decode( $row['payload'], true ) ?: array(),
-			queue: $row['queue'],
-			expression: $row['expression'],
-			expression_type: ExpressionType::from( $row['expression_type'] ),
-			last_run: ! empty( $row['last_run'] ) ? new \DateTimeImmutable( $row['last_run'] ) : null,
-			next_run: new \DateTimeImmutable( $row['next_run'] ),
-			enabled: (bool) $row['enabled'],
-			created_at: new \DateTimeImmutable( $row['created_at'] ),
-			overlap_policy: OverlapPolicy::tryFrom( $row['overlap_policy'] ?? 'allow' ) ?? OverlapPolicy::Allow,
+			id: $id,
+			handler: $handler,
+			payload: $payload,
+			queue: $queue,
+			expression: $expression,
+			expression_type: ExpressionType::from( $expression_type ),
+			last_run: is_string( $last_run_raw ) && '' !== $last_run_raw ? new \DateTimeImmutable( $last_run_raw ) : null,
+			next_run: new \DateTimeImmutable( is_string( $next_run_raw ) ? $next_run_raw : 'now' ),
+			enabled: (bool) ( $row['enabled'] ?? false ),
+			created_at: new \DateTimeImmutable( is_string( $created_at_raw ) ? $created_at_raw : 'now' ),
+			overlap_policy: OverlapPolicy::tryFrom( $overlap_raw ) ?? OverlapPolicy::Allow,
 		);
 	}
 }

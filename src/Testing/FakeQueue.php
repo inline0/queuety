@@ -92,13 +92,23 @@ class FakeQueue extends Queue {
 		$ids = array();
 
 		foreach ( $jobs as $job ) {
+			$handler          = is_string( $job['handler'] ?? null ) ? $job['handler'] : '';
+			$payload_raw      = $job['payload'] ?? array();
+			$payload          = is_array( $payload_raw ) ? $payload_raw : array();
+			$queue_name       = is_string( $job['queue'] ?? null ) ? $job['queue'] : 'default';
+			$priority         = ( $job['priority'] ?? null ) instanceof Priority ? $job['priority'] : Priority::Low;
+			$delay_raw        = $job['delay'] ?? 0;
+			$delay            = is_scalar( $delay_raw ) ? (int) $delay_raw : 0;
+			$max_attempts_raw = $job['max_attempts'] ?? 3;
+			$max_attempts     = is_scalar( $max_attempts_raw ) ? (int) $max_attempts_raw : 3;
+
 			$ids[] = $this->dispatch(
-				handler: $job['handler'],
-				payload: $job['payload'] ?? array(),
-				queue: $job['queue'] ?? 'default',
-				priority: $job['priority'] ?? Priority::Low,
-				delay: $job['delay'] ?? 0,
-				max_attempts: $job['max_attempts'] ?? 3,
+				handler: $handler,
+				payload: $payload,
+				queue: $queue_name,
+				priority: $priority,
+				delay: $delay,
+				max_attempts: $max_attempts,
 			);
 		}
 

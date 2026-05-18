@@ -104,7 +104,11 @@ class ChunkStore {
 		$stmt->execute( array( 'job_id' => $job_id ) );
 		$row = $stmt->fetch();
 
-		return (int) ( $row['cnt'] ?? 0 );
+		if ( is_array( $row ) && isset( $row['cnt'] ) && is_numeric( $row['cnt'] ) ) {
+			return (int) $row['cnt'];
+		}
+
+		return 0;
 	}
 
 	/**

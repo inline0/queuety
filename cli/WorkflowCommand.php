@@ -27,12 +27,20 @@ class WorkflowCommand extends \WP_CLI_Command {
 			return array();
 		}
 
-		$decoded = json_decode( (string) $value, true );
+		$decoded = json_decode( is_scalar( $value ) ? (string) $value : '', true );
 		if ( ! is_array( $decoded ) ) {
 			\WP_CLI::error( "--{$key} must be a JSON object." );
+			return array();
 		}
 
-		return $decoded;
+		$normalized = array();
+		foreach ( $decoded as $decoded_key => $decoded_value ) {
+			if ( is_string( $decoded_key ) ) {
+				$normalized[ $decoded_key ] = $decoded_value;
+			}
+		}
+
+		return $normalized;
 	}
 
 	/**
@@ -74,7 +82,7 @@ class WorkflowCommand extends \WP_CLI_Command {
 		}
 
 		if ( null !== $state->wait_type && ! empty( $state->waiting_for ) ) {
-			\WP_CLI::log( 'Waiting:  ' . $state->wait_type . ' => ' . implode( ', ', array_map( 'strval', $state->waiting_for ) ) );
+			\WP_CLI::log( 'Waiting:  ' . $state->wait_type . ' => ' . implode( ', ', array_map( static fn( mixed $value ): string => is_scalar( $value ) ? (string) $value : '', $state->waiting_for ) ) );
 		}
 
 		if ( null !== $state->wait_mode ) {
@@ -140,7 +148,7 @@ class WorkflowCommand extends \WP_CLI_Command {
 		$data   = $this->decode_json_assoc_arg( $assoc_args, 'data' );
 		$signal = $assoc_args['signal'] ?? 'approval';
 
-		Queuety::approve_workflow( (int) $args[0], $data, (string) $signal );
+		Queuety::approve_workflow( (int) $args[0], $data, is_scalar( $signal ) ? (string) $signal : 'approval' );
 		\WP_CLI::success( "Approval sent to workflow #{$args[0]}." );
 	}
 
@@ -166,7 +174,7 @@ class WorkflowCommand extends \WP_CLI_Command {
 		$data   = $this->decode_json_assoc_arg( $assoc_args, 'data' );
 		$signal = $assoc_args['signal'] ?? 'rejected';
 
-		Queuety::reject_workflow( (int) $args[0], $data, (string) $signal );
+		Queuety::reject_workflow( (int) $args[0], $data, is_scalar( $signal ) ? (string) $signal : 'rejected' );
 		\WP_CLI::success( "Rejection sent to workflow #{$args[0]}." );
 	}
 
@@ -192,7 +200,7 @@ class WorkflowCommand extends \WP_CLI_Command {
 		$data   = $this->decode_json_assoc_arg( $assoc_args, 'data' );
 		$signal = $assoc_args['signal'] ?? 'input';
 
-		Queuety::submit_workflow_input( (int) $args[0], $data, (string) $signal );
+		Queuety::submit_workflow_input( (int) $args[0], $data, is_scalar( $signal ) ? (string) $signal : 'input' );
 		\WP_CLI::success( "Input sent to workflow #{$args[0]}." );
 	}
 
@@ -219,7 +227,8 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 */
 	public function artifacts( $args, $assoc_args ) {
 		$workflow_id     = (int) $args[0];
-		$format          = $assoc_args['format'] ?? 'table';
+		$format_arg      = $assoc_args['format'] ?? 'table';
+		$format          = is_scalar( $format_arg ) ? (string) $format_arg : 'table';
 		$include_content = isset( $assoc_args['with-content'] );
 		$artifacts       = Queuety::workflow_artifacts( $workflow_id, $include_content );
 
@@ -339,12 +348,17 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * @return void
 	 */
 	public function list_( $args, $assoc_args ) {
-		$format        = $assoc_args['format'] ?? 'table';
-		$limit         = isset( $assoc_args['limit'] ) ? max( 1, (int) $assoc_args['limit'] ) : 50;
-		$status_filter = null;
+		$format_arg = $assoc_args['format'] ?? 'table';
+		$format     = is_scalar( $format_arg ) ? (string) $format_arg : 'table';
+		$limit_arg  = $assoc_args['limit'] ?? null;
+		$limit      = is_scalar( $limit_arg ) ? max( 1, (int) $limit_arg ) : 50;
 
+		$status_filter = null;
 		if ( isset( $assoc_args['status'] ) ) {
-			$status_filter = \Queuety\Enums\WorkflowStatus::tryFrom( $assoc_args['status'] );
+			$status_arg = $assoc_args['status'];
+			if ( is_int( $status_arg ) || is_string( $status_arg ) ) {
+				$status_filter = \Queuety\Enums\WorkflowStatus::tryFrom( $status_arg );
+			}
 		}
 
 		$workflows = Queuety::list_workflows( $status_filter?->value, $limit );
@@ -360,7 +374,7 @@ class WorkflowCommand extends \WP_CLI_Command {
 				'StepName' => $wf->current_step_name ?? '-',
 				'WaitMode' => $wf->wait_mode ?? '-',
 				'Waiting'  => null !== $wf->wait_type && ! empty( $wf->waiting_for )
-					? $wf->wait_type . ':' . implode( ',', array_map( 'strval', $wf->waiting_for ) )
+					? $wf->wait_type . ':' . implode( ',', array_map( static fn( mixed $value ): string => is_scalar( $value ) ? (string) $value : '', $wf->waiting_for ) )
 					: '-',
 			),
 			$workflows
@@ -395,9 +409,12 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 */
 	public function timeline( $args, $assoc_args ) {
 		$workflow_id = (int) $args[0];
-		$format      = $assoc_args['format'] ?? 'table';
-		$limit       = isset( $assoc_args['limit'] ) ? max( 1, (int) $assoc_args['limit'] ) : 100;
-		$offset      = isset( $assoc_args['offset'] ) ? max( 0, (int) $assoc_args['offset'] ) : 0;
+		$format_arg  = $assoc_args['format'] ?? 'table';
+		$format      = is_scalar( $format_arg ) ? (string) $format_arg : 'table';
+		$limit_arg   = $assoc_args['limit'] ?? null;
+		$limit       = is_scalar( $limit_arg ) ? max( 1, (int) $limit_arg ) : 100;
+		$offset_arg  = $assoc_args['offset'] ?? null;
+		$offset      = is_scalar( $offset_arg ) ? max( 0, (int) $offset_arg ) : 0;
 		$events      = Queuety::workflow_timeline( $workflow_id, $limit, $offset );
 
 		if ( empty( $events ) ) {
@@ -484,8 +501,10 @@ class WorkflowCommand extends \WP_CLI_Command {
 	public function export( $args, $assoc_args ) {
 		try {
 			if ( isset( $assoc_args['output'] ) ) {
-				Queuety::export_workflow_to_file( (int) $args[0], $assoc_args['output'] );
-				\WP_CLI::success( "Workflow #{$args[0]} exported to {$assoc_args['output']}." );
+				$output_arg = $assoc_args['output'];
+				$output     = is_scalar( $output_arg ) ? (string) $output_arg : '';
+				Queuety::export_workflow_to_file( (int) $args[0], $output );
+				\WP_CLI::success( "Workflow #{$args[0]} exported to {$output}." );
 			} else {
 				\WP_CLI::log(
 					json_encode(

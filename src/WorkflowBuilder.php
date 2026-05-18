@@ -1159,8 +1159,10 @@ class WorkflowBuilder {
 		$result = array();
 		foreach ( $this->steps as $step ) {
 			if ( 'run_workflow' === $step['type'] ) {
-				/* @var WorkflowBuilder $builder Run-workflow builder instance. */
-				$builder  = $step['builder'];
+				$builder = $step['builder'] ?? null;
+				if ( ! ( $builder instanceof WorkflowBuilder ) ) {
+					continue;
+				}
 				$result[] = array(
 					'type'                  => 'run_workflow',
 					'name'                  => $step['name'],
@@ -1179,24 +1181,28 @@ class WorkflowBuilder {
 					'compensation'  => $step['compensation'] ?? null,
 				);
 			} elseif ( 'for_each' === $step['type'] ) {
-				$result[] = array(
+				$for_each_mode = $step['mode'] ?? null;
+				$result[]      = array(
 					'type'          => 'for_each',
 					'name'          => $step['name'],
 					'items_key'     => $step['items_key'],
 					'class'         => $step['class'],
 					'result_key'    => $step['result_key'],
-					'mode'          => $step['mode']->value,
+					'mode'          => $for_each_mode instanceof ForEachMode ? $for_each_mode->value : $for_each_mode,
 					'quorum'        => $step['quorum'],
 					'reducer_class' => $step['reducer_class'],
 					'compensation'  => $step['compensation'] ?? null,
 				);
 			} elseif ( 'wait_for_signal' === $step['type'] ) {
-				$result[] = array(
+				$signal_names = $step['signal_names'] ?? array();
+				$wait_mode    = $step['wait_mode'] ?? null;
+				$first_signal = is_array( $signal_names ) ? ( $signal_names[0] ?? null ) : null;
+				$result[]     = array(
 					'type'            => 'wait_for_signal',
 					'name'            => $step['name'],
-					'signal_name'     => $step['signal_names'][0],
-					'signal_names'    => $step['signal_names'],
-					'wait_mode'       => $step['wait_mode']->value,
+					'signal_name'     => $first_signal,
+					'signal_names'    => $signal_names,
+					'wait_mode'       => $wait_mode instanceof WaitMode ? $wait_mode->value : $wait_mode,
 					'result_key'      => $step['result_key'],
 					'match_payload'   => $step['match_payload'] ?? array(),
 					'correlation_key' => $step['correlation_key'] ?? null,
@@ -1205,13 +1211,14 @@ class WorkflowBuilder {
 					'compensation'    => $step['compensation'] ?? null,
 				);
 			} elseif ( 'wait_for_workflows' === $step['type'] ) {
-				$result[] = array(
+				$workflow_wait_mode = $step['wait_mode'] ?? null;
+				$result[]           = array(
 					'type'               => 'wait_for_workflows',
 					'name'               => $step['name'],
 					'workflow_ids'       => $step['workflow_ids'] ?? null,
 					'workflow_id_key'    => $step['workflow_id_key'] ?? null,
 					'workflow_group_key' => $step['workflow_group_key'] ?? null,
-					'wait_mode'          => $step['wait_mode']->value,
+					'wait_mode'          => $workflow_wait_mode instanceof WaitMode ? $workflow_wait_mode->value : $workflow_wait_mode,
 					'quorum'             => $step['quorum'] ?? null,
 					'result_key'         => $step['result_key'],
 					'compensation'       => $step['compensation'] ?? null,
@@ -1596,6 +1603,8 @@ class WorkflowBuilder {
 				0,
 			);
 		} elseif ( 'delay' === $step_def['type'] ) {
+			$delay_seconds_value = $step_def['delay_seconds'] ?? 0;
+			$delay_seconds       = is_scalar( $delay_seconds_value ) ? (int) $delay_seconds_value : 0;
 			$this->dispatch_step_job(
 				$step_def,
 				'__queuety_delay',
@@ -1603,7 +1612,7 @@ class WorkflowBuilder {
 				$workflow_id,
 				$step_index,
 				0,
-				(int) ( $step_def['delay_seconds'] ?? 0 ),
+				$delay_seconds,
 			);
 		} elseif ( 'for_each' === $step_def['type'] ) {
 			$this->dispatch_step_job(
@@ -1652,9 +1661,10 @@ class WorkflowBuilder {
 				0,
 			);
 		} else {
+			$class_value = $step_def['class'] ?? '';
 			$this->dispatch_step_job(
 				$step_def,
-				$step_def['class'],
+				is_string( $class_value ) ? $class_value : '',
 				StepDispatchOptions::payload( $step_def ),
 				$workflow_id,
 				$step_index,

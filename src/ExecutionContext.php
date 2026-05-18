@@ -157,22 +157,38 @@ final class ExecutionContext {
 			self::set_trace_output( $trace['output'] );
 		}
 		if ( isset( $trace['context'] ) && is_array( $trace['context'] ) ) {
-			self::add_trace_context( $trace['context'] );
+			self::add_trace_context( self::ensure_string_keys( $trace['context'] ) );
 		}
 		if ( isset( $trace['artifacts'] ) && is_array( $trace['artifacts'] ) ) {
 			foreach ( $trace['artifacts'] as $artifact ) {
 				if ( is_array( $artifact ) ) {
-					self::add_trace_artifact( $artifact );
+					self::add_trace_artifact( self::ensure_string_keys( $artifact ) );
 				}
 			}
 		}
 		if ( isset( $trace['chunks'] ) && is_array( $trace['chunks'] ) ) {
 			foreach ( $trace['chunks'] as $chunk ) {
 				if ( is_array( $chunk ) ) {
-					self::add_trace_chunk( $chunk );
+					self::add_trace_chunk( self::ensure_string_keys( $chunk ) );
 				}
 			}
 		}
+	}
+
+	/**
+	 * Filter to only entries with string keys.
+	 *
+	 * @param array<mixed, mixed> $values Values to filter.
+	 * @return array<string, mixed>
+	 */
+	private static function ensure_string_keys( array $values ): array {
+		$result = array();
+		foreach ( $values as $key => $value ) {
+			if ( is_string( $key ) ) {
+				$result[ $key ] = $value;
+			}
+		}
+		return $result;
 	}
 
 	/**

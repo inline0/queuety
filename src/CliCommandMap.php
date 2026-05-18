@@ -59,9 +59,13 @@ class CliCommandMap {
 		}
 
 		$adapter = $definition['adapter'];
-		$plan    = call_user_func( $adapter, $args, $assoc_args );
+		if ( ! is_callable( $adapter ) ) {
+			throw new \RuntimeException( 'CLI adapter is not callable.' );
+		}
+		$plan = call_user_func( $adapter, $args, $assoc_args );
 		if ( ! is_array( $plan ) ) {
-			throw new \RuntimeException( sprintf( 'CLI adapter did not return a plan: %s', $adapter ) );
+			$adapter_label = is_scalar( $adapter ) ? (string) $adapter : 'callable';
+			throw new \RuntimeException( sprintf( 'CLI adapter did not return a plan: %s', $adapter_label ) );
 		}
 
 		return array_merge(
@@ -91,8 +95,17 @@ class CliCommandMap {
 		$definitions = array();
 
 		foreach ( self::raw_definitions() as $definition ) {
-			$definition['wp_cli_command']                             = 'wp ' . Queuety::cli_command() . ' ' . self::path_key( $definition['cli_path'] );
-			$definitions[ self::path_key( $definition['cli_path'] ) ] = $definition;
+			$cli_path                            = is_array( $definition['cli_path'] ?? null )
+				? array_values(
+					array_map(
+						static fn( mixed $segment ): string => is_scalar( $segment ) ? (string) $segment : '',
+						$definition['cli_path']
+					)
+				)
+				: array();
+			$key                                 = self::path_key( $cli_path );
+			$definition['wp_cli_command']        = 'wp ' . Queuety::cli_command() . ' ' . $key;
+			$definitions[ $key ]                 = $definition;
 		}
 
 		return $definitions;
@@ -718,7 +731,7 @@ class CliCommandMap {
 	 * @param array<int, array<string, string>> $targets Potential execution targets.
 	 * @param string                            $adapter Adapter callable.
 	 * @param string                            $summary Short intent summary.
-	 * @return array<string, mixed>
+	 * @return array{operation: string, cli_path: array<int, string>, handler: array{class: string, method: string}, targets: array<int, array<string, string>>, adapter: string, summary: string}
 	 */
 	private static function definition_item( string $operation, array $cli_path, string $handler_class, string $handler_method, array $targets, string $adapter, string $summary ): array {
 		return array(

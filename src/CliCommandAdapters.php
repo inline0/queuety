@@ -208,7 +208,7 @@ class CliCommandAdapters {
 	 */
 	public static function job_purge( array $args, array $assoc_args ): array {
 		$older_than = array_key_exists( 'older-than', $assoc_args )
-			? (int) $assoc_args['older-than']
+			? ( is_scalar( $assoc_args['older-than'] ) ? (int) $assoc_args['older-than'] : 0 )
 			: null;
 
 		return self::php_plan(
@@ -562,9 +562,10 @@ class CliCommandAdapters {
 		$workflow_id = (int) self::required_positional( $args, 0, 'id' );
 
 		if ( array_key_exists( 'output', $assoc_args ) && null !== $assoc_args['output'] ) {
+			$output = $assoc_args['output'];
 			return self::php_plan(
 				Queuety::class . '::export_workflow_to_file',
-				array( $workflow_id, (string) $assoc_args['output'] )
+				array( $workflow_id, is_scalar( $output ) ? (string) $output : '' )
 			);
 		}
 
@@ -618,8 +619,8 @@ class CliCommandAdapters {
 	 */
 	public static function log_query( array $args, array $assoc_args ): array {
 		$filters = array(
-			'job_id'      => array_key_exists( 'job', $assoc_args ) ? (int) $assoc_args['job'] : null,
-			'workflow_id' => array_key_exists( 'workflow', $assoc_args ) ? (int) $assoc_args['workflow'] : null,
+			'job_id'      => array_key_exists( 'job', $assoc_args ) && is_scalar( $assoc_args['job'] ) ? (int) $assoc_args['job'] : null,
+			'workflow_id' => array_key_exists( 'workflow', $assoc_args ) && is_scalar( $assoc_args['workflow'] ) ? (int) $assoc_args['workflow'] : null,
 			'handler'     => self::optional_assoc( $assoc_args, 'handler' ),
 			'event'       => self::optional_assoc( $assoc_args, 'event' ),
 			'since'       => self::optional_assoc( $assoc_args, 'since' ),
@@ -656,9 +657,10 @@ class CliCommandAdapters {
 			throw new \InvalidArgumentException( 'Missing required associative argument: older-than' );
 		}
 
+		$older_than = $assoc_args['older-than'];
 		return self::php_plan(
 			Queuety::class . '::purge_logs',
-			array( (int) $assoc_args['older-than'] )
+			array( is_scalar( $older_than ) ? (int) $older_than : 0 )
 		);
 	}
 
@@ -831,7 +833,8 @@ class CliCommandAdapters {
 			return null;
 		}
 
-		return (string) $assoc_args[ $name ];
+		$value = $assoc_args[ $name ];
+		return is_scalar( $value ) ? (string) $value : null;
 	}
 
 	/**
@@ -847,7 +850,8 @@ class CliCommandAdapters {
 			return $default;
 		}
 
-		return (int) $assoc_args[ $name ];
+		$value = $assoc_args[ $name ];
+		return is_scalar( $value ) ? (int) $value : $default;
 	}
 
 	/**
@@ -871,7 +875,8 @@ class CliCommandAdapters {
 			return true;
 		}
 
-		return ! in_array( strtolower( (string) $value ), array( '', '0', 'false', 'no', 'off' ), true );
+		$str = is_scalar( $value ) ? (string) $value : '';
+		return ! in_array( strtolower( $str ), array( '', '0', 'false', 'no', 'off' ), true );
 	}
 
 	/**

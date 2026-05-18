@@ -196,16 +196,27 @@ class BatchBuilder {
 					queue: $this->queue,
 					batch_id: $batch_id,
 				);
-			} elseif ( is_array( $job ) && isset( $job['handler'] ) ) {
-				$handler_defaults = $this->handler_defaults( $job['handler'] );
+			} elseif ( is_array( $job ) && isset( $job['handler'] ) && is_string( $job['handler'] ) ) {
+				$handler          = $job['handler'];
+				$handler_defaults = $this->handler_defaults( $handler );
+
+				$payload_raw      = $job['payload'] ?? array();
+				$payload          = is_array( $payload_raw ) ? $payload_raw : array();
+				$queue_name       = is_string( $job['queue'] ?? null ) ? $job['queue'] : $this->queue;
+				$priority         = ( $job['priority'] ?? null ) instanceof Priority ? $job['priority'] : Priority::Low;
+				$delay_raw        = $job['delay'] ?? 0;
+				$delay            = is_scalar( $delay_raw ) ? (int) $delay_raw : 0;
+				$default_attempts = $handler_defaults['max_attempts'] ?? 3;
+				$max_attempts_raw = $job['max_attempts'] ?? $default_attempts;
+				$max_attempts     = is_scalar( $max_attempts_raw ) ? (int) $max_attempts_raw : 3;
 
 				$this->queue_ops->dispatch(
-					handler: $job['handler'],
-					payload: $job['payload'] ?? array(),
-					queue: $job['queue'] ?? $this->queue,
-					priority: $job['priority'] ?? Priority::Low,
-					delay: $job['delay'] ?? 0,
-					max_attempts: $job['max_attempts'] ?? ( $handler_defaults['max_attempts'] ?? 3 ),
+					handler: $handler,
+					payload: $payload,
+					queue: $queue_name,
+					priority: $priority,
+					delay: $delay,
+					max_attempts: $max_attempts,
 					batch_id: $batch_id,
 				);
 			}

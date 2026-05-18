@@ -114,7 +114,18 @@ class ArtifactStore {
 		);
 
 		$row = $stmt->fetch();
-		return $row ? $this->map_row( $row, true ) : null;
+		if ( ! is_array( $row ) ) {
+			return null;
+		}
+
+		$typed = array();
+		foreach ( $row as $key => $value ) {
+			if ( is_string( $key ) ) {
+				$typed[ $key ] = $value;
+			}
+		}
+
+		return $this->map_row( $typed, true );
 	}
 
 	/**
@@ -247,21 +258,31 @@ class ArtifactStore {
 	 * @return array<string,mixed>
 	 */
 	private function map_row( array $row, bool $include_content ): array {
+		$id_raw         = $row['id'] ?? 0;
+		$workflow_raw   = $row['workflow_id'] ?? 0;
+		$step_index_raw = $row['step_index'] ?? null;
+		$metadata_raw   = $row['metadata'] ?? null;
+		$kind_raw       = $row['kind'] ?? 'json';
+		$kind_str       = is_string( $kind_raw ) ? $kind_raw : 'json';
+
 		$result = array(
-			'id'          => (int) $row['id'],
-			'workflow_id' => (int) $row['workflow_id'],
-			'key'         => $row['artifact_key'],
-			'kind'        => $row['kind'],
-			'step_index'  => null !== $row['step_index'] ? (int) $row['step_index'] : null,
-			'metadata'    => null !== $row['metadata'] ? json_decode( $row['metadata'], true ) : array(),
-			'created_at'  => $row['created_at'],
-			'updated_at'  => $row['updated_at'],
+			'id'          => is_numeric( $id_raw ) ? (int) $id_raw : 0,
+			'workflow_id' => is_numeric( $workflow_raw ) ? (int) $workflow_raw : 0,
+			'key'         => $row['artifact_key'] ?? null,
+			'kind'        => $kind_str,
+			'step_index'  => is_numeric( $step_index_raw ) ? (int) $step_index_raw : null,
+			'metadata'    => is_string( $metadata_raw ) ? json_decode( $metadata_raw, true ) : array(),
+			'created_at'  => $row['created_at'] ?? null,
+			'updated_at'  => $row['updated_at'] ?? null,
 		);
 
 		if ( $include_content ) {
-			$result['content'] = 'json' === strtolower( (string) $row['kind'] )
-				? json_decode( $row['content'], true )
-				: $row['content'];
+			$content_raw = $row['content'] ?? null;
+			if ( 'json' === strtolower( $kind_str ) ) {
+				$result['content'] = is_string( $content_raw ) ? json_decode( $content_raw, true ) : null;
+			} else {
+				$result['content'] = $content_raw;
+			}
 		}
 
 		return $result;

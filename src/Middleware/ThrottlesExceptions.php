@@ -78,7 +78,11 @@ class ThrottlesExceptions implements Middleware {
 			$stmt->execute( array( 'key' => $key ) );
 			$row = $stmt->fetch();
 
-			return $row ? (int) $row['owner'] : 0;
+			if ( ! is_array( $row ) ) {
+				return 0;
+			}
+			$owner = $row['owner'] ?? 0;
+			return is_scalar( $owner ) ? (int) $owner : 0;
 		} catch ( \Throwable ) {
 			return 0;
 		}

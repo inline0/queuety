@@ -96,7 +96,7 @@ class Queue {
 				)
 			);
 			$existing = $check->fetch();
-			if ( $existing ) {
+			if ( is_array( $existing ) && isset( $existing['id'] ) && is_scalar( $existing['id'] ) ) {
 				return (int) $existing['id'];
 			}
 		}
@@ -152,12 +152,14 @@ class Queue {
 		$now          = time();
 
 		foreach ( $jobs as $i => $job ) {
-			$handler      = $job['handler'];
-			$payload      = $job['payload'] ?? array();
-			$queue        = $job['queue'] ?? 'default';
+			$handler      = is_string( $job['handler'] ?? null ) ? $job['handler'] : '';
+			$payload_raw  = $job['payload'] ?? array();
+			$payload      = is_array( $payload_raw ) ? $payload_raw : array();
+			$queue        = is_string( $job['queue'] ?? null ) ? $job['queue'] : 'default';
 			$priority     = $job['priority'] ?? Priority::Low;
-			$delay        = $job['delay'] ?? 0;
-			$max_attempts = $job['max_attempts'] ?? 3;
+			$delay_raw    = $job['delay'] ?? 0;
+			$delay        = is_scalar( $delay_raw ) ? (int) $delay_raw : 0;
+			$max_attempts = is_scalar( $job['max_attempts'] ?? null ) ? (int) $job['max_attempts'] : 3;
 
 			if ( $priority instanceof Priority ) {
 				$priority = $priority->value;
@@ -179,7 +181,7 @@ class Queue {
 			$params[ $q_key ]  = $queue;
 			$params[ $h_key ]  = $handler;
 			$params[ $p_key ]  = $payload_json;
-			$params[ $pr_key ] = (int) $priority;
+			$params[ $pr_key ] = is_scalar( $priority ) ? (int) $priority : 0;
 			$params[ $s_key ]  = JobStatus::Pending->value;
 			$params[ $m_key ]  = $max_attempts;
 			$params[ $a_key ]  = $available_at;
@@ -260,7 +262,7 @@ class Queue {
 				);
 
 			$row = $stmt->fetch();
-			if ( ! $row ) {
+			if ( ! is_array( $row ) ) {
 				$pdo->rollBack();
 				return null;
 			}
@@ -273,17 +275,23 @@ class Queue {
 			$update->execute(
 				array(
 					'status' => JobStatus::Processing->value,
-					'id'     => $row['id'],
+					'id'     => $row['id'] ?? null,
 				)
 			);
 
 			$pdo->commit();
 
+			$attempts_raw       = $row['attempts'] ?? 0;
 			$row['status']      = JobStatus::Processing->value;
 			$row['reserved_at'] = gmdate( 'Y-m-d H:i:s' );
-			$row['attempts']    = (int) $row['attempts'] + 1;
+			$row['attempts']    = ( is_scalar( $attempts_raw ) ? (int) $attempts_raw : 0 ) + 1;
 
-			return Job::from_row( $row );
+			$row_assoc = array();
+			foreach ( $row as $key => $value ) {
+				$row_assoc[ (string) $key ] = $value;
+			}
+
+			return Job::from_row( $row_assoc );
 		} catch ( \Throwable $e ) {
 			$pdo->rollBack();
 			throw $e;
@@ -424,7 +432,16 @@ class Queue {
 		$stmt  = $this->conn->pdo()->prepare( "SELECT * FROM {$table} WHERE id = :id" );
 		$stmt->execute( array( 'id' => $job_id ) );
 		$row = $stmt->fetch();
-		return $row ? Job::from_row( $row ) : null;
+		if ( ! is_array( $row ) ) {
+			return null;
+		}
+
+		$row_assoc = array();
+		foreach ( $row as $key => $value ) {
+			$row_assoc[ (string) $key ] = $value;
+		}
+
+		return Job::from_row( $row_assoc );
 	}
 
 	/**
@@ -450,11 +467,16 @@ class Queue {
 		$counts = array();
 		while ( true ) {
 			$row = $stmt->fetch();
-			if ( false === $row ) {
+			if ( ! is_array( $row ) ) {
 				break;
 			}
 
-			$counts[ (string) $row['status'] ] = (int) $row['cnt'];
+			$status_raw = $row['status'] ?? '';
+			$cnt_raw    = $row['cnt'] ?? 0;
+			$status_key = is_scalar( $status_raw ) ? (string) $status_raw : '';
+			$cnt        = is_scalar( $cnt_raw ) ? (int) $cnt_raw : 0;
+
+			$counts[ $status_key ] = $cnt;
 		}
 
 		return array(
@@ -679,7 +701,7 @@ class Queue {
 		$stmt->execute( array( 'queue' => $queue ) );
 		$row = $stmt->fetch();
 
-		$paused = $row && (bool) $row['paused'];
+		$paused = is_array( $row ) && ! empty( $row['paused'] );
 
 		if ( null !== $this->cache ) {
 			$this->cache->set( "queuety:paused:{$queue}", $paused, Config::cache_ttl() );

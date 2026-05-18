@@ -121,7 +121,8 @@ class RateLimiter {
 			$cached    = $this->cache->get( $cache_key );
 
 			if ( null !== $cached ) {
-				$this->counters[ $handler ]     = max( $this->counters[ $handler ], (int) $cached );
+				$cached_count                   = is_numeric( $cached ) ? (int) $cached : 0;
+				$this->counters[ $handler ]     = max( $this->counters[ $handler ], $cached_count );
 				$this->last_refresh[ $handler ] = microtime( true );
 
 				return $this->counters[ $handler ] >= $limit['max'];
@@ -205,7 +206,9 @@ class RateLimiter {
 
 		$row = $stmt->fetch();
 
-		$this->counters[ $handler ]     = $row ? (int) $row['cnt'] : 0;
+		$this->counters[ $handler ]     = is_array( $row ) && isset( $row['cnt'] ) && is_numeric( $row['cnt'] )
+			? (int) $row['cnt']
+			: 0;
 		$this->last_refresh[ $handler ] = microtime( true );
 
 		if ( null !== $this->cache ) {

@@ -195,7 +195,7 @@ class Config {
 				continue;
 			}
 
-			$limit = (int) $limit;
+			$limit = is_scalar( $limit ) ? (int) $limit : 0;
 			if ( $limit < 1 ) {
 				continue;
 			}
@@ -275,7 +275,9 @@ class Config {
 	 */
 	private static function table_name( string $constant, string $suffix ): string {
 		if ( defined( $constant ) ) {
-			return (string) constant( $constant );
+			$override = constant( $constant );
+
+			return is_scalar( $override ) ? (string) $override : '';
 		}
 
 		return self::table_prefix() . $suffix;

@@ -157,7 +157,7 @@ class MysqliPdoStatement extends \PDOStatement {
 	 */
 	public function fetchColumn( int $column = 0 ): mixed {
 		$row = $this->fetch( \PDO::FETCH_NUM );
-		if ( false === $row ) {
+		if ( ! is_array( $row ) ) {
 			return false;
 		}
 

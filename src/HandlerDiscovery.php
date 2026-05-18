@@ -38,6 +38,10 @@ class HandlerDiscovery {
 		);
 
 		foreach ( $iterator as $file ) {
+			if ( ! $file instanceof \SplFileInfo ) {
+				continue;
+			}
+
 			if ( ! $file->isFile() || 'php' !== $file->getExtension() ) {
 				continue;
 			}

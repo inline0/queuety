@@ -108,14 +108,25 @@ class HandlerMetadata {
 			$defaults['max_attempts'] = max( 1, (int) $config['max_attempts'] );
 		}
 
-		if ( isset( $config['backoff'] ) && ( is_string( $config['backoff'] ) || is_array( $config['backoff'] ) ) ) {
+		if ( isset( $config['backoff'] ) && is_string( $config['backoff'] ) ) {
 			$defaults['backoff'] = $config['backoff'];
+		} elseif ( isset( $config['backoff'] ) && is_array( $config['backoff'] ) ) {
+			$backoff_config = array();
+			foreach ( $config['backoff'] as $backoff_key => $backoff_value ) {
+				if ( is_string( $backoff_key ) ) {
+					$backoff_config[ $backoff_key ] = $backoff_value;
+				}
+			}
+			$defaults['backoff'] = $backoff_config;
 		}
 
 		if ( isset( $config['rate_limit'] ) && is_array( $config['rate_limit'] ) && count( $config['rate_limit'] ) >= 2 ) {
+			$rate_limit_values = array_values( $config['rate_limit'] );
+			$rate_limit_first  = is_scalar( $rate_limit_values[0] ) ? (int) $rate_limit_values[0] : 0;
+			$rate_limit_second = is_scalar( $rate_limit_values[1] ) ? (int) $rate_limit_values[1] : 0;
 			$defaults['rate_limit'] = array(
-				(int) $config['rate_limit'][0],
-				(int) $config['rate_limit'][1],
+				$rate_limit_first,
+				$rate_limit_second,
 			);
 		}
 

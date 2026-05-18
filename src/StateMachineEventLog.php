@@ -168,11 +168,23 @@ class StateMachineEventLog {
 		);
 
 		$row = $stmt->fetch();
-		if ( ! $row || null === $row['state_after'] ) {
+		if ( ! is_array( $row ) ) {
+			return null;
+		}
+		$state_after = $row['state_after'] ?? null;
+		if ( null === $state_after || ! is_string( $state_after ) ) {
 			return null;
 		}
 
-		return json_decode( (string) $row['state_after'], true );
+		$decoded = json_decode( $state_after, true );
+		if ( ! is_array( $decoded ) ) {
+			return null;
+		}
+		$normalized = array();
+		foreach ( $decoded as $k => $v ) {
+			$normalized[ (string) $k ] = $v;
+		}
+		return $normalized;
 	}
 
 	/**
@@ -239,9 +251,13 @@ class StateMachineEventLog {
 	 */
 	private function decode_event_row( array $row ): array {
 		foreach ( self::JSON_COLUMNS as $column ) {
-			$row[ $column ] = null === $row[ $column ]
-				? null
-				: json_decode( (string) $row[ $column ], true );
+			$value = $row[ $column ] ?? null;
+			if ( null === $value ) {
+				$row[ $column ] = null;
+				continue;
+			}
+			$json           = is_string( $value ) ? $value : '';
+			$row[ $column ] = json_decode( $json, true );
 		}
 
 		$error                = is_array( $row['error'] ) ? $row['error'] : array();
@@ -263,15 +279,38 @@ class StateMachineEventLog {
 		$stmt->execute( array( 'id' => $machine_id ) );
 		$row = $stmt->fetch();
 
-		if ( ! $row ) {
+		if ( ! is_array( $row ) ) {
 			throw new \RuntimeException( "State machine {$machine_id} not found." );
 		}
 
-		$row['id']         = (int) $row['id'];
-		$row['state']      = json_decode( (string) $row['state'], true ) ?: array();
-		$row['definition'] = json_decode( (string) $row['definition'], true ) ?: array();
+		$normalized = array();
+		foreach ( $row as $key => $value ) {
+			$normalized[ (string) $key ] = $value;
+		}
 
-		return $row;
+		$id_value         = $normalized['id'] ?? 0;
+		$state_value      = $normalized['state'] ?? null;
+		$definition_value = $normalized['definition'] ?? null;
+
+		$normalized['id']         = is_scalar( $id_value ) ? (int) $id_value : 0;
+		$normalized['state']      = self::decode_json_array( is_string( $state_value ) ? $state_value : '' );
+		$normalized['definition'] = self::decode_json_array( is_string( $definition_value ) ? $definition_value : '' );
+
+		return $normalized;
+	}
+
+	/**
+	 * Decode a JSON string into an array (empty on failure).
+	 *
+	 * @param string $json JSON string.
+	 * @return array<int|string, mixed>
+	 */
+	private static function decode_json_array( string $json ): array {
+		if ( '' === $json ) {
+			return array();
+		}
+		$decoded = json_decode( $json, true );
+		return is_array( $decoded ) ? $decoded : array();
 	}
 
 	/**
@@ -284,7 +323,8 @@ class StateMachineEventLog {
 		$states = array();
 
 		foreach ( $events as $event ) {
-			$state_name = (string) $event['state_name'];
+			$state_name_raw = $event['state_name'] ?? '';
+			$state_name     = is_scalar( $state_name_raw ) ? (string) $state_name_raw : '';
 			if ( ! isset( $states[ $state_name ] ) ) {
 				$states[ $state_name ] = array(
 					'state_name' => $state_name,
@@ -329,7 +369,10 @@ class StateMachineEventLog {
 			array_unique(
 				array_filter(
 					array_map(
-						static fn( array $event ): int => isset( $event['job_id'] ) ? (int) $event['job_id'] : 0,
+						static function ( array $event ): int {
+							$job_id = $event['job_id'] ?? null;
+							return is_scalar( $job_id ) ? (int) $job_id : 0;
+						},
 						$events
 					),
 					static fn( int $job_id ): bool => $job_id > 0

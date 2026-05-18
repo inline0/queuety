@@ -57,17 +57,17 @@ class WorkflowReplayer {
 	 * @throws \Throwable If the database transaction fails.
 	 */
 	public static function replay( array $export_data, Connection $conn ): int {
-		if ( ! isset( $export_data['workflow'] ) ) {
+		if ( ! isset( $export_data['workflow'] ) || ! is_array( $export_data['workflow'] ) ) {
 			throw new \RuntimeException( 'Invalid export data: missing workflow key.' );
 		}
 
 		$wf_data   = $export_data['workflow'];
-		$events    = $export_data['events'] ?? array();
-		$logs      = $export_data['logs'] ?? array();
-		$signals   = $export_data['signals'] ?? array();
-		$waits     = $export_data['wait_dependencies'] ?? array();
-		$artifacts = $export_data['artifacts'] ?? array();
-		$chunks    = $export_data['chunks'] ?? array();
+		$events    = is_array( $export_data['events'] ?? null ) ? $export_data['events'] : array();
+		$logs      = is_array( $export_data['logs'] ?? null ) ? $export_data['logs'] : array();
+		$signals   = is_array( $export_data['signals'] ?? null ) ? $export_data['signals'] : array();
+		$waits     = is_array( $export_data['wait_dependencies'] ?? null ) ? $export_data['wait_dependencies'] : array();
+		$artifacts = is_array( $export_data['artifacts'] ?? null ) ? $export_data['artifacts'] : array();
+		$chunks    = is_array( $export_data['chunks'] ?? null ) ? $export_data['chunks'] : array();
 
 		$pdo     = $conn->pdo();
 		$wf_tbl  = $conn->table( Config::table_workflows() );
@@ -78,14 +78,21 @@ class WorkflowReplayer {
 		$art_tbl = $conn->table( Config::table_artifacts() );
 		$chk_tbl = $conn->table( Config::table_chunks() );
 
-		$state         = $wf_data['state'] ?? array();
-		$current_step  = (int) ( $wf_data['current_step'] ?? 0 );
-		$total_steps   = (int) ( $wf_data['total_steps'] ?? 0 );
-		$steps         = $state['_steps'] ?? array();
-		$queue_name    = $state['_queue'] ?? 'default';
-		$priority_val  = $state['_priority'] ?? 0;
-		$max_attempts  = $state['_max_attempts'] ?? 3;
-		$source_status = (string) ( $wf_data['status'] ?? 'running' );
+		$state            = is_array( $wf_data['state'] ?? null ) ? $wf_data['state'] : array();
+		$current_step_raw = $wf_data['current_step'] ?? 0;
+		$total_steps_raw  = $wf_data['total_steps'] ?? 0;
+		$current_step     = is_numeric( $current_step_raw ) ? (int) $current_step_raw : 0;
+		$total_steps      = is_numeric( $total_steps_raw ) ? (int) $total_steps_raw : 0;
+		$steps            = is_array( $state['_steps'] ?? null ) ? $state['_steps'] : array();
+		$queue_name_raw   = $state['_queue'] ?? 'default';
+		$queue_name       = is_string( $queue_name_raw ) ? $queue_name_raw : 'default';
+		$priority_val     = $state['_priority'] ?? 0;
+		$max_attempts_raw = $state['_max_attempts'] ?? 3;
+		$max_attempts     = is_numeric( $max_attempts_raw ) ? (int) $max_attempts_raw : 3;
+		$status_raw       = $wf_data['status'] ?? 'running';
+		$source_status    = is_scalar( $status_raw ) ? (string) $status_raw : 'running';
+		$name_raw         = $wf_data['name'] ?? '';
+		$wf_name          = is_scalar( $name_raw ) ? (string) $name_raw : '';
 		$replay_status = in_array(
 			$source_status,
 			array( 'running', 'completed', 'failed', 'paused', 'waiting_for_signal', 'waiting_for_workflows', 'cancelled' ),
@@ -102,35 +109,40 @@ class WorkflowReplayer {
 				(name, status, state, current_step, total_steps, completed_at, failed_at, error_message)
 				VALUES (:name, :status, :state, :step, :total, :completed_at, :failed_at, :error_message)"
 			);
+			$error_message_raw = $wf_data['error_message'] ?? null;
 			$stmt->execute(
 				array(
-					'name'          => $wf_data['name'] . '_replay_' . time(),
+					'name'          => $wf_name . '_replay_' . time(),
 					'status'        => $replay_status,
 					'state'         => json_encode( $state, JSON_THROW_ON_ERROR ),
 					'step'          => $replay_step,
 					'total'         => $total_steps,
 					'completed_at'  => $completed_at,
 					'failed_at'     => $failed_at,
-					'error_message' => 'failed' === $replay_status
-						? ( $wf_data['error_message'] ?? null )
+					'error_message' => 'failed' === $replay_status && is_string( $error_message_raw )
+						? $error_message_raw
 						: null,
 				)
 			);
 			$new_id = (int) $pdo->lastInsertId();
 
 			foreach ( $events as $event ) {
+				if ( ! is_array( $event ) ) {
+					continue;
+				}
 				$ins = $pdo->prepare(
 					"INSERT INTO {$ev_tbl}
 					(workflow_id, job_id, parent_event_id, step_index, step_name, step_type, handler, event, queue, attempt, input, output, state_before, state_after, context, artifacts, chunks, error, duration_ms, created_at)
 					VALUES
 					(:workflow_id, :job_id, :parent_event_id, :step_index, :step_name, :step_type, :handler, :event, :queue, :attempt, :input, :output, :state_before, :state_after, :context, :artifacts, :chunks, :error, :duration_ms, :created_at)"
 				);
+				$step_index_raw = $event['step_index'] ?? 0;
 				$ins->execute(
 					array(
 						'workflow_id'     => $new_id,
 						'job_id'          => null,
 						'parent_event_id' => null,
-						'step_index'      => (int) ( $event['step_index'] ?? 0 ),
+						'step_index'      => is_numeric( $step_index_raw ) ? (int) $step_index_raw : 0,
 						'step_name'       => $event['step_name'] ?? null,
 						'step_type'       => $event['step_type'] ?? null,
 						'handler'         => $event['handler'] ?? '',
@@ -152,6 +164,9 @@ class WorkflowReplayer {
 			}
 
 			foreach ( $logs as $log ) {
+				if ( ! is_array( $log ) ) {
+					continue;
+				}
 				$ins = $pdo->prepare(
 					"INSERT INTO {$lg_tbl}
 					(job_id, workflow_id, step_index, handler, queue, event, attempt, duration_ms, error_message, context, created_at)
@@ -176,6 +191,9 @@ class WorkflowReplayer {
 			}
 
 			foreach ( $signals as $signal ) {
+				if ( ! is_array( $signal ) ) {
+					continue;
+				}
 				$ins = $pdo->prepare(
 					"INSERT INTO {$sig_tbl} (workflow_id, signal_name, payload, received_at)
 					VALUES (:workflow_id, :signal_name, :payload, :received_at)"
@@ -191,7 +209,11 @@ class WorkflowReplayer {
 			}
 
 			foreach ( $waits as $wait ) {
-				$dependency_workflow_id = (int) ( $wait['dependency_workflow_id'] ?? 0 );
+				if ( ! is_array( $wait ) ) {
+					continue;
+				}
+				$dependency_raw         = $wait['dependency_workflow_id'] ?? 0;
+				$dependency_workflow_id = is_numeric( $dependency_raw ) ? (int) $dependency_raw : 0;
 				if ( $dependency_workflow_id < 1 ) {
 					continue;
 				}
@@ -200,10 +222,11 @@ class WorkflowReplayer {
 					"INSERT INTO {$dep_tbl} (waiting_workflow_id, step_index, dependency_workflow_id, satisfied_at, created_at)
 					VALUES (:waiting_workflow_id, :step_index, :dependency_workflow_id, :satisfied_at, :created_at)"
 				);
+				$wait_step_raw = $wait['step_index'] ?? 0;
 				$ins->execute(
 					array(
 						'waiting_workflow_id'    => $new_id,
-						'step_index'             => (int) ( $wait['step_index'] ?? 0 ),
+						'step_index'             => is_numeric( $wait_step_raw ) ? (int) $wait_step_raw : 0,
 						'dependency_workflow_id' => $dependency_workflow_id,
 						'satisfied_at'           => $wait['satisfied_at'] ?? null,
 						'created_at'             => $wait['created_at'] ?? gmdate( 'Y-m-d H:i:s' ),
@@ -212,20 +235,27 @@ class WorkflowReplayer {
 			}
 
 			foreach ( $artifacts as $artifact ) {
+				if ( ! is_array( $artifact ) ) {
+					continue;
+				}
 				$ins = $pdo->prepare(
 					"INSERT INTO {$art_tbl}
 						(workflow_id, artifact_key, kind, content, metadata, step_index, created_at, updated_at)
 					VALUES
 						(:workflow_id, :artifact_key, :kind, :content, :metadata, :step_index, :created_at, :updated_at)"
 				);
+				$kind_raw    = $artifact['kind'] ?? 'json';
+				$kind_str    = is_scalar( $kind_raw ) ? (string) $kind_raw : 'json';
+				$content_raw = $artifact['content'] ?? null;
+				$content_val = 'json' === strtolower( $kind_str )
+					? json_encode( $content_raw, JSON_THROW_ON_ERROR )
+					: ( is_scalar( $content_raw ) ? (string) $content_raw : '' );
 				$ins->execute(
 					array(
 						'workflow_id'  => $new_id,
 						'artifact_key' => $artifact['key'] ?? '',
-						'kind'         => $artifact['kind'] ?? 'json',
-						'content'      => 'json' === strtolower( (string) ( $artifact['kind'] ?? 'json' ) )
-							? json_encode( $artifact['content'] ?? null, JSON_THROW_ON_ERROR )
-							: (string) ( $artifact['content'] ?? '' ),
+						'kind'         => $kind_str,
+						'content'      => $content_val,
 						'metadata'     => json_encode( $artifact['metadata'] ?? array(), JSON_THROW_ON_ERROR ),
 						'step_index'   => $artifact['step_index'] ?? null,
 						'created_at'   => $artifact['created_at'] ?? gmdate( 'Y-m-d H:i:s' ),
@@ -235,19 +265,25 @@ class WorkflowReplayer {
 			}
 
 			foreach ( $chunks as $chunk ) {
+				if ( ! is_array( $chunk ) ) {
+					continue;
+				}
 				$ins = $pdo->prepare(
 					"INSERT INTO {$chk_tbl}
 						(job_id, workflow_id, step_index, chunk_index, content, created_at)
 					VALUES
 						(:job_id, :workflow_id, :step_index, :chunk_index, :content, :created_at)"
 				);
+				$chunk_job_raw   = $chunk['job_id'] ?? 0;
+				$chunk_index_raw = $chunk['chunk_index'] ?? 0;
+				$chunk_content   = $chunk['content'] ?? '';
 				$ins->execute(
 					array(
-						'job_id'      => (int) ( $chunk['job_id'] ?? 0 ),
+						'job_id'      => is_numeric( $chunk_job_raw ) ? (int) $chunk_job_raw : 0,
 						'workflow_id' => $new_id,
 						'step_index'  => $chunk['step_index'] ?? null,
-						'chunk_index' => (int) ( $chunk['chunk_index'] ?? 0 ),
-						'content'     => (string) ( $chunk['content'] ?? '' ),
+						'chunk_index' => is_numeric( $chunk_index_raw ) ? (int) $chunk_index_raw : 0,
+						'content'     => is_scalar( $chunk_content ) ? (string) $chunk_content : '',
 						'created_at'  => $chunk['created_at'] ?? gmdate( 'Y-m-d H:i:s' ),
 					)
 				);
@@ -259,8 +295,9 @@ class WorkflowReplayer {
 				VALUES
 				(:workflow_id, :step_index, :handler, 'workflow_replayed', :output, :state_after, :context)"
 			);
+			$source_id_raw  = $wf_data['id'] ?? 0;
 			$replay_context = array(
-				'source_workflow_id' => (int) ( $wf_data['id'] ?? 0 ),
+				'source_workflow_id' => is_numeric( $source_id_raw ) ? (int) $source_id_raw : 0,
 				'source_status'      => $source_status,
 				'definition_version' => $wf_data['definition_version'] ?? null,
 				'definition_hash'    => $wf_data['definition_hash'] ?? null,
@@ -276,10 +313,11 @@ class WorkflowReplayer {
 				)
 			);
 
-			if ( 'running' === $replay_status && isset( $steps[ $replay_step ] ) ) {
-				$queue    = new Queue( $conn );
-				$priority = \Queuety\Enums\Priority::tryFrom( $priority_val ) ?? \Queuety\Enums\Priority::Low;
-				$step_def = $steps[ $replay_step ];
+			if ( 'running' === $replay_status && isset( $steps[ $replay_step ] ) && is_array( $steps[ $replay_step ] ) ) {
+				$queue        = new Queue( $conn );
+				$priority_key = is_int( $priority_val ) || is_string( $priority_val ) ? $priority_val : 0;
+				$priority     = \Queuety\Enums\Priority::tryFrom( $priority_key ) ?? \Queuety\Enums\Priority::Low;
+				$step_def     = self::string_keyed_array( $steps[ $replay_step ] );
 
 				self::enqueue_replay_step( $queue, $step_def, $new_id, $replay_step, $queue_name, $priority, $max_attempts );
 			}
@@ -300,11 +338,31 @@ class WorkflowReplayer {
 	 * @param string     $json JSON string from WorkflowExporter::export_json().
 	 * @param Connection $conn Database connection.
 	 * @return int The new workflow ID.
-	 * @throws \JsonException If the JSON is invalid.
+	 * @throws \JsonException|\RuntimeException If the JSON is invalid or the decoded payload is not an object.
 	 */
 	public static function replay_json( string $json, Connection $conn ): int {
 		$data = json_decode( $json, true, 512, JSON_THROW_ON_ERROR );
-		return self::replay( $data, $conn );
+		if ( ! is_array( $data ) ) {
+			throw new \RuntimeException( 'Invalid workflow export JSON: expected an object.' );
+		}
+		return self::replay( self::string_keyed_array( $data ), $conn );
+	}
+
+	/**
+	 * Filter an array to retain only string-keyed entries.
+	 *
+	 * @param array<mixed, mixed> $value Source array.
+	 * @return array<string, mixed>
+	 */
+	private static function string_keyed_array( array $value ): array {
+		$result = array();
+		foreach ( $value as $key => $entry ) {
+			if ( is_string( $key ) ) {
+				$result[ $key ] = $entry;
+			}
+		}
+
+		return $result;
 	}
 
 	/**
@@ -399,7 +457,8 @@ class WorkflowReplayer {
 				);
 			}
 		} elseif ( 'single' === $type ) {
-			$handler = $step_def['class'] ?? '';
+			$handler_raw = $step_def['class'] ?? '';
+			$handler     = is_string( $handler_raw ) ? $handler_raw : '';
 			self::dispatch_replay_job(
 				$queue,
 				$step_def,
@@ -423,7 +482,7 @@ class WorkflowReplayer {
 				$priority,
 				$max_attempts,
 				0,
-				(int) ( $step_def['delay_seconds'] ?? 0 ),
+				is_numeric( $step_def['delay_seconds'] ?? null ) ? (int) $step_def['delay_seconds'] : 0,
 			);
 		} elseif ( 'run_workflow' === $type ) {
 			self::dispatch_replay_job(

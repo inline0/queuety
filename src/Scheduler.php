@@ -120,7 +120,16 @@ class Scheduler {
 		$stmt->execute( array( 'handler' => $handler ) );
 		$row = $stmt->fetch();
 
-		return $row ? Schedule::from_row( $row ) : null;
+		if ( ! is_array( $row ) ) {
+			return null;
+		}
+
+		$row_assoc = array();
+		foreach ( $row as $key => $value ) {
+			$row_assoc[ (string) $key ] = $value;
+		}
+
+		return Schedule::from_row( $row_assoc );
 	}
 
 	/**
@@ -175,7 +184,16 @@ class Scheduler {
 			$jobs_table = $this->conn->table( Config::table_jobs() );
 
 			foreach ( $rows as $row ) {
-				$schedule = Schedule::from_row( $row );
+				if ( ! is_array( $row ) ) {
+					continue;
+				}
+
+				$row_assoc = array();
+				foreach ( $row as $key => $value ) {
+					$row_assoc[ (string) $key ] = $value;
+				}
+
+				$schedule = Schedule::from_row( $row_assoc );
 				$now      = new \DateTimeImmutable( 'now' );
 				$next_run = $this->calculate_next_run( $schedule->expression, $schedule->expression_type, $now );
 				$policy   = $schedule->overlap_policy;
@@ -193,7 +211,9 @@ class Scheduler {
 							'processing' => JobStatus::Processing->value,
 						)
 					);
-					$has_running = (int) $check_stmt->fetch()['cnt'] > 0;
+					$check_row   = $check_stmt->fetch();
+					$cnt_raw     = is_array( $check_row ) && isset( $check_row['cnt'] ) ? $check_row['cnt'] : 0;
+					$has_running = ( is_scalar( $cnt_raw ) ? (int) $cnt_raw : 0 ) > 0;
 
 					if ( $has_running ) {
 						if ( OverlapPolicy::Skip === $policy ) {

@@ -1312,26 +1312,32 @@ class Queuety {
 		self::ensure_initialized();
 
 		if ( array_key_exists( 'job_id', $filters ) && null !== $filters['job_id'] ) {
-			return self::logger_()->for_job( (int) $filters['job_id'] );
+			$job_id = $filters['job_id'];
+			return self::logger_()->for_job( is_scalar( $job_id ) ? (int) $job_id : 0 );
 		}
 
 		if ( array_key_exists( 'workflow_id', $filters ) && null !== $filters['workflow_id'] ) {
-			return self::logger_()->for_workflow( (int) $filters['workflow_id'] );
+			$workflow_id = $filters['workflow_id'];
+			return self::logger_()->for_workflow( is_scalar( $workflow_id ) ? (int) $workflow_id : 0 );
 		}
 
-		$limit = isset( $filters['limit'] ) ? (int) $filters['limit'] : 50;
+		$limit_raw = $filters['limit'] ?? null;
+		$limit     = is_scalar( $limit_raw ) ? (int) $limit_raw : 50;
 
 		if ( array_key_exists( 'handler', $filters ) && null !== $filters['handler'] ) {
-			return self::logger_()->for_handler( (string) $filters['handler'], $limit );
+			$handler = $filters['handler'];
+			return self::logger_()->for_handler( is_scalar( $handler ) ? (string) $handler : '', $limit );
 		}
 
 		if ( array_key_exists( 'event', $filters ) && null !== $filters['event'] ) {
-			$event = LogEvent::tryFrom( (string) $filters['event'] );
+			$event_raw = $filters['event'];
+			$event     = LogEvent::tryFrom( is_scalar( $event_raw ) ? (string) $event_raw : '' );
 			return null !== $event ? self::logger_()->for_event( $event, $limit ) : array();
 		}
 
 		if ( array_key_exists( 'since', $filters ) && null !== $filters['since'] ) {
-			return self::logger_()->since( new \DateTimeImmutable( (string) $filters['since'] ), $limit );
+			$since = $filters['since'];
+			return self::logger_()->since( new \DateTimeImmutable( is_scalar( $since ) ? (string) $since : 'now' ), $limit );
 		}
 
 		return self::logger_()->since( new \DateTimeImmutable( '-24 hours' ), $limit );
@@ -1574,7 +1580,12 @@ class Queuety {
 			throw new \RuntimeException( "Workflow export did not decode to an array: {$file_path}" );
 		}
 
-		return self::replay_workflow( $data );
+		$normalized = array();
+		foreach ( $data as $key => $value ) {
+			$normalized[ (string) $key ] = $value;
+		}
+
+		return self::replay_workflow( $normalized );
 	}
 
 	/**

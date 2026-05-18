@@ -29,8 +29,9 @@ class ScheduleCommand extends \WP_CLI_Command {
 	 * @return void
 	 */
 	public function list_( $args, $assoc_args ) {
-		$format    = $assoc_args['format'] ?? 'table';
-		$schedules = Queuety::list_schedules();
+		$format_raw = $assoc_args['format'] ?? 'table';
+		$format     = is_string( $format_raw ) ? $format_raw : 'table';
+		$schedules  = Queuety::list_schedules();
 
 		$items = array_map(
 			fn( $s ) => array(
@@ -78,14 +79,18 @@ class ScheduleCommand extends \WP_CLI_Command {
 	 * @return void
 	 */
 	public function add( $args, $assoc_args ) {
-		$handler = $args[0];
-		$payload = json_decode( $assoc_args['payload'] ?? '{}', true ) ?: array();
-		$queue   = $assoc_args['queue'] ?? 'default';
+		$handler     = $args[0];
+		$payload_raw = $assoc_args['payload'] ?? '{}';
+		$payload_str = is_string( $payload_raw ) ? $payload_raw : '{}';
+		$decoded     = json_decode( $payload_str, true );
+		$payload     = is_array( $decoded ) ? $decoded : array();
+		$queue_raw   = $assoc_args['queue'] ?? 'default';
+		$queue       = is_string( $queue_raw ) ? $queue_raw : 'default';
 
-		if ( isset( $assoc_args['every'] ) ) {
+		if ( isset( $assoc_args['every'] ) && is_string( $assoc_args['every'] ) ) {
 			$expression = $assoc_args['every'];
 			$type       = 'interval';
-		} elseif ( isset( $assoc_args['cron'] ) ) {
+		} elseif ( isset( $assoc_args['cron'] ) && is_string( $assoc_args['cron'] ) ) {
 			$expression = $assoc_args['cron'];
 			$type       = 'cron';
 		} else {

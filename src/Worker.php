@@ -517,11 +517,13 @@ class Worker {
 					);
 				}
 			} elseif ( $job->is_workflow_step() && '__queuety_repeat' === $job->handler ) {
-				$wf_state = $this->workflow->get_state( $job->workflow_id ) ?? array();
-				$steps    = $wf_state['_steps'] ?? array();
-				$step_def = $steps[ $job->step_index ] ?? null;
+				$wf_state    = $this->workflow->get_state( $job->workflow_id ) ?? array();
+				$steps_raw   = $wf_state['_steps'] ?? array();
+				$steps       = is_array( $steps_raw ) ? $steps_raw : array();
+				$step_def_in = $steps[ $job->step_index ] ?? null;
+				$step_def    = is_array( $step_def_in ) ? $step_def_in : null;
 
-				if ( ! $step_def || 'repeat' !== ( $step_def['type'] ?? '' ) ) {
+				if ( null === $step_def || 'repeat' !== ( $step_def['type'] ?? '' ) ) {
 					throw new \RuntimeException( "Workflow repeat step {$job->step_index} is missing or invalid." );
 				}
 
@@ -563,13 +565,15 @@ class Worker {
 					)
 				);
 			} elseif ( $job->is_workflow_step() && '__queuety_wait_for_signal' === $job->handler ) {
-				$wf_state = $this->workflow->get_state( $job->workflow_id ) ?? array();
-				$steps    = $wf_state['_steps'] ?? array();
-				$step_def = $steps[ $job->step_index ] ?? null;
+				$wf_state    = $this->workflow->get_state( $job->workflow_id ) ?? array();
+				$steps_raw   = $wf_state['_steps'] ?? array();
+				$steps       = is_array( $steps_raw ) ? $steps_raw : array();
+				$step_def_in = $steps[ $job->step_index ] ?? null;
+				$step_def    = is_array( $step_def_in ) ? $step_def_in : null;
 
 				$this->queue->complete( $job->id );
 
-				if ( $step_def && 'wait_for_signal' === ( $step_def['type'] ?? '' ) ) {
+				if ( null !== $step_def && 'wait_for_signal' === ( $step_def['type'] ?? '' ) ) {
 					$this->workflow->handle_signal_step(
 						workflow_id: $job->workflow_id,
 						step_def: $step_def,
@@ -592,13 +596,15 @@ class Worker {
 					)
 				);
 			} elseif ( $job->is_workflow_step() && '__queuety_wait_for_workflows' === $job->handler ) {
-				$wf_state = $this->workflow->get_state( $job->workflow_id ) ?? array();
-				$steps    = $wf_state['_steps'] ?? array();
-				$step_def = $steps[ $job->step_index ] ?? null;
+				$wf_state    = $this->workflow->get_state( $job->workflow_id ) ?? array();
+				$steps_raw   = $wf_state['_steps'] ?? array();
+				$steps       = is_array( $steps_raw ) ? $steps_raw : array();
+				$step_def_in = $steps[ $job->step_index ] ?? null;
+				$step_def    = is_array( $step_def_in ) ? $step_def_in : null;
 
 				$this->queue->complete( $job->id );
 
-				if ( $step_def && 'wait_for_workflows' === ( $step_def['type'] ?? '' ) ) {
+				if ( null !== $step_def && 'wait_for_workflows' === ( $step_def['type'] ?? '' ) ) {
 					$this->workflow->handle_wait_for_workflows_step(
 						workflow_id: $job->workflow_id,
 						step_def: $step_def,
@@ -716,10 +722,12 @@ class Worker {
 						&& is_array( $config['rate_limit'] )
 						&& ! $this->rate_limiter->is_registered( $job->handler )
 					) {
+						$rl_max    = $config['rate_limit'][0] ?? 0;
+						$rl_window = $config['rate_limit'][1] ?? 0;
 						$this->rate_limiter->register(
 							$job->handler,
-							(int) $config['rate_limit'][0],
-							(int) $config['rate_limit'][1],
+							is_scalar( $rl_max ) ? (int) $rl_max : 0,
+							is_scalar( $rl_window ) ? (int) $rl_window : 0,
 						);
 					}
 				}
@@ -727,12 +735,14 @@ class Worker {
 				if ( $job->is_workflow_step() && $handler instanceof StreamingStep ) {
 					$this->process_streaming_step( $job, $handler, $start_time );
 				} elseif ( $job->is_workflow_step() && $handler instanceof ForEachHandler && $this->is_for_each_workflow_job( $job ) ) {
-					$state       = $this->workflow->get_state( $job->workflow_id ) ?? array();
-					$branch_meta = $job->payload['__for_each'] ?? array();
-					$output      = $handler->handle_item(
+					$state           = $this->workflow->get_state( $job->workflow_id ) ?? array();
+					$branch_meta_raw = $job->payload['__for_each'] ?? array();
+					$branch_meta     = is_array( $branch_meta_raw ) ? $branch_meta_raw : array();
+					$item_index_raw  = $branch_meta['item_index'] ?? 0;
+					$output          = $handler->handle_item(
 						$state,
 						$branch_meta['item'] ?? null,
-						(int) ( $branch_meta['item_index'] ?? 0 ),
+						is_scalar( $item_index_raw ) ? (int) $item_index_raw : 0,
 					);
 
 					$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
@@ -799,7 +809,11 @@ class Worker {
 			$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
 			if ( null !== $this->event_log && $job->is_workflow_step() ) {
-				$trace = ExecutionContext::consume_trace();
+				$trace          = ExecutionContext::consume_trace();
+				$trace_input    = $trace['input'] ?? null;
+				$fallback_input = $workflow_trace['input'] ?? null;
+				$failed_input   = is_array( $trace_input ) ? $trace_input : ( is_array( $fallback_input ) ? $fallback_input : null );
+				$trace_context  = $trace['context'] ?? null;
 				$this->event_log->record_step_failed(
 					workflow_id: $job->workflow_id,
 					step_index: $job->step_index,
@@ -815,18 +829,19 @@ class Worker {
 					job_id: $job->id,
 					attempt: $job->attempts,
 					queue: $job->queue,
-					input: $trace['input'] ?? $workflow_trace['input'] ?? null,
+					input: $failed_input,
 					state_before: $workflow_trace['state_before'] ?? null,
 					state_after: $workflow_trace['state_after'] ?? null,
-					context: is_array( $trace['context'] ?? null ) ? $trace['context'] : ( $workflow_trace['context'] ?? null ),
+					context: is_array( $trace_context ) ? $trace_context : ( $workflow_trace['context'] ?? null ),
 				);
 			}
 
 			$effective_max = $max_attempts;
 
 			if ( is_array( $custom_backoff ) ) {
-				$attempt_index  = min( $job->attempts - 1, count( $custom_backoff ) - 1 );
-				$custom_backoff = $custom_backoff[ max( 0, $attempt_index ) ];
+				$attempt_index       = min( $job->attempts - 1, count( $custom_backoff ) - 1 );
+				$custom_backoff_pick = $custom_backoff[ max( 0, $attempt_index ) ];
+				$custom_backoff      = is_scalar( $custom_backoff_pick ) ? (int) $custom_backoff_pick : 0;
 			}
 
 			$workflow_constraint_violation = $job->is_workflow_step() && $e instanceof WorkflowConstraintViolationException;
@@ -911,7 +926,7 @@ class Worker {
 
 				$this->record_batch_failure( $job );
 			} else {
-				$backoff = $custom_backoff ?? Queue::calculate_backoff( $job->attempts, $backoff_strategy ?? Config::retry_backoff() );
+				$backoff = is_int( $custom_backoff ) ? $custom_backoff : Queue::calculate_backoff( $job->attempts, $backoff_strategy ?? Config::retry_backoff() );
 				$this->queue->retry( $job->id, $backoff );
 
 				$this->logger->log(
@@ -1057,7 +1072,8 @@ class Worker {
 			} else {
 				if ( is_array( $handler_backoff ) ) {
 					$attempt_index = min( $job->attempts - 1, count( $handler_backoff ) - 1 );
-					$backoff       = $handler_backoff[ max( 0, $attempt_index ) ];
+					$pick          = $handler_backoff[ max( 0, $attempt_index ) ];
+					$backoff       = is_scalar( $pick ) ? (int) $pick : 0;
 				} else {
 					$backoff = Queue::calculate_backoff( $job->attempts, $backoff_strategy );
 				}
@@ -1158,7 +1174,7 @@ class Worker {
 		$generator = $handler->stream( $state, $existing_chunks );
 
 		foreach ( $generator as $chunk ) {
-			$content = (string) $chunk;
+			$content = is_scalar( $chunk ) ? (string) $chunk : '';
 
 			$this->chunk_store->append_chunk(
 				job_id: $job->id,
@@ -1242,10 +1258,12 @@ class Worker {
 
 		$runtime = StepDispatchOptions::runtime_from_payload( $job->payload );
 		if ( isset( $runtime['rate_limit'] ) && is_array( $runtime['rate_limit'] ) && count( $runtime['rate_limit'] ) >= 2 ) {
+			$rl_max    = $runtime['rate_limit'][0] ?? 0;
+			$rl_window = $runtime['rate_limit'][1] ?? 0;
 			$this->rate_limiter->register(
 				$job->handler,
-				(int) $runtime['rate_limit'][0],
-				(int) $runtime['rate_limit'][1],
+				is_scalar( $rl_max ) ? (int) $rl_max : 0,
+				is_scalar( $rl_window ) ? (int) $rl_window : 0,
 			);
 			return;
 		}
@@ -1290,31 +1308,51 @@ class Worker {
 	 * Build trace metadata for a workflow step job.
 	 *
 	 * @param Job $job Workflow job.
-	 * @return array<string,mixed>
+	 * @return array{
+	 *     step_name: string|null,
+	 *     step_type: string|null,
+	 *     input: array<string, mixed>,
+	 *     state_before: array<string, mixed>,
+	 *     state_after: array<string, mixed>,
+	 *     context: array<string, mixed>
+	 * }
 	 */
 	private function workflow_step_trace_info( Job $job ): array {
+		$empty = array(
+			'step_name'    => null,
+			'step_type'    => null,
+			'input'        => array(),
+			'state_before' => array(),
+			'state_after'  => array(),
+			'context'      => array(),
+		);
+
 		if ( ! $job->is_workflow_step() ) {
-			return array();
+			return $empty;
 		}
 		$state        = $this->workflow->get_state( $job->workflow_id ) ?? array();
 		$public_state = $this->public_workflow_state( $state );
-		$steps        = $state['_steps'] ?? array();
-		$step_def     = $steps[ $job->step_index ] ?? null;
-		$step_name    = $this->step_name_from_definition( $step_def, (int) ( $job->step_index ?? 0 ) );
+		$steps_raw    = $state['_steps'] ?? array();
+		$steps        = is_array( $steps_raw ) ? $steps_raw : array();
+		$step_index   = $job->step_index ?? 0;
+		$step_def_raw = $steps[ $step_index ] ?? null;
+		$step_def     = self::normalize_step_def( $step_def_raw );
+		$step_name    = $this->step_name_from_definition( $step_def, $step_index );
 		$step_type    = $this->step_type_from_definition( $step_def );
 		$context      = array();
 		$input        = $public_state;
 
 		if ( isset( $job->payload['__for_each'] ) && is_array( $job->payload['__for_each'] ) ) {
-			$branch_meta = $job->payload['__for_each'];
-			$item_index  = (int) ( $branch_meta['item_index'] ?? 0 );
-			$item        = $branch_meta['item'] ?? null;
-			$input       = array(
+			$branch_meta     = $job->payload['__for_each'];
+			$item_index_raw  = $branch_meta['item_index'] ?? 0;
+			$item_index      = is_scalar( $item_index_raw ) ? (int) $item_index_raw : 0;
+			$item            = $branch_meta['item'] ?? null;
+			$input           = array(
 				'state'      => $public_state,
 				'item'       => $item,
 				'item_index' => $item_index,
 			);
-			$context     = array(
+			$context = array(
 				'item'       => $item,
 				'item_index' => $item_index,
 			);
@@ -1347,6 +1385,26 @@ class Worker {
 			fn( string $key ) => ! str_starts_with( $key, '_' ),
 			ARRAY_FILTER_USE_KEY
 		);
+	}
+
+	/**
+	 * Normalize a raw step definition to a typed shape.
+	 *
+	 * @param mixed $step_def_raw Raw step definition from workflow state.
+	 * @return array<string, mixed>|string|null
+	 */
+	private static function normalize_step_def( mixed $step_def_raw ): array|string|null {
+		if ( is_string( $step_def_raw ) ) {
+			return $step_def_raw;
+		}
+		if ( ! is_array( $step_def_raw ) ) {
+			return null;
+		}
+		$normalized = array();
+		foreach ( $step_def_raw as $k => $v ) {
+			$normalized[ (string) $k ] = $v;
+		}
+		return $normalized;
 	}
 
 	/**
@@ -1425,9 +1483,10 @@ class Worker {
 			return false;
 		}
 
-		$state = $this->workflow->get_state( $job->workflow_id ) ?? array();
-		$steps = $state['_steps'] ?? array();
-		$step  = $steps[ $job->step_index ] ?? null;
+		$state     = $this->workflow->get_state( $job->workflow_id ) ?? array();
+		$steps_raw = $state['_steps'] ?? array();
+		$steps     = is_array( $steps_raw ) ? $steps_raw : array();
+		$step      = $steps[ $job->step_index ] ?? null;
 
 		return is_array( $step ) && 'for_each' === ( $step['type'] ?? '' );
 	}
