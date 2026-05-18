@@ -19,6 +19,13 @@ use Queuety\CLI\WorkflowCommand;
 class CliCommandMap {
 
 	/**
+	 * Cached per-request command index.
+	 *
+	 * @var array<string, array<string, mixed>>|null
+	 */
+	private static ?array $definition_index_cache = null;
+
+	/**
 	 * Return the full command catalog.
 	 *
 	 * @return array<int, array<string, mixed>>
@@ -68,7 +75,7 @@ class CliCommandMap {
 			throw new \RuntimeException( sprintf( 'CLI adapter did not return a plan: %s', $adapter_label ) );
 		}
 
-		return array_merge(
+		$merged = array_merge(
 			$definition,
 			array(
 				'transport'            => 'php',
@@ -78,6 +85,12 @@ class CliCommandMap {
 			),
 			$plan
 		);
+
+		$out = array();
+		foreach ( $merged as $key => $value ) {
+			$out[ (string) $key ] = $value;
+		}
+		return $out;
 	}
 
 	/**
@@ -86,16 +99,14 @@ class CliCommandMap {
 	 * @return array<string, array<string, mixed>>
 	 */
 	private static function definition_index(): array {
-		static $definitions = null;
-
-		if ( null !== $definitions ) {
-			return $definitions;
+		if ( null !== self::$definition_index_cache ) {
+			return self::$definition_index_cache;
 		}
 
-		$definitions = array();
+		$index = array();
 
 		foreach ( self::raw_definitions() as $definition ) {
-			$cli_path                            = is_array( $definition['cli_path'] ?? null )
+			$cli_path                     = is_array( $definition['cli_path'] ?? null )
 				? array_values(
 					array_map(
 						static fn( mixed $segment ): string => is_scalar( $segment ) ? (string) $segment : '',
@@ -103,12 +114,13 @@ class CliCommandMap {
 					)
 				)
 				: array();
-			$key                                 = self::path_key( $cli_path );
-			$definition['wp_cli_command']        = 'wp ' . Queuety::cli_command() . ' ' . $key;
-			$definitions[ $key ]                 = $definition;
+			$key                          = self::path_key( $cli_path );
+			$definition['wp_cli_command'] = 'wp ' . Queuety::cli_command() . ' ' . $key;
+			$index[ $key ]                = $definition;
 		}
 
-		return $definitions;
+		self::$definition_index_cache = $index;
+		return self::$definition_index_cache;
 	}
 
 	/**

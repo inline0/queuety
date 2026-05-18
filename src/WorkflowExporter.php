@@ -17,6 +17,67 @@ namespace Queuety;
 class WorkflowExporter {
 
 	/**
+	 * Narrow a mixed value to int via scalar guard.
+	 *
+	 * @param mixed $value Value to narrow.
+	 * @return int Narrowed integer, or 0 when not scalar.
+	 */
+	private static function row_int( mixed $value ): int {
+		return is_scalar( $value ) ? (int) $value : 0;
+	}
+
+	/**
+	 * Narrow a mixed value to nullable int via scalar guard.
+	 *
+	 * @param mixed $value Value to narrow.
+	 * @return int|null Narrowed integer, or null when not scalar or empty string.
+	 */
+	private static function row_nullable_int( mixed $value ): ?int {
+		if ( ! is_scalar( $value ) ) {
+			return null;
+		}
+		$string = (string) $value;
+		return '' === $string ? null : (int) $string;
+	}
+
+	/**
+	 * Narrow a mixed value to nullable string via scalar guard.
+	 *
+	 * @param mixed $value Value to narrow.
+	 * @return string|null Narrowed string, or null when not scalar.
+	 */
+	private static function row_nullable_string( mixed $value ): ?string {
+		return is_scalar( $value ) ? (string) $value : null;
+	}
+
+	/**
+	 * Decode a mixed value as a JSON array.
+	 *
+	 * @param mixed $value Value to decode.
+	 * @return array<int|string, mixed> Decoded array, or empty array when invalid.
+	 */
+	private static function row_json_array( mixed $value ): array {
+		if ( ! is_scalar( $value ) ) {
+			return array();
+		}
+		$decoded = json_decode( (string) $value, true );
+		return is_array( $decoded ) ? $decoded : array();
+	}
+
+	/**
+	 * Decode a mixed value as a JSON array, returning null when the source is null.
+	 *
+	 * @param mixed $value Value to decode.
+	 * @return array<int|string, mixed>|null Decoded array, or null when source is null.
+	 */
+	private static function row_nullable_json_array( mixed $value ): ?array {
+		if ( null === $value ) {
+			return null;
+		}
+		return self::row_json_array( $value );
+	}
+
+	/**
 	 * Export a workflow's full execution history.
 	 *
 	 * @param int        $workflow_id The workflow ID to export.
@@ -50,12 +111,12 @@ class WorkflowExporter {
 		$parent_step_index = $wf_row['parent_step_index'] ?? null;
 
 		$wf_data = array(
-			'id'                 => is_scalar( $wf_row['id'] ?? null ) ? (int) $wf_row['id'] : 0,
+			'id'                 => self::row_int( $wf_row['id'] ?? 0 ),
 			'name'               => $wf_row['name'] ?? null,
 			'status'             => $wf_row['status'] ?? null,
 			'state'              => $workflow_state,
-			'current_step'       => is_scalar( $wf_row['current_step'] ?? null ) ? (int) $wf_row['current_step'] : 0,
-			'total_steps'        => is_scalar( $wf_row['total_steps'] ?? null ) ? (int) $wf_row['total_steps'] : 0,
+			'current_step'       => self::row_int( $wf_row['current_step'] ?? 0 ),
+			'total_steps'        => self::row_int( $wf_row['total_steps'] ?? 0 ),
 			'parent_workflow_id' => is_scalar( $parent_workflow ) && $parent_workflow ? (int) $parent_workflow : null,
 			'parent_step_index'  => is_scalar( $parent_step_index ) ? (int) $parent_step_index : null,
 			'started_at'         => $wf_row['started_at'] ?? null,
@@ -76,22 +137,25 @@ class WorkflowExporter {
 
 		$jobs = array();
 		foreach ( $job_rows as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
 			$jobs[] = array(
-				'id'            => (int) $row['id'],
-				'queue'         => $row['queue'],
-				'handler'       => $row['handler'],
-				'payload'       => json_decode( $row['payload'], true ) ?: array(),
-				'priority'      => (int) $row['priority'],
-				'status'        => $row['status'],
-				'attempts'      => (int) $row['attempts'],
-				'max_attempts'  => (int) $row['max_attempts'],
-				'step_index'    => $row['step_index'] !== null ? (int) $row['step_index'] : null,
-				'available_at'  => $row['available_at'],
-				'reserved_at'   => $row['reserved_at'],
-				'completed_at'  => $row['completed_at'],
-				'failed_at'     => $row['failed_at'],
-				'error_message' => $row['error_message'],
-				'created_at'    => $row['created_at'],
+				'id'            => self::row_int( $row['id'] ?? 0 ),
+				'queue'         => self::row_nullable_string( $row['queue'] ?? null ),
+				'handler'       => self::row_nullable_string( $row['handler'] ?? null ),
+				'payload'       => self::row_json_array( $row['payload'] ?? '' ),
+				'priority'      => self::row_int( $row['priority'] ?? 0 ),
+				'status'        => self::row_nullable_string( $row['status'] ?? null ),
+				'attempts'      => self::row_int( $row['attempts'] ?? 0 ),
+				'max_attempts'  => self::row_int( $row['max_attempts'] ?? 0 ),
+				'step_index'    => self::row_nullable_int( $row['step_index'] ?? null ),
+				'available_at'  => self::row_nullable_string( $row['available_at'] ?? null ),
+				'reserved_at'   => self::row_nullable_string( $row['reserved_at'] ?? null ),
+				'completed_at'  => self::row_nullable_string( $row['completed_at'] ?? null ),
+				'failed_at'     => self::row_nullable_string( $row['failed_at'] ?? null ),
+				'error_message' => self::row_nullable_string( $row['error_message'] ?? null ),
+				'created_at'    => self::row_nullable_string( $row['created_at'] ?? null ),
 			);
 		}
 
@@ -103,27 +167,30 @@ class WorkflowExporter {
 
 		$events = array();
 		foreach ( $event_rows as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
 			$events[] = array(
-				'id'              => (int) $row['id'],
-				'job_id'          => null !== $row['job_id'] ? (int) $row['job_id'] : null,
-				'parent_event_id' => null !== $row['parent_event_id'] ? (int) $row['parent_event_id'] : null,
-				'step_index'      => (int) $row['step_index'],
-				'step_name'       => $row['step_name'],
-				'step_type'       => $row['step_type'],
-				'handler'         => $row['handler'],
-				'event'           => $row['event'],
-				'queue'           => $row['queue'],
-				'attempt'         => null !== $row['attempt'] ? (int) $row['attempt'] : null,
-				'input'           => null !== $row['input'] ? json_decode( $row['input'], true ) : null,
-				'output'          => null !== $row['output'] ? json_decode( $row['output'], true ) : null,
-				'state_before'    => null !== $row['state_before'] ? json_decode( $row['state_before'], true ) : null,
-				'state_after'     => null !== $row['state_after'] ? json_decode( $row['state_after'], true ) : null,
-				'context'         => null !== $row['context'] ? json_decode( $row['context'], true ) : null,
-				'artifacts'       => null !== $row['artifacts'] ? json_decode( $row['artifacts'], true ) : null,
-				'chunks'          => null !== $row['chunks'] ? json_decode( $row['chunks'], true ) : null,
-				'error'           => null !== $row['error'] ? json_decode( $row['error'], true ) : null,
-				'duration_ms'     => $row['duration_ms'] !== null ? (int) $row['duration_ms'] : null,
-				'created_at'      => $row['created_at'],
+				'id'              => self::row_int( $row['id'] ?? 0 ),
+				'job_id'          => self::row_nullable_int( $row['job_id'] ?? null ),
+				'parent_event_id' => self::row_nullable_int( $row['parent_event_id'] ?? null ),
+				'step_index'      => self::row_int( $row['step_index'] ?? 0 ),
+				'step_name'       => self::row_nullable_string( $row['step_name'] ?? null ),
+				'step_type'       => self::row_nullable_string( $row['step_type'] ?? null ),
+				'handler'         => self::row_nullable_string( $row['handler'] ?? null ),
+				'event'           => self::row_nullable_string( $row['event'] ?? null ),
+				'queue'           => self::row_nullable_string( $row['queue'] ?? null ),
+				'attempt'         => self::row_nullable_int( $row['attempt'] ?? null ),
+				'input'           => self::row_nullable_json_array( $row['input'] ?? null ),
+				'output'          => self::row_nullable_json_array( $row['output'] ?? null ),
+				'state_before'    => self::row_nullable_json_array( $row['state_before'] ?? null ),
+				'state_after'     => self::row_nullable_json_array( $row['state_after'] ?? null ),
+				'context'         => self::row_nullable_json_array( $row['context'] ?? null ),
+				'artifacts'       => self::row_nullable_json_array( $row['artifacts'] ?? null ),
+				'chunks'          => self::row_nullable_json_array( $row['chunks'] ?? null ),
+				'error'           => self::row_nullable_json_array( $row['error'] ?? null ),
+				'duration_ms'     => self::row_nullable_int( $row['duration_ms'] ?? null ),
+				'created_at'      => self::row_nullable_string( $row['created_at'] ?? null ),
 			);
 		}
 
@@ -135,18 +202,21 @@ class WorkflowExporter {
 
 		$logs = array();
 		foreach ( $log_rows as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
 			$logs[] = array(
-				'id'            => (int) $row['id'],
-				'job_id'        => $row['job_id'] !== null ? (int) $row['job_id'] : null,
-				'step_index'    => $row['step_index'] !== null ? (int) $row['step_index'] : null,
-				'handler'       => $row['handler'],
-				'queue'         => $row['queue'],
-				'event'         => $row['event'],
-				'attempt'       => $row['attempt'] !== null ? (int) $row['attempt'] : null,
-				'duration_ms'   => $row['duration_ms'] !== null ? (int) $row['duration_ms'] : null,
-				'error_message' => $row['error_message'],
-				'context'       => null !== $row['context'] ? json_decode( $row['context'], true ) : null,
-				'created_at'    => $row['created_at'],
+				'id'            => self::row_int( $row['id'] ?? 0 ),
+				'job_id'        => self::row_nullable_int( $row['job_id'] ?? null ),
+				'step_index'    => self::row_nullable_int( $row['step_index'] ?? null ),
+				'handler'       => self::row_nullable_string( $row['handler'] ?? null ),
+				'queue'         => self::row_nullable_string( $row['queue'] ?? null ),
+				'event'         => self::row_nullable_string( $row['event'] ?? null ),
+				'attempt'       => self::row_nullable_int( $row['attempt'] ?? null ),
+				'duration_ms'   => self::row_nullable_int( $row['duration_ms'] ?? null ),
+				'error_message' => self::row_nullable_string( $row['error_message'] ?? null ),
+				'context'       => self::row_nullable_json_array( $row['context'] ?? null ),
+				'created_at'    => self::row_nullable_string( $row['created_at'] ?? null ),
 			);
 		}
 
@@ -158,12 +228,15 @@ class WorkflowExporter {
 
 		$signals = array();
 		foreach ( $signal_rows as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
 			$signals[] = array(
-				'id'          => (int) $row['id'],
-				'workflow_id' => (int) $row['workflow_id'],
-				'signal_name' => $row['signal_name'],
-				'payload'     => json_decode( $row['payload'], true ) ?: array(),
-				'received_at' => $row['received_at'],
+				'id'          => self::row_int( $row['id'] ?? 0 ),
+				'workflow_id' => self::row_int( $row['workflow_id'] ?? 0 ),
+				'signal_name' => self::row_nullable_string( $row['signal_name'] ?? null ),
+				'payload'     => self::row_json_array( $row['payload'] ?? '' ),
+				'received_at' => self::row_nullable_string( $row['received_at'] ?? null ),
 			);
 		}
 
@@ -175,13 +248,16 @@ class WorkflowExporter {
 
 		$wait_dependencies = array();
 		foreach ( $dependency_rows as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
 			$wait_dependencies[] = array(
-				'id'                     => (int) $row['id'],
-				'waiting_workflow_id'    => (int) $row['waiting_workflow_id'],
-				'step_index'             => (int) $row['step_index'],
-				'dependency_workflow_id' => (int) $row['dependency_workflow_id'],
-				'satisfied_at'           => $row['satisfied_at'],
-				'created_at'             => $row['created_at'],
+				'id'                     => self::row_int( $row['id'] ?? 0 ),
+				'waiting_workflow_id'    => self::row_int( $row['waiting_workflow_id'] ?? 0 ),
+				'step_index'             => self::row_int( $row['step_index'] ?? 0 ),
+				'dependency_workflow_id' => self::row_int( $row['dependency_workflow_id'] ?? 0 ),
+				'satisfied_at'           => self::row_nullable_string( $row['satisfied_at'] ?? null ),
+				'created_at'             => self::row_nullable_string( $row['created_at'] ?? null ),
 			);
 		}
 
@@ -193,18 +269,25 @@ class WorkflowExporter {
 
 		$artifacts = array();
 		foreach ( $artifact_rows as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$kind        = self::row_nullable_string( $row['kind'] ?? null );
+			$raw_content = $row['content'] ?? null;
+			$content     = 'json' === strtolower( (string) $kind )
+				? self::row_nullable_json_array( $raw_content )
+				: $raw_content;
+
 			$artifacts[] = array(
-				'id'          => (int) $row['id'],
-				'workflow_id' => (int) $row['workflow_id'],
-				'key'         => $row['artifact_key'],
-				'kind'        => $row['kind'],
-				'content'     => 'json' === strtolower( (string) $row['kind'] )
-					? json_decode( $row['content'], true )
-					: $row['content'],
-				'metadata'    => null !== $row['metadata'] ? json_decode( $row['metadata'], true ) : array(),
-				'step_index'  => $row['step_index'] !== null ? (int) $row['step_index'] : null,
-				'created_at'  => $row['created_at'],
-				'updated_at'  => $row['updated_at'],
+				'id'          => self::row_int( $row['id'] ?? 0 ),
+				'workflow_id' => self::row_int( $row['workflow_id'] ?? 0 ),
+				'key'         => self::row_nullable_string( $row['artifact_key'] ?? null ),
+				'kind'        => $kind,
+				'content'     => $content,
+				'metadata'    => self::row_json_array( $row['metadata'] ?? '' ),
+				'step_index'  => self::row_nullable_int( $row['step_index'] ?? null ),
+				'created_at'  => self::row_nullable_string( $row['created_at'] ?? null ),
+				'updated_at'  => self::row_nullable_string( $row['updated_at'] ?? null ),
 			);
 		}
 
@@ -216,14 +299,17 @@ class WorkflowExporter {
 
 		$chunks = array();
 		foreach ( $chunk_rows as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
 			$chunks[] = array(
-				'id'          => (int) $row['id'],
-				'job_id'      => (int) $row['job_id'],
-				'workflow_id' => (int) $row['workflow_id'],
-				'step_index'  => null !== $row['step_index'] ? (int) $row['step_index'] : null,
-				'chunk_index' => (int) $row['chunk_index'],
-				'content'     => $row['content'],
-				'created_at'  => $row['created_at'],
+				'id'          => self::row_int( $row['id'] ?? 0 ),
+				'job_id'      => self::row_int( $row['job_id'] ?? 0 ),
+				'workflow_id' => self::row_int( $row['workflow_id'] ?? 0 ),
+				'step_index'  => self::row_nullable_int( $row['step_index'] ?? null ),
+				'chunk_index' => self::row_int( $row['chunk_index'] ?? 0 ),
+				'content'     => $row['content'] ?? null,
+				'created_at'  => self::row_nullable_string( $row['created_at'] ?? null ),
 			);
 		}
 

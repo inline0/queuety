@@ -111,7 +111,8 @@ class Connection {
 	 * @throws \InvalidArgumentException When the requested DB driver is not supported.
 	 */
 	private function resolve_driver(): string {
-		$driver = strtolower( trim( (string) ( $this->driver ?? ( defined( 'QUEUETY_DB_DRIVER' ) ? constant( 'QUEUETY_DB_DRIVER' ) : 'auto' ) ) ) );
+		$source = $this->driver ?? ( defined( 'QUEUETY_DB_DRIVER' ) ? constant( 'QUEUETY_DB_DRIVER' ) : 'auto' );
+		$driver = is_scalar( $source ) ? strtolower( trim( (string) $source ) ) : 'auto';
 		if ( '' === $driver ) {
 			$driver = 'auto';
 		}

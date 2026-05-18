@@ -201,7 +201,12 @@ class BatchBuilder {
 				$handler_defaults = $this->handler_defaults( $handler );
 
 				$payload_raw      = $job['payload'] ?? array();
-				$payload          = is_array( $payload_raw ) ? $payload_raw : array();
+				$payload          = array();
+				if ( is_array( $payload_raw ) ) {
+					foreach ( $payload_raw as $payload_key => $payload_value ) {
+						$payload[ (string) $payload_key ] = $payload_value;
+					}
+				}
 				$queue_name       = is_string( $job['queue'] ?? null ) ? $job['queue'] : $this->queue;
 				$priority         = ( $job['priority'] ?? null ) instanceof Priority ? $job['priority'] : Priority::Low;
 				$delay_raw        = $job['delay'] ?? 0;

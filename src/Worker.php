@@ -517,11 +517,12 @@ class Worker {
 					);
 				}
 			} elseif ( $job->is_workflow_step() && '__queuety_repeat' === $job->handler ) {
-				$wf_state    = $this->workflow->get_state( $job->workflow_id ) ?? array();
-				$steps_raw   = $wf_state['_steps'] ?? array();
-				$steps       = is_array( $steps_raw ) ? $steps_raw : array();
-				$step_def_in = $steps[ $job->step_index ] ?? null;
-				$step_def    = is_array( $step_def_in ) ? $step_def_in : null;
+				$wf_state         = $this->workflow->get_state( $job->workflow_id ) ?? array();
+				$steps_raw        = $wf_state['_steps'] ?? array();
+				$steps            = is_array( $steps_raw ) ? $steps_raw : array();
+				$step_def_in      = $steps[ $job->step_index ] ?? null;
+				$step_def_typed   = self::normalize_step_def( $step_def_in );
+				$step_def         = is_array( $step_def_typed ) ? $step_def_typed : null;
 
 				if ( null === $step_def || 'repeat' !== ( $step_def['type'] ?? '' ) ) {
 					throw new \RuntimeException( "Workflow repeat step {$job->step_index} is missing or invalid." );
@@ -565,11 +566,12 @@ class Worker {
 					)
 				);
 			} elseif ( $job->is_workflow_step() && '__queuety_wait_for_signal' === $job->handler ) {
-				$wf_state    = $this->workflow->get_state( $job->workflow_id ) ?? array();
-				$steps_raw   = $wf_state['_steps'] ?? array();
-				$steps       = is_array( $steps_raw ) ? $steps_raw : array();
-				$step_def_in = $steps[ $job->step_index ] ?? null;
-				$step_def    = is_array( $step_def_in ) ? $step_def_in : null;
+				$wf_state       = $this->workflow->get_state( $job->workflow_id ) ?? array();
+				$steps_raw      = $wf_state['_steps'] ?? array();
+				$steps          = is_array( $steps_raw ) ? $steps_raw : array();
+				$step_def_in    = $steps[ $job->step_index ] ?? null;
+				$step_def_typed = self::normalize_step_def( $step_def_in );
+				$step_def       = is_array( $step_def_typed ) ? $step_def_typed : null;
 
 				$this->queue->complete( $job->id );
 
@@ -596,11 +598,12 @@ class Worker {
 					)
 				);
 			} elseif ( $job->is_workflow_step() && '__queuety_wait_for_workflows' === $job->handler ) {
-				$wf_state    = $this->workflow->get_state( $job->workflow_id ) ?? array();
-				$steps_raw   = $wf_state['_steps'] ?? array();
-				$steps       = is_array( $steps_raw ) ? $steps_raw : array();
-				$step_def_in = $steps[ $job->step_index ] ?? null;
-				$step_def    = is_array( $step_def_in ) ? $step_def_in : null;
+				$wf_state       = $this->workflow->get_state( $job->workflow_id ) ?? array();
+				$steps_raw      = $wf_state['_steps'] ?? array();
+				$steps          = is_array( $steps_raw ) ? $steps_raw : array();
+				$step_def_in    = $steps[ $job->step_index ] ?? null;
+				$step_def_typed = self::normalize_step_def( $step_def_in );
+				$step_def       = is_array( $step_def_typed ) ? $step_def_typed : null;
 
 				$this->queue->complete( $job->id );
 
@@ -662,7 +665,14 @@ class Worker {
 
 				$middleware = array();
 				if ( method_exists( $job_instance, 'middleware' ) ) {
-					$middleware = $job_instance->middleware();
+					$declared = $job_instance->middleware();
+					if ( is_array( $declared ) ) {
+						foreach ( $declared as $entry ) {
+							if ( $entry instanceof \Queuety\Contracts\Middleware ) {
+								$middleware[] = $entry;
+							}
+						}
+					}
 				}
 
 				$queue_ref   = $this->queue;
@@ -812,7 +822,8 @@ class Worker {
 				$trace          = ExecutionContext::consume_trace();
 				$trace_input    = $trace['input'] ?? null;
 				$fallback_input = $workflow_trace['input'] ?? null;
-				$failed_input   = is_array( $trace_input ) ? $trace_input : ( is_array( $fallback_input ) ? $fallback_input : null );
+				$raw_input      = is_array( $trace_input ) ? $trace_input : ( is_array( $fallback_input ) ? $fallback_input : null );
+				$failed_input   = null === $raw_input ? null : self::to_string_keyed_array( $raw_input );
 				$trace_context  = $trace['context'] ?? null;
 				$this->event_log->record_step_failed(
 					workflow_id: $job->workflow_id,
@@ -1168,7 +1179,7 @@ class Worker {
 
 		$state = $this->workflow->get_state( $job->workflow_id ) ?? array();
 
-		$existing_chunks = $this->chunk_store->get_chunks( $job->id );
+		$existing_chunks = array_values( $this->chunk_store->get_chunks( $job->id ) );
 		$chunk_index     = count( $existing_chunks );
 
 		$generator = $handler->stream( $state, $existing_chunks );
@@ -1189,7 +1200,7 @@ class Worker {
 			Heartbeat::beat( array( 'streaming_chunks' => $chunk_index ) );
 		}
 
-		$all_chunks = $this->chunk_store->get_chunks( $job->id );
+		$all_chunks = array_values( $this->chunk_store->get_chunks( $job->id ) );
 		foreach ( $all_chunks as $chunk ) {
 			ExecutionContext::add_trace_chunk(
 				array(
@@ -1408,6 +1419,21 @@ class Worker {
 	}
 
 	/**
+	 * Coerce an arbitrary array into one keyed by strings only.
+	 *
+	 * @param array<mixed, mixed> $value Raw array.
+	 * @return array<string, mixed>
+	 */
+	private static function to_string_keyed_array( array $value ): array {
+		$out = array();
+		foreach ( $value as $k => $v ) {
+			$out[ (string) $k ] = $v;
+		}
+
+		return $out;
+	}
+
+	/**
 	 * Resolve a stable step name from a definition.
 	 *
 	 * @param array<string, mixed>|string|null $step_def   Step definition.
@@ -1523,10 +1549,8 @@ class Worker {
 			$event_name = null;
 		}
 
-		$event_payload = $job->payload['event_payload'] ?? array();
-		if ( ! is_array( $event_payload ) ) {
-			$event_payload = array();
-		}
+		$event_payload_raw = $job->payload['event_payload'] ?? array();
+		$event_payload     = is_array( $event_payload_raw ) ? self::to_string_keyed_array( $event_payload_raw ) : array();
 
 		return array(
 			'machine_id'    => (int) $machine_id,

@@ -122,12 +122,13 @@ class WorkerPool {
 			pcntl_signal_dispatch();
 
 			while ( true ) {
-				$pid = pcntl_waitpid( -1, $status, WNOHANG );
+				$status = 0;
+				$pid    = pcntl_waitpid( -1, $status, WNOHANG );
 				if ( $pid <= 0 ) {
 					break;
 				}
 
-				$this->handle_child_exit( $pid, $status, $queue );
+				$this->handle_child_exit( $pid, is_int( $status ) ? $status : 0, $queue );
 			}
 
 			// The scheduler must stay single-writer even when job execution is forked.

@@ -129,10 +129,14 @@ class ResourceManager {
 		if ( null !== $this->cache ) {
 			$cached = $this->cache->get( $cache_key );
 			if ( is_array( $cached ) && array_key_exists( 'sample_count', $cached ) ) {
+				$sample_count       = $cached['sample_count'];
+				$avg_duration_raw   = $cached['avg_duration_ms'] ?? null;
+				$max_memory_raw     = $cached['max_memory_peak_kb'] ?? null;
+
 				return array(
-					'sample_count'       => (int) $cached['sample_count'],
-					'avg_duration_ms'    => isset( $cached['avg_duration_ms'] ) ? (int) $cached['avg_duration_ms'] : null,
-					'max_memory_peak_kb' => isset( $cached['max_memory_peak_kb'] ) ? (int) $cached['max_memory_peak_kb'] : null,
+					'sample_count'       => is_scalar( $sample_count ) ? (int) $sample_count : 0,
+					'avg_duration_ms'    => is_scalar( $avg_duration_raw ) ? (int) $avg_duration_raw : null,
+					'max_memory_peak_kb' => is_scalar( $max_memory_raw ) ? (int) $max_memory_raw : null,
 				);
 			}
 		}

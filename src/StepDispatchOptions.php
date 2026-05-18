@@ -209,7 +209,7 @@ final class StepDispatchOptions {
 			return array();
 		}
 
-		return is_array( $definition['payload'] ?? null ) ? $definition['payload'] : array();
+		return self::as_array( $definition['payload'] ?? null );
 	}
 
 	/**
@@ -219,9 +219,7 @@ final class StepDispatchOptions {
 	 * @return array<string, mixed>
 	 */
 	public static function runtime_from_payload( array $payload ): array {
-		return is_array( $payload[ self::RUNTIME_PAYLOAD_KEY ] ?? null )
-			? $payload[ self::RUNTIME_PAYLOAD_KEY ]
-			: array();
+		return self::as_array( $payload[ self::RUNTIME_PAYLOAD_KEY ] ?? null );
 	}
 
 	/**
@@ -290,7 +288,25 @@ final class StepDispatchOptions {
 	 * @return array<string,mixed>
 	 */
 	private static function group( array $data, string $key ): array {
-		return is_array( $data[ $key ] ?? null ) ? $data[ $key ] : array();
+		return self::as_array( $data[ $key ] ?? null );
+	}
+
+	/**
+	 * Narrow a mixed value to an array<string, mixed>.
+	 *
+	 * @param mixed $value Value to narrow.
+	 * @return array<string, mixed>
+	 */
+	private static function as_array( mixed $value ): array {
+		if ( ! is_array( $value ) ) {
+			return array();
+		}
+
+		$out = array();
+		foreach ( $value as $key => $val ) {
+			$out[ (string) $key ] = $val;
+		}
+		return $out;
 	}
 
 	/**

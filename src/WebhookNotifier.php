@@ -69,7 +69,22 @@ class WebhookNotifier {
 		if ( false === $stmt ) {
 			return array();
 		}
-		return array_values( $stmt->fetchAll() );
+
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$typed = array();
+			foreach ( $row as $key => $value ) {
+				if ( is_string( $key ) ) {
+					$typed[ $key ] = $value;
+				}
+			}
+			$rows[] = $typed;
+		}
+
+		return $rows;
 	}
 
 	/**
@@ -102,7 +117,9 @@ class WebhookNotifier {
 		);
 
 		foreach ( $urls as $url ) {
-			$this->fire_and_forget( $url, $json );
+			if ( is_string( $url ) ) {
+				$this->fire_and_forget( $url, $json );
+			}
 		}
 	}
 

@@ -100,10 +100,18 @@ class Scheduler {
 			return array();
 		}
 
-		return array_map(
-			fn( array $row ) => Schedule::from_row( $row ),
-			$stmt->fetchAll()
-		);
+		$schedules = array();
+		foreach ( $stmt->fetchAll() as $raw_row ) {
+			if ( ! is_array( $raw_row ) ) {
+				continue;
+			}
+			$row = array();
+			foreach ( $raw_row as $key => $value ) {
+				$row[ (string) $key ] = $value;
+			}
+			$schedules[] = Schedule::from_row( $row );
+		}
+		return $schedules;
 	}
 
 	/**

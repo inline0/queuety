@@ -71,6 +71,27 @@ class Logger {
 	}
 
 	/**
+	 * Normalize raw PDO log rows into a list of associative arrays.
+	 *
+	 * @param array<int|string, mixed> $raw_rows Rows from PDOStatement::fetchAll().
+	 * @return list<array<string, mixed>>
+	 */
+	private function normalize_log_rows( array $raw_rows ): array {
+		$rows = array();
+		foreach ( $raw_rows as $raw_row ) {
+			if ( ! is_array( $raw_row ) ) {
+				continue;
+			}
+			$row = array();
+			foreach ( $raw_row as $key => $value ) {
+				$row[ (string) $key ] = $value;
+			}
+			$rows[] = $row;
+		}
+		return $rows;
+	}
+
+	/**
 	 * Get log entries for a specific job.
 	 *
 	 * @param int $job_id Job ID.
@@ -82,7 +103,7 @@ class Logger {
 			"SELECT * FROM {$table} WHERE job_id = :job_id ORDER BY id ASC"
 		);
 		$stmt->execute( array( 'job_id' => $job_id ) );
-		return array_values( $stmt->fetchAll() );
+		return $this->normalize_log_rows( $stmt->fetchAll() );
 	}
 
 	/**
@@ -97,7 +118,7 @@ class Logger {
 			"SELECT * FROM {$table} WHERE workflow_id = :workflow_id ORDER BY id ASC"
 		);
 		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
-		return array_values( $stmt->fetchAll() );
+		return $this->normalize_log_rows( $stmt->fetchAll() );
 	}
 
 	/**
@@ -115,7 +136,7 @@ class Logger {
 		}
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( array( 'handler' => $handler ) );
-		return array_values( $stmt->fetchAll() );
+		return $this->normalize_log_rows( $stmt->fetchAll() );
 	}
 
 	/**
@@ -133,7 +154,7 @@ class Logger {
 		}
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( array( 'event' => $event->value ) );
-		return array_values( $stmt->fetchAll() );
+		return $this->normalize_log_rows( $stmt->fetchAll() );
 	}
 
 	/**
@@ -151,7 +172,7 @@ class Logger {
 		}
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( array( 'since' => $since->format( 'Y-m-d H:i:s' ) ) );
-		return array_values( $stmt->fetchAll() );
+		return $this->normalize_log_rows( $stmt->fetchAll() );
 	}
 
 	/**

@@ -78,7 +78,8 @@ class WorkflowReplayer {
 		$art_tbl = $conn->table( Config::table_artifacts() );
 		$chk_tbl = $conn->table( Config::table_chunks() );
 
-		$state            = is_array( $wf_data['state'] ?? null ) ? $wf_data['state'] : array();
+		$state_raw        = $wf_data['state'] ?? null;
+		$state            = is_array( $state_raw ) ? self::string_keyed_array( $state_raw ) : array();
 		$current_step_raw = $wf_data['current_step'] ?? 0;
 		$total_steps_raw  = $wf_data['total_steps'] ?? 0;
 		$current_step     = is_numeric( $current_step_raw ) ? (int) $current_step_raw : 0;

@@ -144,10 +144,21 @@ class ArtifactStore {
 		);
 		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
 
-		return array_map(
-			fn( array $row ): array => $this->map_row( $row, $include_content ),
-			$stmt->fetchAll()
-		);
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$typed = array();
+			foreach ( $row as $key => $value ) {
+				if ( is_string( $key ) ) {
+					$typed[ $key ] = $value;
+				}
+			}
+			$rows[] = $this->map_row( $typed, $include_content );
+		}
+
+		return $rows;
 	}
 
 	/**
@@ -225,9 +236,14 @@ class ArtifactStore {
 
 		$summaries = array();
 		foreach ( $stmt->fetchAll() as $row ) {
-			$workflow_id               = (int) $row['workflow_id'];
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$workflow_id_value         = $row['workflow_id'] ?? 0;
+			$workflow_id               = is_scalar( $workflow_id_value ) ? (int) $workflow_id_value : 0;
+			$count_value               = $row['artifact_count'] ?? 0;
 			$summaries[ $workflow_id ] = array(
-				'count' => (int) $row['artifact_count'],
+				'count' => is_scalar( $count_value ) ? (int) $count_value : 0,
 				'keys'  => $this->decode_summary_keys( $row['artifact_keys'] ?? null ),
 			);
 		}

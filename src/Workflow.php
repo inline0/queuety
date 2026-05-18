@@ -84,7 +84,7 @@ class Workflow {
 		}
 
 		$decoded = json_decode( $value, true );
-		return is_array( $decoded ) ? $decoded : array();
+		return $this->as_array( $decoded );
 	}
 
 	/**
@@ -99,7 +99,7 @@ class Workflow {
 		}
 
 		$decoded = json_decode( $value, true );
-		return is_array( $decoded ) ? $decoded : array();
+		return $this->as_array( $decoded );
 	}
 
 	/**
@@ -109,7 +109,15 @@ class Workflow {
 	 * @return array<string, mixed>
 	 */
 	private function as_array( mixed $value ): array {
-		return is_array( $value ) ? $value : array();
+		if ( ! is_array( $value ) ) {
+			return array();
+		}
+
+		$out = array();
+		foreach ( $value as $key => $val ) {
+			$out[ (string) $key ] = $val;
+		}
+		return $out;
 	}
 
 	/**
@@ -145,8 +153,16 @@ class Workflow {
 
 		$steps = array();
 		foreach ( $value as $step ) {
-			if ( is_array( $step ) || is_string( $step ) ) {
+			if ( is_string( $step ) ) {
 				$steps[] = $step;
+				continue;
+			}
+			if ( is_array( $step ) ) {
+				$normalized = array();
+				foreach ( $step as $key => $val ) {
+					$normalized[ (string) $key ] = $val;
+				}
+				$steps[] = $normalized;
 			}
 		}
 
@@ -330,7 +346,7 @@ class Workflow {
 
 		return array(
 			'class'   => trim( $class ),
-			'payload' => is_array( $payload ) ? $payload : array(),
+			'payload' => $this->as_array( $payload ),
 		);
 	}
 
@@ -879,8 +895,7 @@ class Workflow {
 	 * @return array<string, mixed>
 	 */
 	private function signal_match_payload_for_step( array $step_def ): array {
-		$match_payload = $step_def['match_payload'] ?? null;
-		return is_array( $match_payload ) ? $match_payload : array();
+		return $this->as_array( $step_def['match_payload'] ?? null );
 	}
 
 	/**
@@ -1197,7 +1212,11 @@ class Workflow {
 		$first_signal_name = null;
 		$first_signal_data = null;
 
-		foreach ( $stmt->fetchAll() as $row ) {
+		foreach ( $stmt->fetchAll() as $raw_row ) {
+			$row = $this->as_row( $raw_row );
+			if ( null === $row ) {
+				continue;
+			}
 			$signal_name = $this->to_string( $row['signal_name'] ?? '' );
 			$payload     = $this->decode_payload_column( $row['payload'] ?? null );
 
@@ -1331,8 +1350,9 @@ class Workflow {
 		$stmt->execute( $params );
 
 		$rows = array();
-		foreach ( $stmt->fetchAll() as $row ) {
-			if ( ! is_array( $row ) ) {
+		foreach ( $stmt->fetchAll() as $raw_row ) {
+			$row = $this->as_row( $raw_row );
+			if ( null === $row ) {
 				continue;
 			}
 			$rows[ $this->to_int( $row['id'] ?? 0 ) ] = $row;
@@ -1693,7 +1713,7 @@ class Workflow {
 				handler: $this->event_handler_for_step( $current_step_def ),
 				state_before: $state_before,
 				state_after: $this->public_state( $state ),
-				output: is_array( $trace['output'] ?? null ) ? $trace['output'] : $step_output,
+				output: is_array( $trace['output'] ?? null ) ? $this->as_array( $trace['output'] ) : $step_output,
 				step_name: $this->resolve_step_name( $current_step_def, $step_index ),
 				step_type: null === $current_step_def ? 'single' : $this->resolve_step_type( $current_step_def ),
 			);
@@ -1831,8 +1851,8 @@ class Workflow {
 				continue;
 			}
 			$handler_class = $entry['handler'] ?? null;
-			$payload       = is_array( $entry['payload'] ?? null ) ? $entry['payload'] : array();
-			$snapshot      = is_array( $entry['state'] ?? null ) ? $entry['state'] : array();
+			$payload       = $this->as_array( $entry['payload'] ?? null );
+			$snapshot      = $this->as_array( $entry['state'] ?? null );
 
 			if ( ! is_string( $handler_class ) || ! class_exists( $handler_class ) ) {
 				continue;
@@ -2108,7 +2128,7 @@ class Workflow {
 			throw new \RuntimeException( "For-each reducer '{$reducer_class}' must return an array." );
 		}
 
-		return array_merge( $output, $reducer_output );
+		return $this->as_array( array_merge( $output, $reducer_output ) );
 	}
 
 	/**
@@ -2222,14 +2242,14 @@ class Workflow {
 				handler: $job_handler,
 				state_before: $state_before,
 				state_after: $this->public_state( $state ),
-				output: is_array( $trace['output'] ?? null ) ? $trace['output'] : $step_output,
+				output: is_array( $trace['output'] ?? null ) ? $this->as_array( $trace['output'] ) : $step_output,
 				duration_ms: $duration_ms,
 				step_name: null === $current_step_def ? null : $this->resolve_step_name( $current_step_def, $current_step ),
 				step_type: null === $current_step_def ? 'single' : $this->resolve_step_type( $current_step_def ),
 				job_id: $completed_job_id,
 				attempt: isset( $job_row['attempts'] ) ? $this->to_int( $job_row['attempts'] ) : null,
 				queue: '' === $job_queue ? null : $job_queue,
-				input: is_array( $trace['input'] ?? null ) ? $trace['input'] : $state_before,
+				input: is_array( $trace['input'] ?? null ) ? $this->as_array( $trace['input'] ) : $state_before,
 				context: is_array( $trace['context'] ?? null ) ? $trace['context'] : null,
 				artifacts: is_array( $trace['artifacts'] ?? null ) ? $trace['artifacts'] : null,
 				chunks: is_array( $trace['chunks'] ?? null ) ? $trace['chunks'] : null,
@@ -3218,7 +3238,11 @@ class Workflow {
 		);
 		$stmt->execute( array( 'dependency_workflow_id' => $dependency_workflow_id ) );
 
-		foreach ( $stmt->fetchAll() as $row ) {
+		foreach ( $stmt->fetchAll() as $raw_row ) {
+			$row = $this->as_row( $raw_row );
+			if ( null === $row ) {
+				continue;
+			}
 			$waiting_workflow_id = $this->to_int( $row['waiting_workflow_id'] ?? 0 );
 			$step_index          = $this->to_int( $row['step_index'] ?? 0 );
 			$completed_ids       = array();
@@ -4301,10 +4325,11 @@ class Workflow {
 			throw new \RuntimeException( "Start step '{$step_name}' requires state['{$items_key}'] to be an array." );
 		}
 
-		$definition = $step_def['workflow_definition'] ?? null;
-		if ( ! is_array( $definition ) || ! is_array( $definition['steps'] ?? null ) ) {
+		$definition_raw = $step_def['workflow_definition'] ?? null;
+		if ( ! is_array( $definition_raw ) || ! is_array( $definition_raw['steps'] ?? null ) ) {
 			throw new \RuntimeException( "Start step '{$step_name}' is missing a valid workflow definition." );
 		}
+		$definition = $this->as_array( $definition_raw );
 
 		$result_key     = trim( $this->to_string( $step_def['result_key'] ?? 'started_workflow_ids' ) );
 		$payload_key    = trim( $this->to_string( $step_def['payload_key'] ?? 'item' ) );
@@ -4798,7 +4823,11 @@ class Workflow {
 
 		$artifact_summaries = $this->workflow_artifact_summaries( array_column( $rows, 'id' ) );
 		$results            = array();
-		foreach ( $rows as $row ) {
+		foreach ( $rows as $raw_row ) {
+			$row = $this->as_row( $raw_row );
+			if ( null === $row ) {
+				continue;
+			}
 			$workflow_id = $this->to_int( $row['id'] ?? 0 );
 			$results[]   = $this->build_workflow_state_from_row(
 				$row,
@@ -5115,7 +5144,11 @@ class Workflow {
 		$stmt->execute();
 		$rows = $stmt->fetchAll();
 
-		foreach ( $rows as $wf_row ) {
+		foreach ( $rows as $raw_wf_row ) {
+			$wf_row = $this->as_row( $raw_wf_row );
+			if ( null === $wf_row ) {
+				continue;
+			}
 			$state         = $this->decode_state_column( $wf_row['state'] ?? null );
 			$handler_def   = $this->handler_definition( $state['_on_deadline'] ?? null );
 

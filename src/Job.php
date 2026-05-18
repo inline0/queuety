@@ -77,7 +77,13 @@ readonly class Job {
 	public static function from_row( array $row ): self {
 		$payload_raw   = $row['payload'] ?? '';
 		$payload_json  = is_string( $payload_raw ) ? $payload_raw : '';
-		$payload       = json_decode( $payload_json, true );
+		$payload_data  = json_decode( $payload_json, true );
+		$payload       = array();
+		if ( is_array( $payload_data ) ) {
+			foreach ( $payload_data as $key => $value ) {
+				$payload[ (string) $key ] = $value;
+			}
+		}
 		$status_value  = $row['status'] ?? '';
 		$error_message = $row['error_message'] ?? null;
 		$payload_hash  = $row['payload_hash'] ?? null;
@@ -86,7 +92,7 @@ readonly class Job {
 			id: self::row_int( $row, 'id' ),
 			queue: self::row_string( $row, 'queue' ),
 			handler: self::row_string( $row, 'handler' ),
-			payload: is_array( $payload ) ? $payload : array(),
+			payload: $payload,
 			priority: Priority::from( self::row_int( $row, 'priority' ) ),
 			status: JobStatus::from( is_int( $status_value ) || is_string( $status_value ) ? $status_value : '' ),
 			attempts: self::row_int( $row, 'attempts' ),

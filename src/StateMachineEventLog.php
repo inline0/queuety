@@ -117,7 +117,18 @@ class StateMachineEventLog {
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( array( 'machine_id' => $machine_id ) );
 
-		return array_map( array( $this, 'decode_event_row' ), $stmt->fetchAll() );
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $raw_row ) {
+			if ( ! is_array( $raw_row ) ) {
+				continue;
+			}
+			$assoc = array();
+			foreach ( $raw_row as $key => $value ) {
+				$assoc[ (string) $key ] = $value;
+			}
+			$rows[] = $this->decode_event_row( $assoc );
+		}
+		return $rows;
 	}
 
 	/**
@@ -406,14 +417,22 @@ class StateMachineEventLog {
 		);
 		$stmt->execute( $params );
 
-		return array_map(
-			static function ( array $row ): array {
-				$row['payload']        = json_decode( (string) $row['payload'], true ) ?: array();
-				$row['heartbeat_data'] = null === $row['heartbeat_data'] ? null : json_decode( (string) $row['heartbeat_data'], true );
-				return $row;
-			},
-			$stmt->fetchAll()
-		);
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $raw_row ) {
+			if ( ! is_array( $raw_row ) ) {
+				continue;
+			}
+			$row = array();
+			foreach ( $raw_row as $key => $value ) {
+				$row[ (string) $key ] = $value;
+			}
+			$payload_raw           = $row['payload'] ?? null;
+			$row['payload']        = is_scalar( $payload_raw ) ? ( json_decode( (string) $payload_raw, true ) ?: array() ) : array();
+			$heartbeat_raw         = $row['heartbeat_data'] ?? null;
+			$row['heartbeat_data'] = is_scalar( $heartbeat_raw ) ? json_decode( (string) $heartbeat_raw, true ) : null;
+			$rows[]                = $row;
+		}
+		return $rows;
 	}
 
 	/**
@@ -441,13 +460,20 @@ class StateMachineEventLog {
 		);
 		$stmt->execute( $params );
 
-		return array_map(
-			static function ( array $row ): array {
-				$row['context'] = null === $row['context'] ? null : json_decode( (string) $row['context'], true );
-				return $row;
-			},
-			$stmt->fetchAll()
-		);
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $raw_row ) {
+			if ( ! is_array( $raw_row ) ) {
+				continue;
+			}
+			$row = array();
+			foreach ( $raw_row as $key => $value ) {
+				$row[ (string) $key ] = $value;
+			}
+			$context_raw    = $row['context'] ?? null;
+			$row['context'] = is_scalar( $context_raw ) ? json_decode( (string) $context_raw, true ) : null;
+			$rows[]         = $row;
+		}
+		return $rows;
 	}
 
 	/**

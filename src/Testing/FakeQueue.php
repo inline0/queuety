@@ -94,7 +94,12 @@ class FakeQueue extends Queue {
 		foreach ( $jobs as $job ) {
 			$handler          = is_string( $job['handler'] ?? null ) ? $job['handler'] : '';
 			$payload_raw      = $job['payload'] ?? array();
-			$payload          = is_array( $payload_raw ) ? $payload_raw : array();
+			$payload          = array();
+			if ( is_array( $payload_raw ) ) {
+				foreach ( $payload_raw as $key => $value ) {
+					$payload[ (string) $key ] = $value;
+				}
+			}
 			$queue_name       = is_string( $job['queue'] ?? null ) ? $job['queue'] : 'default';
 			$priority         = ( $job['priority'] ?? null ) instanceof Priority ? $job['priority'] : Priority::Low;
 			$delay_raw        = $job['delay'] ?? 0;

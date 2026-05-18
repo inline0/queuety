@@ -100,19 +100,26 @@ class HandlerMetadata {
 			return $defaults;
 		}
 
-		if ( isset( $config['queue'] ) && is_string( $config['queue'] ) && '' !== trim( $config['queue'] ) ) {
-			$defaults['queue'] = trim( $config['queue'] );
+		if ( ! is_array( $config ) ) {
+			return $defaults;
 		}
 
-		if ( isset( $config['max_attempts'] ) ) {
-			$defaults['max_attempts'] = max( 1, (int) $config['max_attempts'] );
+		$queue = $config['queue'] ?? null;
+		if ( is_string( $queue ) && '' !== trim( $queue ) ) {
+			$defaults['queue'] = trim( $queue );
 		}
 
-		if ( isset( $config['backoff'] ) && is_string( $config['backoff'] ) ) {
-			$defaults['backoff'] = $config['backoff'];
-		} elseif ( isset( $config['backoff'] ) && is_array( $config['backoff'] ) ) {
+		$max_attempts = $config['max_attempts'] ?? null;
+		if ( is_scalar( $max_attempts ) ) {
+			$defaults['max_attempts'] = max( 1, (int) $max_attempts );
+		}
+
+		$backoff = $config['backoff'] ?? null;
+		if ( is_string( $backoff ) ) {
+			$defaults['backoff'] = $backoff;
+		} elseif ( is_array( $backoff ) ) {
 			$backoff_config = array();
-			foreach ( $config['backoff'] as $backoff_key => $backoff_value ) {
+			foreach ( $backoff as $backoff_key => $backoff_value ) {
 				if ( is_string( $backoff_key ) ) {
 					$backoff_config[ $backoff_key ] = $backoff_value;
 				}
@@ -120,8 +127,9 @@ class HandlerMetadata {
 			$defaults['backoff'] = $backoff_config;
 		}
 
-		if ( isset( $config['rate_limit'] ) && is_array( $config['rate_limit'] ) && count( $config['rate_limit'] ) >= 2 ) {
-			$rate_limit_values = array_values( $config['rate_limit'] );
+		$rate_limit = $config['rate_limit'] ?? null;
+		if ( is_array( $rate_limit ) && count( $rate_limit ) >= 2 ) {
+			$rate_limit_values = array_values( $rate_limit );
 			$rate_limit_first  = is_scalar( $rate_limit_values[0] ) ? (int) $rate_limit_values[0] : 0;
 			$rate_limit_second = is_scalar( $rate_limit_values[1] ) ? (int) $rate_limit_values[1] : 0;
 			$defaults['rate_limit'] = array(
@@ -130,22 +138,25 @@ class HandlerMetadata {
 			);
 		}
 
-		if ( isset( $config['concurrency_group'] ) && is_string( $config['concurrency_group'] ) ) {
-			$group = trim( $config['concurrency_group'] );
+		$concurrency_group = $config['concurrency_group'] ?? null;
+		if ( is_string( $concurrency_group ) ) {
+			$group = trim( $concurrency_group );
 			if ( '' !== $group ) {
 				$defaults['concurrency_group'] = $group;
 			}
 		}
 
-		if ( isset( $config['concurrency_limit'] ) ) {
-			$limit = (int) $config['concurrency_limit'];
+		$concurrency_limit = $config['concurrency_limit'] ?? null;
+		if ( is_scalar( $concurrency_limit ) ) {
+			$limit = (int) $concurrency_limit;
 			if ( $limit > 0 ) {
 				$defaults['concurrency_limit'] = $limit;
 			}
 		}
 
-		if ( isset( $config['cost_units'] ) ) {
-			$cost_units = (int) $config['cost_units'];
+		$cost_units_value = $config['cost_units'] ?? null;
+		if ( is_scalar( $cost_units_value ) ) {
+			$cost_units = (int) $cost_units_value;
 			if ( $cost_units > 0 ) {
 				$defaults['cost_units'] = $cost_units;
 			}

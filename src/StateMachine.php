@@ -31,6 +31,44 @@ class StateMachine {
 	) {}
 
 	/**
+	 * Narrow a mixed value to an array<string, mixed>.
+	 *
+	 * @param mixed $value Value to narrow.
+	 * @return array<string, mixed>
+	 */
+	private function as_array( mixed $value ): array {
+		if ( ! is_array( $value ) ) {
+			return array();
+		}
+
+		$out = array();
+		foreach ( $value as $key => $val ) {
+			$out[ (string) $key ] = $val;
+		}
+		return $out;
+	}
+
+	/**
+	 * Narrow a PDO row to an array<string, mixed> with string keys.
+	 *
+	 * @param mixed $value Raw fetch result.
+	 * @return array<string, mixed>|null
+	 */
+	private function as_row( mixed $value ): ?array {
+		if ( ! is_array( $value ) ) {
+			return null;
+		}
+
+		$row = array();
+		foreach ( $value as $key => $val ) {
+			if ( is_string( $key ) ) {
+				$row[ $key ] = $val;
+			}
+		}
+		return $row;
+	}
+
+	/**
 	 * Dispatch a state machine from a definition bundle.
 	 *
 	 * @param array<string, mixed> $definition    Machine definition.
@@ -55,7 +93,7 @@ class StateMachine {
 		);
 
 		$initial_state_def_raw = $states[ $initial_state_name ];
-		$initial_state_def     = is_array( $initial_state_def_raw ) ? $initial_state_def_raw : array();
+		$initial_state_def     = $this->as_array( $initial_state_def_raw );
 		$status                = $this->status_for_entered_state( $initial_state_def );
 		$name_raw              = $definition['name'] ?? 'machine';
 		$machine_name          = is_scalar( $name_raw ) ? (string) $name_raw : 'machine';
@@ -187,11 +225,11 @@ class StateMachine {
 
 		$definition_raw    = $row['definition'] ?? null;
 		$definition_decode = is_string( $definition_raw ) ? json_decode( $definition_raw, true ) : null;
-		$definition        = is_array( $definition_decode ) ? $definition_decode : array();
+		$definition        = $this->as_array( $definition_decode );
 		$current_state_raw = $row['current_state'] ?? '';
 		$current_state     = is_scalar( $current_state_raw ) ? (string) $current_state_raw : '';
-		$states_map        = is_array( $definition['states'] ?? null ) ? $definition['states'] : array();
-		$current_state_def = is_array( $states_map[ $current_state ] ?? null ) ? $states_map[ $current_state ] : array();
+		$states_map        = $this->as_array( $definition['states'] ?? null );
+		$current_state_def = $this->as_array( $states_map[ $current_state ] ?? null );
 		$transitions_list  = is_array( $current_state_def['transitions'] ?? null ) ? $current_state_def['transitions'] : array();
 		$available_events  = array_values(
 			array_unique(
@@ -210,7 +248,7 @@ class StateMachine {
 
 		$state_raw    = $row['state'] ?? null;
 		$state_decode = is_string( $state_raw ) ? json_decode( $state_raw, true ) : null;
-		$state        = is_array( $state_decode ) ? $state_decode : array();
+		$state        = $this->as_array( $state_decode );
 
 		return new StateMachineState(
 			machine_id: is_scalar( $row['id'] ?? null ) ? (int) $row['id'] : 0,
@@ -251,7 +289,14 @@ class StateMachine {
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( $params );
 
-		return $stmt->fetchAll();
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $raw_row ) {
+			$row = $this->as_row( $raw_row );
+			if ( null !== $row ) {
+				$rows[] = $row;
+			}
+		}
+		return $rows;
 	}
 
 	/**
@@ -448,7 +493,7 @@ class StateMachine {
 			$public_updates     = array();
 			foreach ( $result as $key => $value ) {
 				if ( '_event_payload' === $key && is_array( $value ) ) {
-					$transition_payload = $value;
+					$transition_payload = $this->as_array( $value );
 					continue;
 				}
 				if ( is_string( $key ) && ! str_starts_with( $key, '_' ) ) {
@@ -670,10 +715,10 @@ class StateMachine {
 
 		$definition_raw    = $row_assoc['definition'] ?? null;
 		$definition_decode = is_string( $definition_raw ) ? json_decode( $definition_raw, true ) : null;
-		$definition        = is_array( $definition_decode ) ? $definition_decode : array();
+		$definition        = $this->as_array( $definition_decode );
 		$current_state_raw = $row_assoc['current_state'] ?? '';
 		$current_state     = is_scalar( $current_state_raw ) ? (string) $current_state_raw : '';
-		$states_map        = is_array( $definition['states'] ?? null ) ? $definition['states'] : array();
+		$states_map        = $this->as_array( $definition['states'] ?? null );
 		$state_def_raw     = $states_map[ $current_state ] ?? null;
 		$state_def         = is_array( $state_def_raw ) ? $state_def_raw : null;
 
@@ -682,14 +727,11 @@ class StateMachine {
 			throw new \RuntimeException( "State machine {$machine_id} is missing persisted state definition '{$current_state}'." );
 		}
 
-		$state_def_assoc = array();
-		foreach ( $state_def as $key => $value ) {
-			$state_def_assoc[ (string) $key ] = $value;
-		}
+		$state_def_assoc = $this->as_array( $state_def );
 
 		$state_raw    = $row_assoc['state'] ?? null;
 		$state_decode = is_string( $state_raw ) ? json_decode( $state_raw, true ) : null;
-		$state        = is_array( $state_decode ) ? $state_decode : array();
+		$state        = $this->as_array( $state_decode );
 		$status_raw   = $row_assoc['status'] ?? '';
 		$status_value = is_scalar( $status_raw ) ? (string) $status_raw : '';
 
@@ -715,9 +757,9 @@ class StateMachine {
 	 */
 	private function apply_transition_from_locked_context( array $context, array $state, string $event_name, array $event_payload ): void {
 		$pdo           = $context['pdo'] ?? null;
-		$row           = is_array( $context['row'] ?? null ) ? $context['row'] : array();
-		$definition    = is_array( $context['definition'] ?? null ) ? $context['definition'] : array();
-		$state_def     = is_array( $context['state_def'] ?? null ) ? $context['state_def'] : array();
+		$row           = $this->as_array( $context['row'] ?? null );
+		$definition    = $this->as_array( $context['definition'] ?? null );
+		$state_def     = $this->as_array( $context['state_def'] ?? null );
 		$current_state = is_scalar( $context['current_state'] ?? null ) ? (string) $context['current_state'] : '';
 		$machine_id    = isset( $row['id'] ) && is_scalar( $row['id'] ) ? (int) $row['id'] : 0;
 
@@ -1167,7 +1209,7 @@ class StateMachine {
 
 		return array(
 			'class'   => $class,
-			'payload' => is_array( $payload ) ? $payload : array(),
+			'payload' => $this->as_array( $payload ),
 		);
 	}
 

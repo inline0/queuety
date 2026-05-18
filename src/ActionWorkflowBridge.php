@@ -190,8 +190,8 @@ class ActionWorkflowBridge {
 	/**
 	 * Normalize a mapped payload to a durable state-safe array.
 	 *
-	 * @param array<mixed> $payload Action payload.
-	 * @return array<mixed>
+	 * @param array<mixed, mixed> $payload Action payload.
+	 * @return array<string, mixed>
 	 * @throws \InvalidArgumentException If the payload contains reserved keys or unsupported values.
 	 */
 	private static function normalize_payload( array $payload ): array {
@@ -202,7 +202,7 @@ class ActionWorkflowBridge {
 				throw new \InvalidArgumentException( 'Action workflow payload keys cannot start with "_".' );
 			}
 
-			$normalized[ $key ] = self::normalize_payload_value( $value );
+			$normalized[ (string) $key ] = self::normalize_payload_value( $value );
 		}
 
 		return $normalized;

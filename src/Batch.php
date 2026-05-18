@@ -99,8 +99,14 @@ readonly class Batch {
 		$created_at_raw   = $row['created_at'] ?? null;
 		$finished_at_raw  = $row['finished_at'] ?? null;
 
-		$failed_ids = is_string( $failed_ids_json ) ? json_decode( $failed_ids_json, true ) : array();
-		$options    = is_string( $options_json ) ? json_decode( $options_json, true ) : array();
+		$failed_ids   = is_string( $failed_ids_json ) ? json_decode( $failed_ids_json, true ) : array();
+		$options_data = is_string( $options_json ) ? json_decode( $options_json, true ) : array();
+		$options      = array();
+		if ( is_array( $options_data ) ) {
+			foreach ( $options_data as $key => $value ) {
+				$options[ (string) $key ] = $value;
+			}
+		}
 
 		if ( ! is_string( $created_at_raw ) ) {
 			throw new \InvalidArgumentException( 'Batch row is missing a valid created_at timestamp.' );
@@ -120,7 +126,7 @@ readonly class Batch {
 					)
 				)
 				: array(),
-			options: is_array( $options ) ? $options : array(),
+			options: $options,
 			cancelled_at: is_string( $cancelled_at_raw ) && '' !== $cancelled_at_raw
 				? new \DateTimeImmutable( $cancelled_at_raw )
 				: null,

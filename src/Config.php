@@ -43,7 +43,8 @@ class Config {
 			return 'queuety_';
 		}
 
-		$prefix = trim( (string) constant( 'QUEUETY_TABLE_PREFIX' ) );
+		$raw    = constant( 'QUEUETY_TABLE_PREFIX' );
+		$prefix = is_scalar( $raw ) ? trim( (string) $raw ) : '';
 		if ( '' === $prefix ) {
 			return '';
 		}
@@ -53,32 +54,32 @@ class Config {
 
 	/** Completed-job retention period, in days. */
 	public static function retention_days(): int {
-		return defined( 'QUEUETY_RETENTION_DAYS' ) ? (int) QUEUETY_RETENTION_DAYS : 7;
+		return self::int_constant( 'QUEUETY_RETENTION_DAYS', 7 );
 	}
 
 	/** Log retention period, in days. */
 	public static function log_retention_days(): int {
-		return defined( 'QUEUETY_LOG_RETENTION_DAYS' ) ? (int) QUEUETY_LOG_RETENTION_DAYS : 0;
+		return self::int_constant( 'QUEUETY_LOG_RETENTION_DAYS', 0 );
 	}
 
 	/** Maximum execution time, in seconds. */
 	public static function max_execution_time(): int {
-		return defined( 'QUEUETY_MAX_EXECUTION_TIME' ) ? (int) QUEUETY_MAX_EXECUTION_TIME : 300;
+		return self::int_constant( 'QUEUETY_MAX_EXECUTION_TIME', 300 );
 	}
 
 	/** Worker sleep interval, in seconds. */
 	public static function worker_sleep(): int {
-		return defined( 'QUEUETY_WORKER_SLEEP' ) ? (int) QUEUETY_WORKER_SLEEP : 1;
+		return self::int_constant( 'QUEUETY_WORKER_SLEEP', 1 );
 	}
 
 	/** Max jobs before a worker restarts. */
 	public static function worker_max_jobs(): int {
-		return defined( 'QUEUETY_WORKER_MAX_JOBS' ) ? (int) QUEUETY_WORKER_MAX_JOBS : 1000;
+		return self::int_constant( 'QUEUETY_WORKER_MAX_JOBS', 1000 );
 	}
 
 	/** Worker memory ceiling, in megabytes. */
 	public static function worker_max_memory(): int {
-		return defined( 'QUEUETY_WORKER_MAX_MEMORY' ) ? (int) QUEUETY_WORKER_MAX_MEMORY : 128;
+		return self::int_constant( 'QUEUETY_WORKER_MAX_MEMORY', 128 );
 	}
 
 	/** Whether resource-aware admission checks are enabled. */
@@ -88,17 +89,23 @@ class Config {
 
 	/** Recent resource-profile lookback window, in minutes. */
 	public static function resource_profile_window_minutes(): int {
-		return defined( 'QUEUETY_RESOURCE_PROFILE_WINDOW_MINUTES' ) ? max( 1, (int) QUEUETY_RESOURCE_PROFILE_WINDOW_MINUTES ) : 60;
+		return defined( 'QUEUETY_RESOURCE_PROFILE_WINDOW_MINUTES' )
+			? max( 1, self::int_constant( 'QUEUETY_RESOURCE_PROFILE_WINDOW_MINUTES', 60 ) )
+			: 60;
 	}
 
 	/** Resource-profile cache TTL, in seconds. */
 	public static function resource_profile_ttl_seconds(): int {
-		return defined( 'QUEUETY_RESOURCE_PROFILE_TTL' ) ? max( 1, (int) QUEUETY_RESOURCE_PROFILE_TTL ) : 30;
+		return defined( 'QUEUETY_RESOURCE_PROFILE_TTL' )
+			? max( 1, self::int_constant( 'QUEUETY_RESOURCE_PROFILE_TTL', 30 ) )
+			: 30;
 	}
 
 	/** Reserved memory headroom before admitting another job, in megabytes. */
 	public static function resource_memory_headroom_mb(): int {
-		return defined( 'QUEUETY_RESOURCE_MEMORY_HEADROOM_MB' ) ? max( 0, (int) QUEUETY_RESOURCE_MEMORY_HEADROOM_MB ) : 16;
+		return defined( 'QUEUETY_RESOURCE_MEMORY_HEADROOM_MB' )
+			? max( 0, self::int_constant( 'QUEUETY_RESOURCE_MEMORY_HEADROOM_MB', 16 ) )
+			: 16;
 	}
 
 	/** Whether container or host memory awareness is enabled. */
@@ -108,7 +115,9 @@ class Config {
 
 	/** Reserved system-memory headroom, in megabytes. */
 	public static function resource_system_memory_headroom_mb(): int {
-		return defined( 'QUEUETY_RESOURCE_SYSTEM_MEMORY_HEADROOM_MB' ) ? max( 0, (int) QUEUETY_RESOURCE_SYSTEM_MEMORY_HEADROOM_MB ) : 32;
+		return defined( 'QUEUETY_RESOURCE_SYSTEM_MEMORY_HEADROOM_MB' )
+			? max( 0, self::int_constant( 'QUEUETY_RESOURCE_SYSTEM_MEMORY_HEADROOM_MB', 32 ) )
+			: 32;
 	}
 
 	/**
@@ -131,30 +140,39 @@ class Config {
 
 	/** Reserved once-run time headroom, in milliseconds. */
 	public static function resource_time_headroom_ms(): int {
-		return defined( 'QUEUETY_RESOURCE_TIME_HEADROOM_MS' ) ? max( 0, (int) QUEUETY_RESOURCE_TIME_HEADROOM_MS ) : 5000;
+		return defined( 'QUEUETY_RESOURCE_TIME_HEADROOM_MS' )
+			? max( 0, self::int_constant( 'QUEUETY_RESOURCE_TIME_HEADROOM_MS', 5000 ) )
+			: 5000;
 	}
 
 	/** Retry backoff strategy. */
 	public static function retry_backoff(): BackoffStrategy {
 		if ( defined( 'QUEUETY_RETRY_BACKOFF' ) ) {
-			return BackoffStrategy::tryFrom( QUEUETY_RETRY_BACKOFF ) ?? BackoffStrategy::Exponential;
+			$raw = constant( 'QUEUETY_RETRY_BACKOFF' );
+			if ( is_int( $raw ) || is_string( $raw ) ) {
+				return BackoffStrategy::tryFrom( $raw ) ?? BackoffStrategy::Exponential;
+			}
 		}
 		return BackoffStrategy::Exponential;
 	}
 
 	/** Seconds before a processing job is treated as stale. */
 	public static function stale_timeout(): int {
-		return defined( 'QUEUETY_STALE_TIMEOUT' ) ? (int) QUEUETY_STALE_TIMEOUT : 600;
+		return self::int_constant( 'QUEUETY_STALE_TIMEOUT', 600 );
 	}
 
 	/** Adaptive worker-pool scale interval, in seconds. */
 	public static function worker_pool_scale_interval_seconds(): int {
-		return defined( 'QUEUETY_WORKER_POOL_SCALE_INTERVAL' ) ? max( 1, (int) QUEUETY_WORKER_POOL_SCALE_INTERVAL ) : 5;
+		return defined( 'QUEUETY_WORKER_POOL_SCALE_INTERVAL' )
+			? max( 1, self::int_constant( 'QUEUETY_WORKER_POOL_SCALE_INTERVAL', 5 ) )
+			: 5;
 	}
 
 	/** Idle grace period before scaling a worker pool down, in seconds. */
 	public static function worker_pool_idle_grace_seconds(): int {
-		return defined( 'QUEUETY_WORKER_POOL_IDLE_GRACE' ) ? max( 0, (int) QUEUETY_WORKER_POOL_IDLE_GRACE ) : 15;
+		return defined( 'QUEUETY_WORKER_POOL_IDLE_GRACE' )
+			? max( 0, self::int_constant( 'QUEUETY_WORKER_POOL_IDLE_GRACE', 15 ) )
+			: 15;
 	}
 
 	/** Schedules table base name. */
@@ -258,7 +276,7 @@ class Config {
 
 	/** Default cache TTL, in seconds. */
 	public static function cache_ttl(): int {
-		return defined( 'QUEUETY_CACHE_TTL' ) ? (int) QUEUETY_CACHE_TTL : 5;
+		return self::int_constant( 'QUEUETY_CACHE_TTL', 5 );
 	}
 
 	/** Whether debug mode is enabled. */
@@ -281,5 +299,21 @@ class Config {
 		}
 
 		return self::table_prefix() . $suffix;
+	}
+
+	/**
+	 * Read a constant as an integer with scalar narrowing.
+	 *
+	 * @param string $constant Constant name.
+	 * @param int    $default Fallback when the constant is missing or non-scalar.
+	 */
+	private static function int_constant( string $constant, int $default ): int {
+		if ( ! defined( $constant ) ) {
+			return $default;
+		}
+
+		$value = constant( $constant );
+
+		return is_scalar( $value ) ? (int) $value : $default;
 	}
 }

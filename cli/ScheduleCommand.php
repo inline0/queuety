@@ -83,9 +83,14 @@ class ScheduleCommand extends \WP_CLI_Command {
 		$payload_raw = $assoc_args['payload'] ?? '{}';
 		$payload_str = is_string( $payload_raw ) ? $payload_raw : '{}';
 		$decoded     = json_decode( $payload_str, true );
-		$payload     = is_array( $decoded ) ? $decoded : array();
-		$queue_raw   = $assoc_args['queue'] ?? 'default';
-		$queue       = is_string( $queue_raw ) ? $queue_raw : 'default';
+		$payload     = array();
+		if ( is_array( $decoded ) ) {
+			foreach ( $decoded as $key => $value ) {
+				$payload[ (string) $key ] = $value;
+			}
+		}
+		$queue_raw = $assoc_args['queue'] ?? 'default';
+		$queue     = is_string( $queue_raw ) ? $queue_raw : 'default';
 
 		if ( isset( $assoc_args['every'] ) && is_string( $assoc_args['every'] ) ) {
 			$expression = $assoc_args['every'];

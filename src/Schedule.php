@@ -55,7 +55,12 @@ readonly class Schedule {
 		$handler         = isset( $row['handler'] ) && is_scalar( $row['handler'] ) ? (string) $row['handler'] : '';
 		$payload_json    = isset( $row['payload'] ) && is_string( $row['payload'] ) ? $row['payload'] : '';
 		$payload_decoded = '' !== $payload_json ? json_decode( $payload_json, true ) : array();
-		$payload         = is_array( $payload_decoded ) ? $payload_decoded : array();
+		$payload         = array();
+		if ( is_array( $payload_decoded ) ) {
+			foreach ( $payload_decoded as $payload_key => $payload_value ) {
+				$payload[ (string) $payload_key ] = $payload_value;
+			}
+		}
 		$queue           = isset( $row['queue'] ) && is_scalar( $row['queue'] ) ? (string) $row['queue'] : '';
 		$expression      = isset( $row['expression'] ) && is_scalar( $row['expression'] ) ? (string) $row['expression'] : '';
 		$expression_type = $row['expression_type'] ?? '';

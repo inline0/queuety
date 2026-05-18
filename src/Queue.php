@@ -139,7 +139,7 @@ class Queue {
 	 * All keys are optional except handler.
 	 *
 	 * @param array<int, array<string, mixed>> $jobs Array of job definitions.
-	 * @return int[] Array of new job IDs.
+	 * @return array<int, int> Array of new job IDs.
 	 */
 	public function batch( array $jobs ): array {
 		if ( empty( $jobs ) ) {
@@ -570,10 +570,7 @@ class Queue {
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( $params );
 
-		return array_map(
-			fn( array $row ) => Job::from_row( $row ),
-			$stmt->fetchAll()
-		);
+		return self::hydrate_job_rows( $stmt->fetchAll() );
 	}
 
 	/**
@@ -636,10 +633,7 @@ class Queue {
 			)
 		);
 
-		return array_map(
-			fn( array $row ) => Job::from_row( $row ),
-			$stmt->fetchAll()
-		);
+		return self::hydrate_job_rows( $stmt->fetchAll() );
 	}
 
 	/**
@@ -725,7 +719,18 @@ class Queue {
 			return array();
 		}
 
-		return array_column( $stmt->fetchAll(), 'queue' );
+		$queues = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$value = $row['queue'] ?? null;
+			if ( is_string( $value ) ) {
+				$queues[] = $value;
+			}
+		}
+
+		return $queues;
 	}
 
 	/**
@@ -752,5 +757,29 @@ class Queue {
 		}
 
 		return array( trim( $queue ) );
+	}
+
+	/**
+	 * Hydrate PDO rows into Job models, skipping non-array rows.
+	 *
+	 * @param array<mixed, mixed> $rows Raw rows from PDOStatement::fetchAll().
+	 * @return Job[]
+	 */
+	private static function hydrate_job_rows( array $rows ): array {
+		$jobs = array();
+		foreach ( $rows as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$typed = array();
+			foreach ( $row as $key => $value ) {
+				if ( is_string( $key ) ) {
+					$typed[ $key ] = $value;
+				}
+			}
+			$jobs[] = Job::from_row( $typed );
+		}
+
+		return $jobs;
 	}
 }

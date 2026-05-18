@@ -377,7 +377,14 @@ class WorkflowEventLog {
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
 
-		return array_map( array( $this, 'decode_event_row' ), $stmt->fetchAll() );
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			if ( is_array( $row ) ) {
+				$rows[] = $this->decode_event_row( self::normalize_string_keyed_row( $row ) );
+			}
+		}
+
+		return $rows;
 	}
 
 	/**
@@ -607,14 +614,18 @@ class WorkflowEventLog {
 		$stmt  = $this->conn->pdo()->prepare( "SELECT * FROM {$table} WHERE workflow_id = :workflow_id ORDER BY id ASC" );
 		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
 
-		return array_map(
-			static function ( array $row ): array {
-				$row['payload']        = json_decode( (string) $row['payload'], true ) ?: array();
-				$row['heartbeat_data'] = null === $row['heartbeat_data'] ? null : json_decode( (string) $row['heartbeat_data'], true );
-				return $row;
-			},
-			$stmt->fetchAll()
-		);
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$row                   = self::normalize_string_keyed_row( $row );
+			$row['payload']        = self::decode_json_column( $row['payload'] ?? null ) ?? array();
+			$row['heartbeat_data'] = self::decode_json_column( $row['heartbeat_data'] ?? null );
+			$rows[]                = $row;
+		}
+
+		return $rows;
 	}
 
 	/**
@@ -628,13 +639,17 @@ class WorkflowEventLog {
 		$stmt  = $this->conn->pdo()->prepare( "SELECT * FROM {$table} WHERE workflow_id = :workflow_id ORDER BY id ASC" );
 		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
 
-		return array_map(
-			static function ( array $row ): array {
-				$row['context'] = null === $row['context'] ? null : json_decode( (string) $row['context'], true );
-				return $row;
-			},
-			$stmt->fetchAll()
-		);
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$row            = self::normalize_string_keyed_row( $row );
+			$row['context'] = self::decode_json_column( $row['context'] ?? null );
+			$rows[]         = $row;
+		}
+
+		return $rows;
 	}
 
 	/**
@@ -648,13 +663,17 @@ class WorkflowEventLog {
 		$stmt  = $this->conn->pdo()->prepare( "SELECT * FROM {$table} WHERE workflow_id = :workflow_id ORDER BY id ASC" );
 		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
 
-		return array_map(
-			static function ( array $row ): array {
-				$row['metadata'] = null === $row['metadata'] ? null : json_decode( (string) $row['metadata'], true );
-				return $row;
-			},
-			$stmt->fetchAll()
-		);
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$row             = self::normalize_string_keyed_row( $row );
+			$row['metadata'] = self::decode_json_column( $row['metadata'] ?? null );
+			$rows[]          = $row;
+		}
+
+		return $rows;
 	}
 
 	/**
@@ -667,7 +686,15 @@ class WorkflowEventLog {
 		$table = $this->conn->table( Config::table_chunks() );
 		$stmt  = $this->conn->pdo()->prepare( "SELECT * FROM {$table} WHERE workflow_id = :workflow_id ORDER BY step_index ASC, chunk_index ASC, id ASC" );
 		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
-		return $stmt->fetchAll();
+
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			if ( is_array( $row ) ) {
+				$rows[] = self::normalize_string_keyed_row( $row );
+			}
+		}
+
+		return $rows;
 	}
 
 	/**
@@ -681,13 +708,17 @@ class WorkflowEventLog {
 		$stmt  = $this->conn->pdo()->prepare( "SELECT * FROM {$table} WHERE workflow_id = :workflow_id ORDER BY id ASC" );
 		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
 
-		return array_map(
-			static function ( array $row ): array {
-				$row['payload'] = json_decode( (string) $row['payload'], true ) ?: array();
-				return $row;
-			},
-			$stmt->fetchAll()
-		);
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$row            = self::normalize_string_keyed_row( $row );
+			$row['payload'] = self::decode_json_column( $row['payload'] ?? null ) ?? array();
+			$rows[]         = $row;
+		}
+
+		return $rows;
 	}
 
 	/**
@@ -700,6 +731,50 @@ class WorkflowEventLog {
 		$table = $this->conn->table( Config::table_workflow_dependencies() );
 		$stmt  = $this->conn->pdo()->prepare( "SELECT * FROM {$table} WHERE waiting_workflow_id = :workflow_id ORDER BY id ASC" );
 		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
-		return $stmt->fetchAll();
+
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			if ( is_array( $row ) ) {
+				$rows[] = self::normalize_string_keyed_row( $row );
+			}
+		}
+
+		return $rows;
+	}
+
+	/**
+	 * Reduce a PDO row to an array with only string keys.
+	 *
+	 * @param array<mixed, mixed> $row Raw PDO row.
+	 * @return array<string, mixed>
+	 */
+	private static function normalize_string_keyed_row( array $row ): array {
+		$normalized = array();
+		foreach ( $row as $key => $value ) {
+			if ( is_string( $key ) ) {
+				$normalized[ $key ] = $value;
+			}
+		}
+
+		return $normalized;
+	}
+
+	/**
+	 * Decode a possibly-null JSON column into an array, or null when missing.
+	 *
+	 * @param mixed $value Raw column value.
+	 * @return array<mixed>|null
+	 */
+	private static function decode_json_column( mixed $value ): ?array {
+		if ( null === $value ) {
+			return null;
+		}
+		if ( ! is_string( $value ) ) {
+			return null;
+		}
+
+		$decoded = json_decode( $value, true );
+
+		return is_array( $decoded ) ? $decoded : null;
 	}
 }

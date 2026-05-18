@@ -100,7 +100,11 @@ class CronBridge {
 			return null;
 		}
 
-		if ( empty( $event->schedule ) ) {
+		if ( empty( $event->schedule ) || ! is_string( $event->schedule ) ) {
+			return null;
+		}
+
+		if ( ! is_string( $event->hook ) ) {
 			return null;
 		}
 

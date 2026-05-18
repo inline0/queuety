@@ -243,7 +243,8 @@ class Queuety {
 			return 'queuety';
 		}
 
-		$command = trim( (string) constant( 'QUEUETY_CLI_COMMAND' ) );
+		$raw     = constant( 'QUEUETY_CLI_COMMAND' );
+		$command = is_scalar( $raw ) ? trim( (string) $raw ) : '';
 		return '' !== $command ? $command : 'queuety';
 	}
 
@@ -458,7 +459,21 @@ class Queuety {
 		$stmt  = self::conn_()->pdo()->prepare( $sql );
 		$stmt->execute( $params );
 
-		return $stmt->fetchAll();
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$typed = array();
+			foreach ( $row as $key => $value ) {
+				if ( is_string( $key ) ) {
+					$typed[ $key ] = $value;
+				}
+			}
+			$rows[] = $typed;
+		}
+
+		return $rows;
 	}
 
 	/**
