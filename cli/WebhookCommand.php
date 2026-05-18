@@ -59,7 +59,7 @@ class WebhookCommand extends \WP_CLI_Command {
 		}
 
 		$fields = array( 'id', 'event', 'url', 'created_at' );
-		\WP_CLI\Utils\format_items( $format, $webhooks, $fields );
+		\WP_CLI\Utils\format_items( $format, array_values( $webhooks ), $fields );
 	}
 
 	/**

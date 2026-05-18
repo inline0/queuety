@@ -664,7 +664,7 @@ class Worker {
 				$webhook_ref = $this;
 				$job_record  = $job;
 				$start_ref   = $start_time;
-				$core        = function ( object $job_obj ) use ( $queue_ref, $logger_ref, $job_record, $start_ref ): void {
+				$core        = function ( \Queuety\Contracts\Job $job_obj ) use ( $queue_ref, $logger_ref, $job_record, $start_ref ): void {
 					$job_obj->handle();
 
 					$duration_ms = (int) ( ( hrtime( true ) - $start_ref ) / 1_000_000 );
@@ -756,6 +756,10 @@ class Worker {
 						duration_ms: $duration_ms,
 					);
 				} else {
+					if ( ! $handler instanceof Handler ) {
+						throw new \RuntimeException( "Handler {$job->handler} is not invocable as a non-workflow handler." );
+					}
+
 					$handler->handle( $this->public_payload( $job->payload ) );
 
 					$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );

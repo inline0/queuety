@@ -37,21 +37,27 @@ class ConfigParser {
 			'DB_PASSWORD' => 'password',
 		);
 
-		$result = array();
+		$values = array();
 		foreach ( $constants as $constant => $key ) {
 			$pattern = '/define\s*\(\s*[\'"]' . preg_quote( $constant, '/' ) . '[\'"]\s*,\s*[\'"]([^\'"]*)[\'"]\s*\)/';
 			if ( preg_match( $pattern, $contents, $matches ) ) {
-				$result[ $key ] = $matches[1];
+				$values[ $key ] = $matches[1];
 			} else {
 				throw new \RuntimeException( "Could not find {$constant} in wp-config.php" );
 			}
 		}
 
-		$result['prefix'] = 'wp_';
+		$prefix = 'wp_';
 		if ( preg_match( '/\$table_prefix\s*=\s*[\'"]([^\'"]*)[\'"]\s*;/', $contents, $matches ) ) {
-			$result['prefix'] = $matches[1];
+			$prefix = $matches[1];
 		}
 
-		return $result;
+		return array(
+			'host'     => $values['host'] ?? '',
+			'name'     => $values['name'] ?? '',
+			'user'     => $values['user'] ?? '',
+			'password' => $values['password'] ?? '',
+			'prefix'   => $prefix,
+		);
 	}
 }

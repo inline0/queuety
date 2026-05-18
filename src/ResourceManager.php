@@ -128,8 +128,12 @@ class ResourceManager {
 		$cache_key = "queuety:resource_profile:{$handler}";
 		if ( null !== $this->cache ) {
 			$cached = $this->cache->get( $cache_key );
-			if ( is_array( $cached ) ) {
-				return $cached;
+			if ( is_array( $cached ) && array_key_exists( 'sample_count', $cached ) ) {
+				return array(
+					'sample_count'       => (int) $cached['sample_count'],
+					'avg_duration_ms'    => isset( $cached['avg_duration_ms'] ) ? (int) $cached['avg_duration_ms'] : null,
+					'max_memory_peak_kb' => isset( $cached['max_memory_peak_kb'] ) ? (int) $cached['max_memory_peak_kb'] : null,
+				);
 			}
 		}
 

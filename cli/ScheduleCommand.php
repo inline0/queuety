@@ -48,7 +48,7 @@ class ScheduleCommand extends \WP_CLI_Command {
 
 		\WP_CLI\Utils\format_items(
 			$format,
-			$items,
+			array_values( $items ),
 			array( 'ID', 'Handler', 'Expression', 'Type', 'Queue', 'Enabled', 'Last Run', 'Next Run' )
 		);
 	}

@@ -447,24 +447,23 @@ class Queue {
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( $params );
 
-		$result = array(
-			'pending'    => 0,
-			'processing' => 0,
-			'completed'  => 0,
-			'failed'     => 0,
-			'buried'     => 0,
-		);
-
+		$counts = array();
 		while ( true ) {
 			$row = $stmt->fetch();
 			if ( false === $row ) {
 				break;
 			}
 
-			$result[ $row['status'] ] = (int) $row['cnt'];
+			$counts[ (string) $row['status'] ] = (int) $row['cnt'];
 		}
 
-		return $result;
+		return array(
+			'pending'    => $counts['pending'] ?? 0,
+			'processing' => $counts['processing'] ?? 0,
+			'completed'  => $counts['completed'] ?? 0,
+			'failed'     => $counts['failed'] ?? 0,
+			'buried'     => $counts['buried'] ?? 0,
+		);
 	}
 
 	/**
@@ -699,6 +698,10 @@ class Queue {
 		$stmt  = $this->conn->pdo()->query(
 			"SELECT queue FROM {$table} WHERE paused = 1"
 		);
+
+		if ( false === $stmt ) {
+			return array();
+		}
 
 		return array_column( $stmt->fetchAll(), 'queue' );
 	}

@@ -43,11 +43,12 @@ class HandlerDiscovery {
 			}
 
 			$relative_path = str_replace( $directory . DIRECTORY_SEPARATOR, '', $file->getPathname() );
-			$class_name    = $namespace . str_replace(
+			$class_suffix  = str_replace(
 				array( DIRECTORY_SEPARATOR, '.php' ),
 				array( '\\', '' ),
 				$relative_path
 			);
+			$class_name    = $namespace . ( is_array( $class_suffix ) ? implode( '', $class_suffix ) : $class_suffix );
 
 			if ( ! class_exists( $class_name ) ) {
 				continue;

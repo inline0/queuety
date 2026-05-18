@@ -20,15 +20,15 @@ class HandlerRegistry {
 	/**
 	 * Registered handler mappings.
 	 *
-	 * @var array<string, string>
+	 * @var array<string, class-string>
 	 */
 	private array $handlers = array();
 
 	/**
 	 * Register a handler class under a name.
 	 *
-	 * @param string $name  Handler name used in dispatch.
-	 * @param string $class Fully qualified class name.
+	 * @param string       $name  Handler name used in dispatch.
+	 * @param class-string $class Fully qualified class name.
 	 */
 	public function register( string $name, string $class ): void {
 		$this->handlers[ $name ] = $class;
@@ -80,7 +80,11 @@ class HandlerRegistry {
 		if ( $reflection->implementsInterface( JobContract::class ) ) {
 			$constructor = $reflection->getConstructor();
 			if ( null === $constructor || 0 === $constructor->getNumberOfRequiredParameters() ) {
-				return $reflection->newInstance();
+				$instance = $reflection->newInstance();
+				if ( ! $instance instanceof JobContract ) {
+					throw new \RuntimeException( "Class {$class} does not implement Contracts\\Job at instantiation." );
+				}
+				return $instance;
 			}
 
 			// Job classes may require constructor payload, so resolution here only produces a probe instance.
@@ -105,7 +109,7 @@ class HandlerRegistry {
 	public function is_job_class( string $name ): bool {
 		$class = $this->class_name( $name );
 
-		if ( null === $class ) {
+		if ( null === $class || ! class_exists( $class ) ) {
 			return false;
 		}
 

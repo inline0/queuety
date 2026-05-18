@@ -162,7 +162,7 @@ class CronBridge {
 	/**
 	 * Intercept a wp_get_scheduled_event() lookup.
 	 *
-	 * @param null|bool|object  $pre       Short-circuit value.
+	 * @param null|false|object $pre       Short-circuit value.
 	 * @param string            $hook      The event hook name.
 	 * @param array<int, mixed> $args      Event arguments.
 	 * @param int|null          $timestamp Optional specific timestamp.

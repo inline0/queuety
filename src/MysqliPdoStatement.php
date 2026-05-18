@@ -189,7 +189,7 @@ class MysqliPdoStatement extends \PDOStatement {
 			while ( $row = mysqli_fetch_assoc( $result ) ) {
 				$this->rows[] = $row;
 			}
-			$this->row_count = mysqli_num_rows( $result );
+			$this->row_count = (int) mysqli_num_rows( $result );
 			mysqli_free_result( $result );
 			return;
 		}
@@ -209,7 +209,7 @@ class MysqliPdoStatement extends \PDOStatement {
 			while ( $row = mysqli_fetch_assoc( $result ) ) {
 				$this->rows[] = $row;
 			}
-			$this->row_count = mysqli_num_rows( $result );
+			$this->row_count = (int) mysqli_num_rows( $result );
 			mysqli_free_result( $result );
 			return;
 		}

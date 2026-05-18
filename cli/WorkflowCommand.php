@@ -99,7 +99,7 @@ class WorkflowCommand extends \WP_CLI_Command {
 
 		if ( ! empty( $state->state ) ) {
 			\WP_CLI::log( 'State:' );
-			\WP_CLI::log( json_encode( $state->state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
+			\WP_CLI::log( (string) json_encode( $state->state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
 		}
 	}
 
@@ -224,7 +224,7 @@ class WorkflowCommand extends \WP_CLI_Command {
 		$artifacts       = Queuety::workflow_artifacts( $workflow_id, $include_content );
 
 		if ( 'json' === $format ) {
-			\WP_CLI::log( json_encode( $artifacts, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
+			\WP_CLI::log( (string) json_encode( $artifacts, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
 			return;
 		}
 
@@ -241,7 +241,7 @@ class WorkflowCommand extends \WP_CLI_Command {
 
 		\WP_CLI\Utils\format_items(
 			$format,
-			$items,
+			array_values( $items ),
 			$include_content
 				? array( 'Key', 'Kind', 'Step', 'UpdatedAt', 'Content' )
 				: array( 'Key', 'Kind', 'Step', 'UpdatedAt' )
@@ -269,7 +269,7 @@ class WorkflowCommand extends \WP_CLI_Command {
 			return;
 		}
 
-		\WP_CLI::log( json_encode( $artifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
+		\WP_CLI::log( (string) json_encode( $artifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
 	}
 
 	/**
@@ -366,7 +366,7 @@ class WorkflowCommand extends \WP_CLI_Command {
 			$workflows
 		);
 
-		\WP_CLI\Utils\format_items( $format, $items, array( 'ID', 'Name', 'Version', 'Hash', 'Status', 'Step', 'StepName', 'WaitMode', 'Waiting' ) );
+		\WP_CLI\Utils\format_items( $format, array_values( $items ), array( 'ID', 'Name', 'Version', 'Hash', 'Status', 'Step', 'StepName', 'WaitMode', 'Waiting' ) );
 	}
 
 	/**
@@ -420,7 +420,7 @@ class WorkflowCommand extends \WP_CLI_Command {
 
 		\WP_CLI\Utils\format_items(
 			$format,
-			$items,
+			array_values( $items ),
 			array( 'ID', 'Step', 'Event', 'Handler', 'Duration_ms', 'Error', 'Created_at' )
 		);
 	}
@@ -552,6 +552,6 @@ class WorkflowCommand extends \WP_CLI_Command {
 		}
 
 		\WP_CLI::log( "State at step {$step_index} for workflow #{$workflow_id}:" );
-		\WP_CLI::log( json_encode( $snapshot, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
+		\WP_CLI::log( (string) json_encode( $snapshot, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
 	}
 }

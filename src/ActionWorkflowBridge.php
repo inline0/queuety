@@ -56,7 +56,7 @@ class ActionWorkflowBridge {
 		add_action(
 			$hook,
 			static function ( mixed ...$args ) use ( $hook, $workflow, $map, $when, $idempotency_key ): void {
-				self::dispatch_action( $hook, $workflow, $args, $map, $when, $idempotency_key );
+				self::dispatch_action( $hook, $workflow, array_values( $args ), $map, $when, $idempotency_key );
 			},
 			$priority,
 			$accepted_args
@@ -169,8 +169,10 @@ class ActionWorkflowBridge {
 			}
 		} elseif ( is_array( $callable ) ) {
 			$reflection = new \ReflectionMethod( $callable[0], $callable[1] );
-		} else {
+		} elseif ( is_object( $callable ) ) {
 			$reflection = new \ReflectionMethod( $callable, '__invoke' );
+		} else {
+			return 0;
 		}
 
 		if ( $reflection->isVariadic() ) {

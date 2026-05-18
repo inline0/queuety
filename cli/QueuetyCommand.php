@@ -202,7 +202,7 @@ class QueuetyCommand extends \WP_CLI_Command {
 			50
 		);
 
-		\WP_CLI\Utils\format_items( $format, $rows, array( 'id', 'queue', 'handler', 'status', 'attempts', 'priority', 'created_at' ) );
+		\WP_CLI\Utils\format_items( $format, array_values( $rows ), array( 'id', 'queue', 'handler', 'status', 'attempts', 'priority', 'created_at' ) );
 	}
 
 	/**
@@ -375,7 +375,7 @@ class QueuetyCommand extends \WP_CLI_Command {
 
 		\WP_CLI::line( '' );
 		\WP_CLI::line( 'Payload:' );
-		\WP_CLI::line( json_encode( $job['payload'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
+		\WP_CLI::line( (string) json_encode( $job['payload'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
 
 		$logs = $data['logs'];
 		if ( ! empty( $logs ) ) {
@@ -411,7 +411,7 @@ class QueuetyCommand extends \WP_CLI_Command {
 		}
 
 		$fields = array( 'handler', 'completed', 'failed', 'avg_ms', 'p95_ms', 'error_rate' );
-		\WP_CLI\Utils\format_items( $format, $stats, $fields );
+		\WP_CLI\Utils\format_items( $format, array_values( $stats ), $fields );
 	}
 
 	/**

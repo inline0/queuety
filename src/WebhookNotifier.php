@@ -59,14 +59,17 @@ class WebhookNotifier {
 	/**
 	 * List all registered webhooks.
 	 *
-	 * @return array<int, array<string, mixed>> Array of webhook rows.
+	 * @return list<array<string, mixed>> Array of webhook rows.
 	 */
 	public function list(): array {
 		$table = $this->conn->table( Config::table_webhooks() );
 		$stmt  = $this->conn->pdo()->query(
 			"SELECT * FROM {$table} ORDER BY id ASC"
 		);
-		return $stmt->fetchAll();
+		if ( false === $stmt ) {
+			return array();
+		}
+		return array_values( $stmt->fetchAll() );
 	}
 
 	/**

@@ -145,10 +145,12 @@ class StateMachineBuilder {
 	 * @return self
 	 */
 	public function action( string|array $action_class ): self {
-		$state_name                                  = $this->current_state_name();
-		$action                                      = self::handler_definition( $action_class, 'State machine action' );
-		$this->states[ $state_name ]['action']       = $action;
-		$this->states[ $state_name ]['action_class'] = $action['class'];
+		$state_name                  = $this->current_state_name();
+		$action                      = self::handler_definition( $action_class, 'State machine action' );
+		$state                       = $this->states[ $state_name ];
+		$state['action']             = $action;
+		$state['action_class']       = $action['class'];
+		$this->states[ $state_name ] = $state;
 		return $this;
 	}
 

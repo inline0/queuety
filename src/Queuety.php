@@ -704,8 +704,8 @@ class Queuety {
 	/**
 	 * Register a handler class under a name.
 	 *
-	 * @param string $name  Handler name.
-	 * @param string $class Fully qualified class name.
+	 * @param string       $name  Handler name.
+	 * @param class-string $class Fully qualified class name.
 	 */
 	public static function register( string $name, string $class ): void {
 		self::ensure_initialized();
@@ -1302,7 +1302,7 @@ class Queuety {
 	 * Supported keys: job_id, workflow_id, handler, event, since, limit.
 	 *
 	 * @param array<string, mixed> $filters Normalized query filters.
-	 * @return array<int, array<string, mixed>>
+	 * @return list<array<string, mixed>>
 	 */
 	public static function query_logs( array $filters = array() ): array {
 		self::ensure_initialized();

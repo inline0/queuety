@@ -96,6 +96,10 @@ class Scheduler {
 		$table = $this->conn->table( Config::table_schedules() );
 		$stmt  = $this->conn->pdo()->query( "SELECT * FROM {$table} ORDER BY id ASC" );
 
+		if ( false === $stmt ) {
+			return array();
+		}
+
 		return array_map(
 			fn( array $row ) => Schedule::from_row( $row ),
 			$stmt->fetchAll()

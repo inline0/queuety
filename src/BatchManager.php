@@ -278,7 +278,9 @@ class BatchManager {
 
 		try {
 			$handler = new $handler_class();
-			$handler->handle( $batch );
+			if ( method_exists( $handler, 'handle' ) ) {
+				$handler->handle( $batch );
+			}
 		} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Callback failures are non-fatal.
 			unset( $e );
 		}

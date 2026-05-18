@@ -1723,7 +1723,7 @@ class Workflow {
 	 * Normalize persisted for-each branch entries so sparse indexes survive JSON round-trips.
 	 *
 	 * @param array<int|string, mixed> $entries Persisted result or failure entries.
-	 * @return array<string, array<string, mixed>>
+	 * @return array<int|string, array<int|string, mixed>>
 	 */
 	private function normalize_for_each_entries( array $entries ): array {
 		$normalized = array();
