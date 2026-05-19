@@ -2,6 +2,26 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.22.0] - 2026-05-19
+
+### Changed
+
+- entire codebase now type-checks at PHPStan level max (level 10) with no `@phpstan-ignore`, `assert()`, or inline `@var` escape hatches
+- typed private accessors on `Queuety` facade so its singleton dependencies dereference safely after `ensure_initialized()`
+- DB row hydration goes through small typed helpers (`Job::row_*`, `Logger::normalize_log_rows`, `WorkflowExporter::row_*`, `BatchManager::normalize_row`, `StateMachineEventLog::decode_event_row`) so mixed PDO values get narrowed once at the boundary
+- `Job::is_workflow_step()` now narrows `workflow_id` and `step_index` to non-null inside the true branch via `@phpstan-assert-if-true`
+- `HandlerRegistry::resolve()` validates the reflected instance implements the declared interface before returning
+- `Queue::stats()` and `ResourceManager::handler_profile()` assemble their declared array shapes explicitly so the return contract is provable
+- `ActionWorkflowBridge::callable_arity()` now uses `Closure::fromCallable()` for a uniform reflection path across all callable forms
+- `ConfigParser::from_wp_config()` drops dead null-coalescing defaults since the loop either populates all keys or throws
+
+### Fixed
+
+- `Schema::install()` and other `PDO::query()` call sites now guard against `false` return when the statement cannot be prepared
+- `MysqliPdoStatement::$row_count` correctly stores `int` from `mysqli_num_rows()` regardless of the underlying driver return type
+- `CronExpression::next_run()` handles the `false` return from `preg_split()` instead of crashing on `count()`
+- `WorkflowEventLog::record_step_completed()` artifact and chunk parameter types now match what `ExecutionContext::consume_trace()` actually returns
+
 ## [0.21.1] - 2026-04-29
 
 ### Changed
