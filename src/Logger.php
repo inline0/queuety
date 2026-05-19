@@ -26,10 +26,10 @@ class Logger {
 	/**
 	 * Write a log entry.
 	 *
-	 * @param LogEvent $event Log event type.
-	 * @param array    $data  Log data. Supported keys: job_id, workflow_id, step_index,
-	 *                        handler, queue, attempt, duration_ms, memory_peak_kb,
-	 *                        error_message, error_class, error_trace, context.
+	 * @param LogEvent             $event Log event type.
+	 * @param array<string, mixed> $data  Log data. Supported keys: job_id, workflow_id, step_index,
+	 *                                    handler, queue, attempt, duration_ms, memory_peak_kb,
+	 *                                    error_message, error_class, error_trace, context.
 	 * @return int The new log entry ID.
 	 */
 	public function log( LogEvent $event, array $data = array() ): int {
@@ -71,10 +71,31 @@ class Logger {
 	}
 
 	/**
+	 * Normalize raw PDO log rows into a list of associative arrays.
+	 *
+	 * @param array<int|string, mixed> $raw_rows Rows from PDOStatement::fetchAll().
+	 * @return list<array<string, mixed>>
+	 */
+	private function normalize_log_rows( array $raw_rows ): array {
+		$rows = array();
+		foreach ( $raw_rows as $raw_row ) {
+			if ( ! is_array( $raw_row ) ) {
+				continue;
+			}
+			$row = array();
+			foreach ( $raw_row as $key => $value ) {
+				$row[ (string) $key ] = $value;
+			}
+			$rows[] = $row;
+		}
+		return $rows;
+	}
+
+	/**
 	 * Get log entries for a specific job.
 	 *
 	 * @param int $job_id Job ID.
-	 * @return array
+	 * @return list<array<string, mixed>>
 	 */
 	public function for_job( int $job_id ): array {
 		$table = $this->conn->table( Config::table_logs() );
@@ -82,14 +103,14 @@ class Logger {
 			"SELECT * FROM {$table} WHERE job_id = :job_id ORDER BY id ASC"
 		);
 		$stmt->execute( array( 'job_id' => $job_id ) );
-		return $stmt->fetchAll();
+		return $this->normalize_log_rows( $stmt->fetchAll() );
 	}
 
 	/**
 	 * Get log entries for a specific workflow.
 	 *
 	 * @param int $workflow_id Workflow ID.
-	 * @return array
+	 * @return list<array<string, mixed>>
 	 */
 	public function for_workflow( int $workflow_id ): array {
 		$table = $this->conn->table( Config::table_logs() );
@@ -97,7 +118,7 @@ class Logger {
 			"SELECT * FROM {$table} WHERE workflow_id = :workflow_id ORDER BY id ASC"
 		);
 		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
-		return $stmt->fetchAll();
+		return $this->normalize_log_rows( $stmt->fetchAll() );
 	}
 
 	/**
@@ -105,7 +126,7 @@ class Logger {
 	 *
 	 * @param string   $handler Handler name.
 	 * @param int|null $limit   Max entries to return.
-	 * @return array
+	 * @return list<array<string, mixed>>
 	 */
 	public function for_handler( string $handler, ?int $limit = null ): array {
 		$table = $this->conn->table( Config::table_logs() );
@@ -115,7 +136,7 @@ class Logger {
 		}
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( array( 'handler' => $handler ) );
-		return $stmt->fetchAll();
+		return $this->normalize_log_rows( $stmt->fetchAll() );
 	}
 
 	/**
@@ -123,7 +144,7 @@ class Logger {
 	 *
 	 * @param LogEvent $event Event type.
 	 * @param int|null $limit Max entries to return.
-	 * @return array
+	 * @return list<array<string, mixed>>
 	 */
 	public function for_event( LogEvent $event, ?int $limit = null ): array {
 		$table = $this->conn->table( Config::table_logs() );
@@ -133,7 +154,7 @@ class Logger {
 		}
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( array( 'event' => $event->value ) );
-		return $stmt->fetchAll();
+		return $this->normalize_log_rows( $stmt->fetchAll() );
 	}
 
 	/**
@@ -141,7 +162,7 @@ class Logger {
 	 *
 	 * @param \DateTimeImmutable $since Start time.
 	 * @param int|null           $limit Max entries to return.
-	 * @return array
+	 * @return list<array<string, mixed>>
 	 */
 	public function since( \DateTimeImmutable $since, ?int $limit = null ): array {
 		$table = $this->conn->table( Config::table_logs() );
@@ -151,7 +172,7 @@ class Logger {
 		}
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( array( 'since' => $since->format( 'Y-m-d H:i:s' ) ) );
-		return $stmt->fetchAll();
+		return $this->normalize_log_rows( $stmt->fetchAll() );
 	}
 
 	/**

@@ -20,24 +20,24 @@ final class ExecutionContext {
 	/**
 	 * Active execution frame.
 	 *
-	 * @var array{job_id:int,workflow_id:int|null,step_index:int|null,payload:array}|null
+	 * @var array{job_id: int, workflow_id: int|null, step_index: int|null, payload: array<string, mixed>}|null
 	 */
 	private static ?array $frame = null;
 
 	/**
 	 * Active trace buffer.
 	 *
-	 * @var array{input?:mixed,output?:mixed,context?:array,artifacts?:array,chunks?:array}
+	 * @var array{input?: mixed, output?: mixed, context?: array<string, mixed>, artifacts?: array<int, array<string, mixed>>, chunks?: array<int, array<string, mixed>>}
 	 */
 	private static array $trace = array();
 
 	/**
 	 * Store the active execution frame.
 	 *
-	 * @param int      $job_id       Current job ID.
-	 * @param int|null $workflow_id  Current workflow ID, if any.
-	 * @param int|null $step_index   Current workflow step index, if any.
-	 * @param array    $payload      Current job payload.
+	 * @param int                  $job_id      Current job ID.
+	 * @param int|null             $workflow_id Current workflow ID, if any.
+	 * @param int|null             $step_index  Current workflow step index, if any.
+	 * @param array<string, mixed> $payload     Current job payload.
 	 */
 	public static function enter( int $job_id, ?int $workflow_id = null, ?int $step_index = null, array $payload = array() ): void {
 		self::$frame = array(
@@ -87,7 +87,7 @@ final class ExecutionContext {
 	/**
 	 * Get the current job payload.
 	 *
-	 * @return array
+	 * @return array<string, mixed>
 	 */
 	public static function payload(): array {
 		return self::$frame['payload'] ?? array();
@@ -114,7 +114,7 @@ final class ExecutionContext {
 	/**
 	 * Add trace context values.
 	 *
-	 * @param array $context Context values.
+	 * @param array<string, mixed> $context Context values.
 	 */
 	public static function add_trace_context( array $context ): void {
 		self::$trace['context'] = array_merge( self::$trace['context'] ?? array(), $context );
@@ -123,7 +123,7 @@ final class ExecutionContext {
 	/**
 	 * Add a trace artifact reference.
 	 *
-	 * @param array $artifact Artifact reference.
+	 * @param array<string, mixed> $artifact Artifact reference.
 	 */
 	public static function add_trace_artifact( array $artifact ): void {
 		self::$trace['artifacts']   = self::$trace['artifacts'] ?? array();
@@ -133,7 +133,7 @@ final class ExecutionContext {
 	/**
 	 * Add a trace chunk reference.
 	 *
-	 * @param array $chunk Chunk reference.
+	 * @param array<string, mixed> $chunk Chunk reference.
 	 */
 	public static function add_trace_chunk( array $chunk ): void {
 		self::$trace['chunks']   = self::$trace['chunks'] ?? array();
@@ -157,28 +157,44 @@ final class ExecutionContext {
 			self::set_trace_output( $trace['output'] );
 		}
 		if ( isset( $trace['context'] ) && is_array( $trace['context'] ) ) {
-			self::add_trace_context( $trace['context'] );
+			self::add_trace_context( self::ensure_string_keys( $trace['context'] ) );
 		}
 		if ( isset( $trace['artifacts'] ) && is_array( $trace['artifacts'] ) ) {
 			foreach ( $trace['artifacts'] as $artifact ) {
 				if ( is_array( $artifact ) ) {
-					self::add_trace_artifact( $artifact );
+					self::add_trace_artifact( self::ensure_string_keys( $artifact ) );
 				}
 			}
 		}
 		if ( isset( $trace['chunks'] ) && is_array( $trace['chunks'] ) ) {
 			foreach ( $trace['chunks'] as $chunk ) {
 				if ( is_array( $chunk ) ) {
-					self::add_trace_chunk( $chunk );
+					self::add_trace_chunk( self::ensure_string_keys( $chunk ) );
 				}
 			}
 		}
 	}
 
 	/**
+	 * Filter to only entries with string keys.
+	 *
+	 * @param array<mixed, mixed> $values Values to filter.
+	 * @return array<string, mixed>
+	 */
+	private static function ensure_string_keys( array $values ): array {
+		$result = array();
+		foreach ( $values as $key => $value ) {
+			if ( is_string( $key ) ) {
+				$result[ $key ] = $value;
+			}
+		}
+		return $result;
+	}
+
+	/**
 	 * Consume and clear the current trace buffer.
 	 *
-	 * @return array
+	 * @return array{input?: mixed, output?: mixed, context?: array<string, mixed>, artifacts?: array<int, array<string, mixed>>, chunks?: array<int, array<string, mixed>>}
 	 */
 	public static function consume_trace(): array {
 		$trace       = self::$trace;

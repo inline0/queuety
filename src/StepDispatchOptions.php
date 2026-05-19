@@ -25,13 +25,13 @@ final class StepDispatchOptions {
 	/**
 	 * Resolve dispatch options for one handler job.
 	 *
-	 * @param array|string $definition       Serialized step or branch definition.
-	 * @param string       $handler          Handler class or alias.
-	 * @param string       $workflow_queue   Workflow default queue.
-	 * @param Priority     $workflow_priority Workflow default priority.
-	 * @param int          $workflow_attempts Workflow default max attempts.
-	 * @param array        $payload          Public/internal job payload.
-	 * @param int          $default_cost_units Default cost when handler metadata has none.
+	 * @param array<string, mixed>|string $definition         Serialized step or branch definition.
+	 * @param string                      $handler            Handler class or alias.
+	 * @param string                      $workflow_queue     Workflow default queue.
+	 * @param Priority                    $workflow_priority  Workflow default priority.
+	 * @param int                         $workflow_attempts  Workflow default max attempts.
+	 * @param array<string, mixed>        $payload            Public/internal job payload.
+	 * @param int                         $default_cost_units Default cost when handler metadata has none.
 	 * @return array{
 	 *     queue: string,
 	 *     priority: Priority,
@@ -40,7 +40,7 @@ final class StepDispatchOptions {
 	 *     concurrency_group: string|null,
 	 *     concurrency_limit: int|null,
 	 *     cost_units: int,
-	 *     payload: array
+	 *     payload: array<string, mixed>
 	 * }
 	 */
 	public static function resolve(
@@ -119,8 +119,8 @@ final class StepDispatchOptions {
 	/**
 	 * Resolve structured or legacy parallel branch definitions.
 	 *
-	 * @param array $step_def Parallel step definition.
-	 * @return array<int,array<string,mixed>>
+	 * @param array<string, mixed> $step_def Parallel step definition.
+	 * @return array<int, array<string, mixed>>
 	 */
 	public static function parallel_branches( array $step_def ): array {
 		$branches = $step_def['branches'] ?? null;
@@ -150,7 +150,7 @@ final class StepDispatchOptions {
 	/**
 	 * Count branches for a serialized parallel step.
 	 *
-	 * @param array $step_def Parallel step definition.
+	 * @param array<string, mixed> $step_def Parallel step definition.
 	 * @return int
 	 */
 	public static function parallel_branch_count( array $step_def ): int {
@@ -201,34 +201,32 @@ final class StepDispatchOptions {
 	/**
 	 * Resolve an explicit payload from a serialized definition.
 	 *
-	 * @param array|string $definition Serialized definition.
-	 * @return array
+	 * @param array<string, mixed>|string $definition Serialized definition.
+	 * @return array<string, mixed>
 	 */
 	public static function payload( array|string $definition ): array {
 		if ( ! is_array( $definition ) ) {
 			return array();
 		}
 
-		return is_array( $definition['payload'] ?? null ) ? $definition['payload'] : array();
+		return self::as_array( $definition['payload'] ?? null );
 	}
 
 	/**
 	 * Resolve runtime metadata from a job payload.
 	 *
-	 * @param array $payload Job payload.
-	 * @return array<string,mixed>
+	 * @param array<string, mixed> $payload Job payload.
+	 * @return array<string, mixed>
 	 */
 	public static function runtime_from_payload( array $payload ): array {
-		return is_array( $payload[ self::RUNTIME_PAYLOAD_KEY ] ?? null )
-			? $payload[ self::RUNTIME_PAYLOAD_KEY ]
-			: array();
+		return self::as_array( $payload[ self::RUNTIME_PAYLOAD_KEY ] ?? null );
 	}
 
 	/**
 	 * Remove reserved runtime metadata from a public payload.
 	 *
-	 * @param array $payload Job payload.
-	 * @return array
+	 * @param array<string, mixed> $payload Job payload.
+	 * @return array<string, mixed>
 	 */
 	public static function public_payload( array $payload ): array {
 		unset( $payload[ self::RUNTIME_PAYLOAD_KEY ] );
@@ -250,13 +248,20 @@ final class StepDispatchOptions {
 			return null;
 		}
 
-		$handler = self::branch_handler( $branch );
+		$normalized = array();
+		foreach ( $branch as $branch_key => $branch_value ) {
+			if ( is_string( $branch_key ) ) {
+				$normalized[ $branch_key ] = $branch_value;
+			}
+		}
+
+		$handler = self::branch_handler( $normalized );
 		if ( '' === $handler ) {
 			return null;
 		}
 
-		$branch['class'] = $handler;
-		return $branch;
+		$normalized['class'] = $handler;
+		return $normalized;
 	}
 
 	/**
@@ -283,7 +288,25 @@ final class StepDispatchOptions {
 	 * @return array<string,mixed>
 	 */
 	private static function group( array $data, string $key ): array {
-		return is_array( $data[ $key ] ?? null ) ? $data[ $key ] : array();
+		return self::as_array( $data[ $key ] ?? null );
+	}
+
+	/**
+	 * Narrow a mixed value to an array<string, mixed>.
+	 *
+	 * @param mixed $value Value to narrow.
+	 * @return array<string, mixed>
+	 */
+	private static function as_array( mixed $value ): array {
+		if ( ! is_array( $value ) ) {
+			return array();
+		}
+
+		$out = array();
+		foreach ( $value as $key => $val ) {
+			$out[ (string) $key ] = $val;
+		}
+		return $out;
 	}
 
 	/**
@@ -352,7 +375,7 @@ final class StepDispatchOptions {
 	 * Normalize a retry backoff value.
 	 *
 	 * @param mixed $value Backoff value.
-	 * @return string|array|null
+	 * @return string|array<int, int>|null
 	 */
 	private static function backoff_value( mixed $value ): string|array|null {
 		if ( is_string( $value ) && null !== BackoffStrategy::tryFrom( $value ) ) {
@@ -409,12 +432,17 @@ final class StepDispatchOptions {
 			return 0;
 		}
 
+		$seconds = $duration['seconds'] ?? 0;
+		$minutes = $duration['minutes'] ?? 0;
+		$hours   = $duration['hours'] ?? 0;
+		$days    = $duration['days'] ?? 0;
+
 		return max(
 			0,
-			(int) ( $duration['seconds'] ?? 0 )
-			+ ( (int) ( $duration['minutes'] ?? 0 ) * 60 )
-			+ ( (int) ( $duration['hours'] ?? 0 ) * 3600 )
-			+ ( (int) ( $duration['days'] ?? 0 ) * 86400 )
+			( is_scalar( $seconds ) ? (int) $seconds : 0 )
+			+ ( ( is_scalar( $minutes ) ? (int) $minutes : 0 ) * 60 )
+			+ ( ( is_scalar( $hours ) ? (int) $hours : 0 ) * 3600 )
+			+ ( ( is_scalar( $days ) ? (int) $days : 0 ) * 86400 )
 		);
 	}
 }

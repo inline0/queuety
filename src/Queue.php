@@ -31,20 +31,20 @@ class Queue {
 	/**
 	 * Dispatch a new job.
 	 *
-	 * @param string      $handler      Handler name or class.
-	 * @param array       $payload      Job payload.
-	 * @param string      $queue        Queue name.
-	 * @param Priority    $priority     Job priority.
-	 * @param int         $delay        Delay in seconds before the job becomes available.
-	 * @param int         $max_attempts Maximum retry attempts.
-	 * @param int|null    $workflow_id  Parent workflow ID, if part of a workflow.
-	 * @param int|null    $step_index   Step index within the workflow.
-	 * @param bool        $unique       When true, prevent duplicate jobs with the same handler and payload.
-	 * @param int|null    $depends_on   ID of a job that must complete before this one can be claimed.
-	 * @param int|null    $batch_id     Batch ID, if part of a batch.
-	 * @param string|null $concurrency_group Optional global concurrency group name.
-	 * @param int|null    $concurrency_limit Optional concurrency cap for the group.
-	 * @param int         $cost_units        Relative execution cost units.
+	 * @param string               $handler      Handler name or class.
+	 * @param array<string, mixed> $payload      Job payload.
+	 * @param string               $queue        Queue name.
+	 * @param Priority             $priority     Job priority.
+	 * @param int                  $delay        Delay in seconds before the job becomes available.
+	 * @param int                  $max_attempts Maximum retry attempts.
+	 * @param int|null             $workflow_id  Parent workflow ID, if part of a workflow.
+	 * @param int|null             $step_index   Step index within the workflow.
+	 * @param bool                 $unique       When true, prevent duplicate jobs with the same handler and payload.
+	 * @param int|null             $depends_on   ID of a job that must complete before this one can be claimed.
+	 * @param int|null             $batch_id     Batch ID, if part of a batch.
+	 * @param string|null          $concurrency_group Optional global concurrency group name.
+	 * @param int|null             $concurrency_limit Optional concurrency cap for the group.
+	 * @param int                  $cost_units        Relative execution cost units.
 	 * @return int The new job ID (or the existing job ID if unique and a duplicate exists).
 	 */
 	public function dispatch(
@@ -96,7 +96,7 @@ class Queue {
 				)
 			);
 			$existing = $check->fetch();
-			if ( $existing ) {
+			if ( is_array( $existing ) && isset( $existing['id'] ) && is_scalar( $existing['id'] ) ) {
 				return (int) $existing['id'];
 			}
 		}
@@ -138,8 +138,8 @@ class Queue {
 	 * handler, payload, queue, priority, delay, max_attempts.
 	 * All keys are optional except handler.
 	 *
-	 * @param array $jobs Array of job definitions.
-	 * @return int[] Array of new job IDs.
+	 * @param array<int, array<string, mixed>> $jobs Array of job definitions.
+	 * @return array<int, int> Array of new job IDs.
 	 */
 	public function batch( array $jobs ): array {
 		if ( empty( $jobs ) ) {
@@ -152,12 +152,14 @@ class Queue {
 		$now          = time();
 
 		foreach ( $jobs as $i => $job ) {
-			$handler      = $job['handler'];
-			$payload      = $job['payload'] ?? array();
-			$queue        = $job['queue'] ?? 'default';
+			$handler      = is_string( $job['handler'] ?? null ) ? $job['handler'] : '';
+			$payload_raw  = $job['payload'] ?? array();
+			$payload      = is_array( $payload_raw ) ? $payload_raw : array();
+			$queue        = is_string( $job['queue'] ?? null ) ? $job['queue'] : 'default';
 			$priority     = $job['priority'] ?? Priority::Low;
-			$delay        = $job['delay'] ?? 0;
-			$max_attempts = $job['max_attempts'] ?? 3;
+			$delay_raw    = $job['delay'] ?? 0;
+			$delay        = is_scalar( $delay_raw ) ? (int) $delay_raw : 0;
+			$max_attempts = is_scalar( $job['max_attempts'] ?? null ) ? (int) $job['max_attempts'] : 3;
 
 			if ( $priority instanceof Priority ) {
 				$priority = $priority->value;
@@ -179,7 +181,7 @@ class Queue {
 			$params[ $q_key ]  = $queue;
 			$params[ $h_key ]  = $handler;
 			$params[ $p_key ]  = $payload_json;
-			$params[ $pr_key ] = (int) $priority;
+			$params[ $pr_key ] = is_scalar( $priority ) ? (int) $priority : 0;
 			$params[ $s_key ]  = JobStatus::Pending->value;
 			$params[ $m_key ]  = $max_attempts;
 			$params[ $a_key ]  = $available_at;
@@ -260,7 +262,7 @@ class Queue {
 				);
 
 			$row = $stmt->fetch();
-			if ( ! $row ) {
+			if ( ! is_array( $row ) ) {
 				$pdo->rollBack();
 				return null;
 			}
@@ -273,17 +275,23 @@ class Queue {
 			$update->execute(
 				array(
 					'status' => JobStatus::Processing->value,
-					'id'     => $row['id'],
+					'id'     => $row['id'] ?? null,
 				)
 			);
 
 			$pdo->commit();
 
+			$attempts_raw       = $row['attempts'] ?? 0;
 			$row['status']      = JobStatus::Processing->value;
 			$row['reserved_at'] = gmdate( 'Y-m-d H:i:s' );
-			$row['attempts']    = (int) $row['attempts'] + 1;
+			$row['attempts']    = ( is_scalar( $attempts_raw ) ? (int) $attempts_raw : 0 ) + 1;
 
-			return Job::from_row( $row );
+			$row_assoc = array();
+			foreach ( $row as $key => $value ) {
+				$row_assoc[ (string) $key ] = $value;
+			}
+
+			return Job::from_row( $row_assoc );
 		} catch ( \Throwable $e ) {
 			$pdo->rollBack();
 			throw $e;
@@ -424,7 +432,16 @@ class Queue {
 		$stmt  = $this->conn->pdo()->prepare( "SELECT * FROM {$table} WHERE id = :id" );
 		$stmt->execute( array( 'id' => $job_id ) );
 		$row = $stmt->fetch();
-		return $row ? Job::from_row( $row ) : null;
+		if ( ! is_array( $row ) ) {
+			return null;
+		}
+
+		$row_assoc = array();
+		foreach ( $row as $key => $value ) {
+			$row_assoc[ (string) $key ] = $value;
+		}
+
+		return Job::from_row( $row_assoc );
 	}
 
 	/**
@@ -447,24 +464,28 @@ class Queue {
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( $params );
 
-		$result = array(
-			'pending'    => 0,
-			'processing' => 0,
-			'completed'  => 0,
-			'failed'     => 0,
-			'buried'     => 0,
-		);
-
+		$counts = array();
 		while ( true ) {
 			$row = $stmt->fetch();
-			if ( false === $row ) {
+			if ( ! is_array( $row ) ) {
 				break;
 			}
 
-			$result[ $row['status'] ] = (int) $row['cnt'];
+			$status_raw = $row['status'] ?? '';
+			$cnt_raw    = $row['cnt'] ?? 0;
+			$status_key = is_scalar( $status_raw ) ? (string) $status_raw : '';
+			$cnt        = is_scalar( $cnt_raw ) ? (int) $cnt_raw : 0;
+
+			$counts[ $status_key ] = $cnt;
 		}
 
-		return $result;
+		return array(
+			'pending'    => $counts['pending'] ?? 0,
+			'processing' => $counts['processing'] ?? 0,
+			'completed'  => $counts['completed'] ?? 0,
+			'failed'     => $counts['failed'] ?? 0,
+			'buried'     => $counts['buried'] ?? 0,
+		);
 	}
 
 	/**
@@ -549,10 +570,7 @@ class Queue {
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( $params );
 
-		return array_map(
-			fn( array $row ) => Job::from_row( $row ),
-			$stmt->fetchAll()
-		);
+		return self::hydrate_job_rows( $stmt->fetchAll() );
 	}
 
 	/**
@@ -615,10 +633,7 @@ class Queue {
 			)
 		);
 
-		return array_map(
-			fn( array $row ) => Job::from_row( $row ),
-			$stmt->fetchAll()
-		);
+		return self::hydrate_job_rows( $stmt->fetchAll() );
 	}
 
 	/**
@@ -680,7 +695,7 @@ class Queue {
 		$stmt->execute( array( 'queue' => $queue ) );
 		$row = $stmt->fetch();
 
-		$paused = $row && (bool) $row['paused'];
+		$paused = is_array( $row ) && ! empty( $row['paused'] );
 
 		if ( null !== $this->cache ) {
 			$this->cache->set( "queuety:paused:{$queue}", $paused, Config::cache_ttl() );
@@ -700,7 +715,22 @@ class Queue {
 			"SELECT queue FROM {$table} WHERE paused = 1"
 		);
 
-		return array_column( $stmt->fetchAll(), 'queue' );
+		if ( false === $stmt ) {
+			return array();
+		}
+
+		$queues = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$value = $row['queue'] ?? null;
+			if ( is_string( $value ) ) {
+				$queues[] = $value;
+			}
+		}
+
+		return $queues;
 	}
 
 	/**
@@ -727,5 +757,29 @@ class Queue {
 		}
 
 		return array( trim( $queue ) );
+	}
+
+	/**
+	 * Hydrate PDO rows into Job models, skipping non-array rows.
+	 *
+	 * @param array<mixed, mixed> $rows Raw rows from PDOStatement::fetchAll().
+	 * @return Job[]
+	 */
+	private static function hydrate_job_rows( array $rows ): array {
+		$jobs = array();
+		foreach ( $rows as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$typed = array();
+			foreach ( $row as $key => $value ) {
+				if ( is_string( $key ) ) {
+					$typed[ $key ] = $value;
+				}
+			}
+			$jobs[] = Job::from_row( $typed );
+		}
+
+		return $jobs;
 	}
 }

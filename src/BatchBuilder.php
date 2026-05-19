@@ -69,9 +69,9 @@ class BatchBuilder {
 	/**
 	 * Constructor.
 	 *
-	 * @param array        $jobs          Array of Contracts\Job instances or handler+payload arrays.
-	 * @param Queue        $queue_ops     Queue operations instance.
-	 * @param BatchManager $batch_manager Batch manager instance.
+	 * @param array<int, JobContract|array<string, mixed>> $jobs          Array of Contracts\Job instances or handler+payload arrays.
+	 * @param Queue                                        $queue_ops     Queue operations instance.
+	 * @param BatchManager                                 $batch_manager Batch manager instance.
 	 */
 	public function __construct(
 		private readonly array $jobs,
@@ -154,6 +154,7 @@ class BatchBuilder {
 	 * Dispatch the batch: create the batch row and all jobs.
 	 *
 	 * @return Batch The created batch.
+	 * @throws \RuntimeException If the batch could not be reloaded after creation.
 	 */
 	public function dispatch(): Batch {
 		$options = array();
@@ -195,29 +196,49 @@ class BatchBuilder {
 					queue: $this->queue,
 					batch_id: $batch_id,
 				);
-			} elseif ( is_array( $job ) && isset( $job['handler'] ) ) {
-				$handler_defaults = $this->handler_defaults( $job['handler'] );
+			} elseif ( is_array( $job ) && isset( $job['handler'] ) && is_string( $job['handler'] ) ) {
+				$handler          = $job['handler'];
+				$handler_defaults = $this->handler_defaults( $handler );
+
+				$payload_raw      = $job['payload'] ?? array();
+				$payload          = array();
+				if ( is_array( $payload_raw ) ) {
+					foreach ( $payload_raw as $payload_key => $payload_value ) {
+						$payload[ (string) $payload_key ] = $payload_value;
+					}
+				}
+				$queue_name       = is_string( $job['queue'] ?? null ) ? $job['queue'] : $this->queue;
+				$priority         = ( $job['priority'] ?? null ) instanceof Priority ? $job['priority'] : Priority::Low;
+				$delay_raw        = $job['delay'] ?? 0;
+				$delay            = is_scalar( $delay_raw ) ? (int) $delay_raw : 0;
+				$default_attempts = $handler_defaults['max_attempts'] ?? 3;
+				$max_attempts_raw = $job['max_attempts'] ?? $default_attempts;
+				$max_attempts     = is_scalar( $max_attempts_raw ) ? (int) $max_attempts_raw : 3;
 
 				$this->queue_ops->dispatch(
-					handler: $job['handler'],
-					payload: $job['payload'] ?? array(),
-					queue: $job['queue'] ?? $this->queue,
-					priority: $job['priority'] ?? Priority::Low,
-					delay: $job['delay'] ?? 0,
-					max_attempts: $job['max_attempts'] ?? ( $handler_defaults['max_attempts'] ?? 3 ),
+					handler: $handler,
+					payload: $payload,
+					queue: $queue_name,
+					priority: $priority,
+					delay: $delay,
+					max_attempts: $max_attempts,
 					batch_id: $batch_id,
 				);
 			}
 		}
 
-		return $this->batch_manager->find( $batch_id );
+		$batch = $this->batch_manager->find( $batch_id );
+		if ( null === $batch ) {
+			throw new \RuntimeException( "Batch {$batch_id} was created but could not be reloaded." );
+		}
+		return $batch;
 	}
 
 	/**
 	 * Resolve handler defaults for batch array jobs.
 	 *
 	 * @param string $handler Handler alias or class.
-	 * @return array{queue: string|null, max_attempts: int|null, backoff: string|array|null, rate_limit: array{int, int}|null}
+	 * @return array{queue: string|null, max_attempts: int|null, backoff: string|array<int|string, mixed>|null, rate_limit: array{int, int}|null, concurrency_group: string|null, concurrency_limit: int|null, cost_units: int|null}
 	 */
 	private function handler_defaults( string $handler ): array {
 		$class = null;

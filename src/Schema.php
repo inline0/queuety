@@ -234,8 +234,16 @@ class Schema {
 		);
 
 		if ( self::table_exists( $conn, $workflow_events ) ) {
-			$columns = $pdo->query( "SHOW COLUMNS FROM {$workflow_events}" )->fetchAll();
-			$names   = array_map( static fn( array $column ): string => (string) $column['Field'], $columns );
+			$stmt    = $pdo->query( "SHOW COLUMNS FROM {$workflow_events}" );
+			$columns = false === $stmt ? array() : $stmt->fetchAll();
+			$names   = array();
+			foreach ( $columns as $column ) {
+				if ( ! is_array( $column ) ) {
+					continue;
+				}
+				$field   = $column['Field'] ?? null;
+				$names[] = is_scalar( $field ) ? (string) $field : '';
+			}
 			if ( ! in_array( 'state_after', $names, true ) ) {
 				$pdo->exec( "DROP TABLE IF EXISTS {$workflow_events}" );
 			}
@@ -312,8 +320,16 @@ class Schema {
 		);
 
 		if ( self::table_exists( $conn, $state_machine_events ) ) {
-			$columns = $pdo->query( "SHOW COLUMNS FROM {$state_machine_events}" )->fetchAll();
-			$names   = array_map( static fn( array $column ): string => (string) $column['Field'], $columns );
+			$stmt    = $pdo->query( "SHOW COLUMNS FROM {$state_machine_events}" );
+			$columns = false === $stmt ? array() : $stmt->fetchAll();
+			$names   = array();
+			foreach ( $columns as $column ) {
+				if ( ! is_array( $column ) ) {
+					continue;
+				}
+				$field   = $column['Field'] ?? null;
+				$names[] = is_scalar( $field ) ? (string) $field : '';
+			}
 			if ( ! in_array( 'state_after', $names, true ) ) {
 				$pdo->exec( "DROP TABLE IF EXISTS {$state_machine_events}" );
 			}
@@ -403,6 +419,6 @@ class Schema {
 		// SHOW TABLES LIKE does not support prepared statement placeholders.
 		$escaped = str_replace( array( '%', '_' ), array( '\\%', '\\_' ), $table );
 		$stmt    = $conn->pdo()->query( "SHOW TABLES LIKE '" . addslashes( $escaped ) . "'" );
-		return (bool) $stmt->fetch();
+		return false !== $stmt && false !== $stmt->fetch();
 	}
 }

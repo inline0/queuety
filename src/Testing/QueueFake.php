@@ -26,23 +26,23 @@ class QueueFake {
 	/**
 	 * Dispatched jobs indexed by handler class.
 	 *
-	 * @var array<string, array>
+	 * @var array<string, array<int, array{handler: string, payload: array<string, mixed>, queue: string, instance: JobContract|null}>>
 	 */
 	private array $pushed = array();
 
 	/**
 	 * Dispatched batches.
 	 *
-	 * @var array
+	 * @var array<int, array{jobs: array<int, mixed>, options: array<string, mixed>}>
 	 */
 	private array $batches = array();
 
 	/**
 	 * Record a dispatched job.
 	 *
-	 * @param string|JobContract $handler Handler name/class or Job instance.
-	 * @param array              $payload Job payload.
-	 * @param string             $queue   Queue name.
+	 * @param string|JobContract   $handler Handler name/class or Job instance.
+	 * @param array<string, mixed> $payload Job payload.
+	 * @param string               $queue   Queue name.
 	 */
 	public function push( string|JobContract $handler, array $payload = array(), string $queue = 'default' ): void {
 		if ( $handler instanceof JobContract ) {
@@ -68,8 +68,8 @@ class QueueFake {
 	/**
 	 * Record a dispatched batch.
 	 *
-	 * @param array $jobs    Jobs in the batch.
-	 * @param array $options Batch options.
+	 * @param array<int, mixed>    $jobs    Jobs in the batch.
+	 * @param array<string, mixed> $options Batch options.
 	 */
 	public function push_batch( array $jobs, array $options = array() ): void {
 		$this->batches[] = array(
@@ -193,7 +193,7 @@ class QueueFake {
 	 * Get all pushed jobs for a given class.
 	 *
 	 * @param string $class The job class name.
-	 * @return array
+	 * @return array<int, array{handler: string, payload: array<string, mixed>, queue: string, instance: JobContract|null}>
 	 */
 	public function pushed( string $class ): array {
 		return $this->pushed[ $class ] ?? array();
@@ -202,7 +202,7 @@ class QueueFake {
 	/**
 	 * Get all dispatched batches.
 	 *
-	 * @return array
+	 * @return array<int, array{jobs: array<int, mixed>, options: array<string, mixed>}>
 	 */
 	public function batches(): array {
 		return $this->batches;

@@ -30,12 +30,12 @@ class Scheduler {
 	/**
 	 * Add a new schedule.
 	 *
-	 * @param string         $handler        Handler name or class.
-	 * @param array          $payload        Job payload.
-	 * @param string         $queue          Queue name.
-	 * @param string         $expression     Cron or interval expression.
-	 * @param ExpressionType $type           Type of expression.
-	 * @param OverlapPolicy  $overlap_policy Overlap policy for concurrent runs.
+	 * @param string               $handler        Handler name or class.
+	 * @param array<string, mixed> $payload        Job payload.
+	 * @param string               $queue          Queue name.
+	 * @param string               $expression     Cron or interval expression.
+	 * @param ExpressionType       $type           Type of expression.
+	 * @param OverlapPolicy        $overlap_policy Overlap policy for concurrent runs.
 	 * @return int The new schedule ID.
 	 */
 	public function add(
@@ -96,10 +96,22 @@ class Scheduler {
 		$table = $this->conn->table( Config::table_schedules() );
 		$stmt  = $this->conn->pdo()->query( "SELECT * FROM {$table} ORDER BY id ASC" );
 
-		return array_map(
-			fn( array $row ) => Schedule::from_row( $row ),
-			$stmt->fetchAll()
-		);
+		if ( false === $stmt ) {
+			return array();
+		}
+
+		$schedules = array();
+		foreach ( $stmt->fetchAll() as $raw_row ) {
+			if ( ! is_array( $raw_row ) ) {
+				continue;
+			}
+			$row = array();
+			foreach ( $raw_row as $key => $value ) {
+				$row[ (string) $key ] = $value;
+			}
+			$schedules[] = Schedule::from_row( $row );
+		}
+		return $schedules;
 	}
 
 	/**
@@ -116,7 +128,16 @@ class Scheduler {
 		$stmt->execute( array( 'handler' => $handler ) );
 		$row = $stmt->fetch();
 
-		return $row ? Schedule::from_row( $row ) : null;
+		if ( ! is_array( $row ) ) {
+			return null;
+		}
+
+		$row_assoc = array();
+		foreach ( $row as $key => $value ) {
+			$row_assoc[ (string) $key ] = $value;
+		}
+
+		return Schedule::from_row( $row_assoc );
 	}
 
 	/**
@@ -171,7 +192,16 @@ class Scheduler {
 			$jobs_table = $this->conn->table( Config::table_jobs() );
 
 			foreach ( $rows as $row ) {
-				$schedule = Schedule::from_row( $row );
+				if ( ! is_array( $row ) ) {
+					continue;
+				}
+
+				$row_assoc = array();
+				foreach ( $row as $key => $value ) {
+					$row_assoc[ (string) $key ] = $value;
+				}
+
+				$schedule = Schedule::from_row( $row_assoc );
 				$now      = new \DateTimeImmutable( 'now' );
 				$next_run = $this->calculate_next_run( $schedule->expression, $schedule->expression_type, $now );
 				$policy   = $schedule->overlap_policy;
@@ -189,7 +219,9 @@ class Scheduler {
 							'processing' => JobStatus::Processing->value,
 						)
 					);
-					$has_running = (int) $check_stmt->fetch()['cnt'] > 0;
+					$check_row   = $check_stmt->fetch();
+					$cnt_raw     = is_array( $check_row ) && isset( $check_row['cnt'] ) ? $check_row['cnt'] : 0;
+					$has_running = ( is_scalar( $cnt_raw ) ? (int) $cnt_raw : 0 ) > 0;
 
 					if ( $has_running ) {
 						if ( OverlapPolicy::Skip === $policy ) {

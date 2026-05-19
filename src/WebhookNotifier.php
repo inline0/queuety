@@ -59,14 +59,32 @@ class WebhookNotifier {
 	/**
 	 * List all registered webhooks.
 	 *
-	 * @return array Array of webhook rows.
+	 * @return list<array<string, mixed>> Array of webhook rows.
 	 */
 	public function list(): array {
 		$table = $this->conn->table( Config::table_webhooks() );
 		$stmt  = $this->conn->pdo()->query(
 			"SELECT * FROM {$table} ORDER BY id ASC"
 		);
-		return $stmt->fetchAll();
+		if ( false === $stmt ) {
+			return array();
+		}
+
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$typed = array();
+			foreach ( $row as $key => $value ) {
+				if ( is_string( $key ) ) {
+					$typed[ $key ] = $value;
+				}
+			}
+			$rows[] = $typed;
+		}
+
+		return $rows;
 	}
 
 	/**
@@ -74,8 +92,8 @@ class WebhookNotifier {
 	 *
 	 * This is non-blocking (fire-and-forget). Failures are silently ignored.
 	 *
-	 * @param string $event Event name.
-	 * @param array  $data  Payload data to send as JSON.
+	 * @param string               $event Event name.
+	 * @param array<string, mixed> $data  Payload data to send as JSON.
 	 */
 	public function notify( string $event, array $data ): void {
 		$table = $this->conn->table( Config::table_webhooks() );
@@ -99,7 +117,9 @@ class WebhookNotifier {
 		);
 
 		foreach ( $urls as $url ) {
-			$this->fire_and_forget( $url, $json );
+			if ( is_string( $url ) ) {
+				$this->fire_and_forget( $url, $json );
+			}
 		}
 	}
 

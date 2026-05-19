@@ -25,7 +25,7 @@ class CronExpression {
 	public static function next_run( string $expression, \DateTimeImmutable $after ): \DateTimeImmutable {
 		$fields = preg_split( '/\s+/', trim( $expression ) );
 
-		if ( 5 !== count( $fields ) ) {
+		if ( false === $fields || 5 !== count( $fields ) ) {
 			throw new \InvalidArgumentException( "Cron expression must have exactly 5 fields, got: {$expression}" );
 		}
 

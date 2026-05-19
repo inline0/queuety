@@ -40,7 +40,15 @@ class ChunkStore {
 		);
 		$stmt->execute( array( 'job_id' => $job_id ) );
 
-		return array_column( $stmt->fetchAll(), 'content' );
+		$chunks = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$content  = $row['content'] ?? '';
+			$chunks[] = is_scalar( $content ) ? (string) $content : '';
+		}
+		return $chunks;
 	}
 
 	/**
@@ -104,7 +112,11 @@ class ChunkStore {
 		$stmt->execute( array( 'job_id' => $job_id ) );
 		$row = $stmt->fetch();
 
-		return (int) ( $row['cnt'] ?? 0 );
+		if ( is_array( $row ) && isset( $row['cnt'] ) && is_numeric( $row['cnt'] ) ) {
+			return (int) $row['cnt'];
+		}
+
+		return 0;
 	}
 
 	/**

@@ -24,12 +24,14 @@ class ScheduleCommand extends \WP_CLI_Command {
 	 *
 	 * @subcommand list
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function list_( $args, $assoc_args ) {
-		$format    = $assoc_args['format'] ?? 'table';
-		$schedules = Queuety::list_schedules();
+		$format_raw = $assoc_args['format'] ?? 'table';
+		$format     = is_string( $format_raw ) ? $format_raw : 'table';
+		$schedules  = Queuety::list_schedules();
 
 		$items = array_map(
 			fn( $s ) => array(
@@ -47,7 +49,7 @@ class ScheduleCommand extends \WP_CLI_Command {
 
 		\WP_CLI\Utils\format_items(
 			$format,
-			$items,
+			array_values( $items ),
 			array( 'ID', 'Handler', 'Expression', 'Type', 'Queue', 'Enabled', 'Last Run', 'Next Run' )
 		);
 	}
@@ -72,18 +74,28 @@ class ScheduleCommand extends \WP_CLI_Command {
 	 * [--queue=<queue>]
 	 * : Queue name. Default: 'default'.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function add( $args, $assoc_args ) {
-		$handler = $args[0];
-		$payload = json_decode( $assoc_args['payload'] ?? '{}', true ) ?: array();
-		$queue   = $assoc_args['queue'] ?? 'default';
+		$handler     = $args[0];
+		$payload_raw = $assoc_args['payload'] ?? '{}';
+		$payload_str = is_string( $payload_raw ) ? $payload_raw : '{}';
+		$decoded     = json_decode( $payload_str, true );
+		$payload     = array();
+		if ( is_array( $decoded ) ) {
+			foreach ( $decoded as $key => $value ) {
+				$payload[ (string) $key ] = $value;
+			}
+		}
+		$queue_raw = $assoc_args['queue'] ?? 'default';
+		$queue     = is_string( $queue_raw ) ? $queue_raw : 'default';
 
-		if ( isset( $assoc_args['every'] ) ) {
+		if ( isset( $assoc_args['every'] ) && is_string( $assoc_args['every'] ) ) {
 			$expression = $assoc_args['every'];
 			$type       = 'interval';
-		} elseif ( isset( $assoc_args['cron'] ) ) {
+		} elseif ( isset( $assoc_args['cron'] ) && is_string( $assoc_args['cron'] ) ) {
 			$expression = $assoc_args['cron'];
 			$type       = 'cron';
 		} else {
@@ -101,8 +113,9 @@ class ScheduleCommand extends \WP_CLI_Command {
 	 * <handler>
 	 * : Handler name to remove.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function remove( $args, $assoc_args ) {
 		$handler = $args[0];
@@ -118,8 +131,9 @@ class ScheduleCommand extends \WP_CLI_Command {
 	/**
 	 * Manually trigger a scheduler tick.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>   $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Associative arguments.
+	 * @return void
 	 */
 	public function run( $args, $assoc_args ) {
 		$count = Queuety::run_scheduler();

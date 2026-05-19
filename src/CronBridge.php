@@ -100,7 +100,11 @@ class CronBridge {
 			return null;
 		}
 
-		if ( empty( $event->schedule ) ) {
+		if ( empty( $event->schedule ) || ! is_string( $event->schedule ) ) {
+			return null;
+		}
+
+		if ( ! is_string( $event->hook ) ) {
 			return null;
 		}
 
@@ -132,10 +136,10 @@ class CronBridge {
 	/**
 	 * Intercept a wp_unschedule_event() call.
 	 *
-	 * @param null|bool $pre       Short-circuit value.
-	 * @param int       $timestamp The event timestamp.
-	 * @param string    $hook      The event hook name.
-	 * @param array     $args      Event arguments.
+	 * @param null|bool         $pre       Short-circuit value.
+	 * @param int               $timestamp The event timestamp.
+	 * @param string            $hook      The event hook name.
+	 * @param array<int, mixed> $args      Event arguments.
 	 * @return bool|null True to indicate the event was handled, null to fall through.
 	 */
 	public static function intercept_unschedule_event( $pre, $timestamp, $hook, $args ) {
@@ -162,10 +166,10 @@ class CronBridge {
 	/**
 	 * Intercept a wp_get_scheduled_event() lookup.
 	 *
-	 * @param null|bool|object $pre       Short-circuit value.
-	 * @param string           $hook      The event hook name.
-	 * @param array            $args      Event arguments.
-	 * @param int|null         $timestamp Optional specific timestamp.
+	 * @param null|false|object $pre       Short-circuit value.
+	 * @param string            $hook      The event hook name.
+	 * @param array<int, mixed> $args      Event arguments.
+	 * @param int|null          $timestamp Optional specific timestamp.
 	 * @return object|false|null The event object, false if not found, null to fall through.
 	 */
 	public static function intercept_get_scheduled_event( $pre, $hook, $args, $timestamp ) {
@@ -199,8 +203,8 @@ class CronBridge {
 	 * Calls do_action() with the original WordPress hook and arguments,
 	 * triggering any callbacks registered for that cron hook.
 	 *
-	 * @param string $hook The WordPress hook name.
-	 * @param array  $args Arguments to pass to the hook callbacks.
+	 * @param string            $hook The WordPress hook name.
+	 * @param array<int, mixed> $args Arguments to pass to the hook callbacks.
 	 */
 	public static function process_cron_event( string $hook, array $args = array() ): void {
 		if ( ! function_exists( 'do_action' ) ) {

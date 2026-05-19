@@ -40,10 +40,10 @@ class LogCommand extends \WP_CLI_Command {
 	 * [--format=<format>]
 	 * : Output format. Default: 'table'.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function __invoke( $args, $assoc_args ) {
+	public function __invoke( $args, $assoc_args ): void {
 		$format = $assoc_args['format'] ?? 'table';
 		$rows   = Queuety::query_logs(
 			array(
@@ -69,10 +69,10 @@ class LogCommand extends \WP_CLI_Command {
 	 * --older-than=<days>
 	 * : Delete entries older than N days.
 	 *
-	 * @param array $args       Positional arguments.
-	 * @param array $assoc_args Associative arguments.
+	 * @param array<int, string>    $args       Positional arguments.
+	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
-	public function purge( $args, $assoc_args ) {
+	public function purge( $args, $assoc_args ): void {
 		if ( ! isset( $assoc_args['older-than'] ) ) {
 			\WP_CLI::error( 'Required: --older-than=<days>' );
 			return;

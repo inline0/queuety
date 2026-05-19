@@ -22,7 +22,7 @@ class HandlerDiscovery {
 	 *
 	 * @param string $directory Absolute path to the directory to scan.
 	 * @param string $namespace PSR-4 namespace prefix for the directory.
-	 * @return array Array of discovered handlers: [{class, name, type, attribute}].
+	 * @return array<int, array{class: class-string, type: string, name: string|null, attribute: object|null}> Array of discovered handlers.
 	 * @throws \RuntimeException If the directory does not exist.
 	 */
 	public function discover( string $directory, string $namespace ): array {
@@ -38,16 +38,21 @@ class HandlerDiscovery {
 		);
 
 		foreach ( $iterator as $file ) {
+			if ( ! $file instanceof \SplFileInfo ) {
+				continue;
+			}
+
 			if ( ! $file->isFile() || 'php' !== $file->getExtension() ) {
 				continue;
 			}
 
 			$relative_path = str_replace( $directory . DIRECTORY_SEPARATOR, '', $file->getPathname() );
-			$class_name    = $namespace . str_replace(
+			$class_suffix  = str_replace(
 				array( DIRECTORY_SEPARATOR, '.php' ),
 				array( '\\', '' ),
 				$relative_path
 			);
+			$class_name    = $namespace . ( is_array( $class_suffix ) ? implode( '', $class_suffix ) : $class_suffix );
 
 			if ( ! class_exists( $class_name ) ) {
 				continue;

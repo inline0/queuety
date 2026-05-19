@@ -128,8 +128,16 @@ class ResourceManager {
 		$cache_key = "queuety:resource_profile:{$handler}";
 		if ( null !== $this->cache ) {
 			$cached = $this->cache->get( $cache_key );
-			if ( is_array( $cached ) ) {
-				return $cached;
+			if ( is_array( $cached ) && array_key_exists( 'sample_count', $cached ) ) {
+				$sample_count       = $cached['sample_count'];
+				$avg_duration_raw   = $cached['avg_duration_ms'] ?? null;
+				$max_memory_raw     = $cached['max_memory_peak_kb'] ?? null;
+
+				return array(
+					'sample_count'       => is_scalar( $sample_count ) ? (int) $sample_count : 0,
+					'avg_duration_ms'    => is_scalar( $avg_duration_raw ) ? (int) $avg_duration_raw : null,
+					'max_memory_peak_kb' => is_scalar( $max_memory_raw ) ? (int) $max_memory_raw : null,
+				);
 			}
 		}
 
@@ -153,11 +161,17 @@ class ResourceManager {
 			)
 		);
 
-		$row     = $stmt->fetch() ?: array();
+		$fetched = $stmt->fetch();
+		$row     = is_array( $fetched ) ? $fetched : array();
+
+		$sample_count_raw       = $row['sample_count'] ?? 0;
+		$avg_duration_raw       = $row['avg_duration_ms'] ?? null;
+		$max_memory_peak_kb_raw = $row['max_memory_peak_kb'] ?? null;
+
 		$profile = array(
-			'sample_count'       => (int) ( $row['sample_count'] ?? 0 ),
-			'avg_duration_ms'    => isset( $row['avg_duration_ms'] ) ? (int) round( (float) $row['avg_duration_ms'] ) : null,
-			'max_memory_peak_kb' => isset( $row['max_memory_peak_kb'] ) ? (int) $row['max_memory_peak_kb'] : null,
+			'sample_count'       => is_numeric( $sample_count_raw ) ? (int) $sample_count_raw : 0,
+			'avg_duration_ms'    => is_numeric( $avg_duration_raw ) ? (int) round( (float) $avg_duration_raw ) : null,
+			'max_memory_peak_kb' => is_numeric( $max_memory_peak_kb_raw ) ? (int) $max_memory_peak_kb_raw : null,
 		);
 
 		if ( null !== $this->cache ) {

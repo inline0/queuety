@@ -51,32 +51,182 @@ class Workflow {
 	) {}
 
 	/**
+	 * Coerce a mixed scalar to int, defaulting to 0 for non-scalar values.
+	 *
+	 * @param mixed $value Value sourced from JSON or PDO row.
+	 */
+	private function to_int( mixed $value ): int {
+		return is_scalar( $value ) ? (int) $value : 0;
+	}
+
+	/**
+	 * Coerce a mixed scalar to string, defaulting to empty string for non-scalar values.
+	 *
+	 * @param mixed $value Value sourced from JSON or PDO row.
+	 */
+	private function to_string( mixed $value ): string {
+		return is_scalar( $value ) ? (string) $value : '';
+	}
+
+	/**
+	 * Decode a workflow state column to a public state array.
+	 *
+	 * Workflow state is persisted as JSON, so PHPStan sees the column as mixed
+	 * even though the engine only ever writes arrays. This helper centralises
+	 * the narrowing so callers can rely on an array<string, mixed>.
+	 *
+	 * @param mixed $value Raw state column value.
+	 * @return array<string, mixed>
+	 */
+	private function decode_state_column( mixed $value ): array {
+		if ( ! is_string( $value ) || '' === $value ) {
+			return array();
+		}
+
+		$decoded = json_decode( $value, true );
+		return $this->as_array( $decoded );
+	}
+
+	/**
+	 * Decode a job payload column to a payload array.
+	 *
+	 * @param mixed $value Raw payload column value.
+	 * @return array<string, mixed>
+	 */
+	private function decode_payload_column( mixed $value ): array {
+		if ( ! is_string( $value ) || '' === $value ) {
+			return array();
+		}
+
+		$decoded = json_decode( $value, true );
+		return $this->as_array( $decoded );
+	}
+
+	/**
+	 * Narrow a mixed value to an array<string, mixed>.
+	 *
+	 * @param mixed $value Value to narrow.
+	 * @return array<string, mixed>
+	 */
+	private function as_array( mixed $value ): array {
+		if ( ! is_array( $value ) ) {
+			return array();
+		}
+
+		$out = array();
+		foreach ( $value as $key => $val ) {
+			$out[ (string) $key ] = $val;
+		}
+		return $out;
+	}
+
+	/**
+	 * Narrow a PDO fetch result to a typed row array.
+	 *
+	 * @param mixed $value Raw fetch result.
+	 * @return array<string, mixed>|null
+	 */
+	private function as_row( mixed $value ): ?array {
+		if ( ! is_array( $value ) ) {
+			return null;
+		}
+
+		$row = array();
+		foreach ( $value as $key => $val ) {
+			if ( is_string( $key ) ) {
+				$row[ $key ] = $val;
+			}
+		}
+		return $row;
+	}
+
+	/**
+	 * Narrow a mixed step list to a typed list of step definitions.
+	 *
+	 * @param mixed $value Possible step list.
+	 * @return array<int, array<string, mixed>|string>
+	 */
+	private function as_steps( mixed $value ): array {
+		if ( ! is_array( $value ) ) {
+			return array();
+		}
+
+		$steps = array();
+		foreach ( $value as $step ) {
+			if ( is_string( $step ) ) {
+				$steps[] = $step;
+				continue;
+			}
+			if ( is_array( $step ) ) {
+				$normalized = array();
+				foreach ( $step as $key => $val ) {
+					$normalized[ (string) $key ] = $val;
+				}
+				$steps[] = $normalized;
+			}
+		}
+
+		return $steps;
+	}
+
+	/**
+	 * Resolve the queue name from workflow state, defaulting to 'default'.
+	 *
+	 * @param array<string, mixed> $state Workflow state.
+	 */
+	private function state_queue( array $state ): string {
+		$queue = $this->to_string( $state['_queue'] ?? 'default' );
+		return '' === $queue ? 'default' : $queue;
+	}
+
+	/**
+	 * Resolve the priority enum from workflow state.
+	 *
+	 * @param array<string, mixed> $state Workflow state.
+	 */
+	private function state_priority( array $state ): Priority {
+		return Priority::tryFrom( $this->to_int( $state['_priority'] ?? 0 ) ) ?? Priority::Low;
+	}
+
+	/**
+	 * Resolve the max attempts value from workflow state.
+	 *
+	 * @param array<string, mixed> $state Workflow state.
+	 */
+	private function state_max_attempts( array $state ): int {
+		$attempts = $this->to_int( $state['_max_attempts'] ?? 3 );
+		return $attempts > 0 ? $attempts : 3;
+	}
+
+	/**
 	 * Resolve the handler class from a step definition.
 	 *
 	 * Supports both the new array format and the legacy string format
 	 * for backwards compatibility.
 	 *
-	 * @param array|string $step_def Step definition.
+	 * @param array<string, mixed>|string $step_def Step definition.
 	 * @return string Handler class name.
 	 */
 	private function resolve_step_handler( array|string $step_def ): string {
 		if ( is_string( $step_def ) ) {
 			return $step_def;
 		}
-		return $step_def['class'] ?? '';
+		$class = $step_def['class'] ?? '';
+		return is_string( $class ) ? $class : '';
 	}
 
 	/**
 	 * Resolve the step type from a step definition.
 	 *
-	 * @param array|string $step_def Step definition.
+	 * @param array<string, mixed>|string $step_def Step definition.
 	 * @return string Step type: 'single', 'parallel', 'for_each', 'run_workflow', 'start_workflows', 'delay', 'wait_for_signal', 'wait_for_workflows', or 'repeat'.
 	 */
 	private function resolve_step_type( array|string $step_def ): string {
 		if ( is_string( $step_def ) ) {
 			return 'single';
 		}
-		return $step_def['type'] ?? 'single';
+		$type = $step_def['type'] ?? 'single';
+		return is_string( $type ) ? $type : 'single';
 	}
 
 	/**
@@ -85,7 +235,7 @@ class Workflow {
 	 * Wait and orchestration placeholders are logged under their internal
 	 * placeholder handlers so the timeline shows how the engine moved the run.
 	 *
-	 * @param array|string|null $step_def Step definition.
+	 * @param array<string, mixed>|string|null $step_def Step definition.
 	 * @return string
 	 */
 	private function event_handler_for_step( array|string|null $step_def ): string {
@@ -108,8 +258,8 @@ class Workflow {
 	/**
 	 * Find the step index by name.
 	 *
-	 * @param array  $steps     Array of step definitions.
-	 * @param string $name      Step name to find.
+	 * @param array<int, array<string, mixed>|string> $steps Array of step definitions.
+	 * @param string                                  $name  Step name to find.
 	 * @return int|null Step index or null if not found.
 	 */
 	private function find_step_index_by_name( array $steps, string $name ): ?int {
@@ -128,8 +278,8 @@ class Workflow {
 	/**
 	 * Strip reserved keys from workflow state for public consumption.
 	 *
-	 * @param array $state Full workflow state.
-	 * @return array
+	 * @param array<string, mixed> $state Full workflow state.
+	 * @return array<string, mixed>
 	 */
 	private function public_state( array $state ): array {
 		return array_filter(
@@ -142,8 +292,8 @@ class Workflow {
 	/**
 	 * Resolve the stable step name from a step definition.
 	 *
-	 * @param array|string|null $step_def   Step definition.
-	 * @param int               $step_index Step index.
+	 * @param array<string, mixed>|string|null $step_def   Step definition.
+	 * @param int                              $step_index Step index.
 	 * @return string
 	 */
 	private function resolve_step_name( array|string|null $step_def, int $step_index ): string {
@@ -157,8 +307,8 @@ class Workflow {
 	/**
 	 * Pull reserved trace metadata out of a step output.
 	 *
-	 * @param array $step_output Step output.
-	 * @return array Step output without trace metadata.
+	 * @param array<string, mixed> $step_output Step output.
+	 * @return array<string, mixed> Step output without trace metadata.
 	 */
 	private function extract_trace_from_step_output( array $step_output ): array {
 		if ( array_key_exists( ExecutionContext::TRACE_OUTPUT_KEY, $step_output ) ) {
@@ -196,17 +346,17 @@ class Workflow {
 
 		return array(
 			'class'   => trim( $class ),
-			'payload' => is_array( $payload ) ? $payload : array(),
+			'payload' => $this->as_array( $payload ),
 		);
 	}
 
 	/**
 	 * Invoke a handler method with optional structured payload.
 	 *
-	 * @param object $handler Handler instance.
-	 * @param string $method  Method name.
-	 * @param array  $args    Positional public arguments.
-	 * @param array  $payload Structured handler payload.
+	 * @param object               $handler Handler instance.
+	 * @param string               $method  Method name.
+	 * @param array<int, mixed>    $args    Positional public arguments.
+	 * @param array<string, mixed> $payload Structured handler payload.
 	 * @return mixed
 	 */
 	private function call_handler_method( object $handler, string $method, array $args, array $payload ): mixed {
@@ -220,13 +370,19 @@ class Workflow {
 	/**
 	 * Resolve public wait context from persisted workflow state.
 	 *
-	 * @param array $state Full workflow state.
-	 * @return array<string,mixed>|null
+	 * @param array<string, mixed> $state Full workflow state.
+	 * @return array<string, mixed>|null
 	 */
 	private function wait_context_from_state( array $state ): ?array {
 		$context = $state['_wait'] ?? null;
 		if ( is_array( $context ) && isset( $context['type'] ) ) {
-			return $context;
+			$normalized = array();
+			foreach ( $context as $key => $value ) {
+				if ( is_string( $key ) ) {
+					$normalized[ $key ] = $value;
+				}
+			}
+			return $normalized;
 		}
 
 		$waiting_for_signal = $state['_waiting_for_signal'] ?? null;
@@ -244,7 +400,7 @@ class Workflow {
 	/**
 	 * Resolve the configured workflow definition version from persisted state.
 	 *
-	 * @param array $state Workflow state.
+	 * @param array<string, mixed> $state Workflow state.
 	 * @return string|null
 	 */
 	private function definition_version_from_state( array $state ): ?string {
@@ -260,7 +416,7 @@ class Workflow {
 	/**
 	 * Resolve the deterministic workflow definition hash from persisted state.
 	 *
-	 * @param array $state Workflow state.
+	 * @param array<string, mixed> $state Workflow state.
 	 * @return string|null
 	 */
 	private function definition_hash_from_state( array $state ): ?string {
@@ -276,7 +432,7 @@ class Workflow {
 	/**
 	 * Resolve the configured workflow idempotency key from persisted state.
 	 *
-	 * @param array $state Workflow state.
+	 * @param array<string, mixed> $state Workflow state.
 	 * @return string|null
 	 */
 	private function idempotency_key_from_state( array $state ): ?string {
@@ -292,7 +448,7 @@ class Workflow {
 	/**
 	 * Normalize the per-dispatch idempotency key for definition-based workflows.
 	 *
-	 * @param array $dispatch_options Dispatch options.
+	 * @param array<string, mixed> $dispatch_options Dispatch options.
 	 * @return string|null
 	 * @throws \InvalidArgumentException If the dispatch key is not a non-empty string.
 	 */
@@ -350,7 +506,7 @@ class Workflow {
 	/**
 	 * Compute the size of the public workflow state.
 	 *
-	 * @param array $state Workflow state.
+	 * @param array<string, mixed> $state Workflow state.
 	 * @return int
 	 */
 	private function public_state_size_bytes( array $state ): int {
@@ -360,8 +516,8 @@ class Workflow {
 	/**
 	 * Resolve the configured workflow budget from persisted state.
 	 *
-	 * @param array $state Workflow state.
-	 * @return array<string,int>
+	 * @param array<string, mixed> $state Workflow state.
+	 * @return array<string, int>
 	 */
 	private function workflow_budget_limits( array $state ): array {
 		$limits = $state['_workflow_budget'] ?? null;
@@ -371,8 +527,9 @@ class Workflow {
 
 		$normalized = array();
 		foreach ( array( 'max_transitions', 'max_for_each_items', 'max_state_bytes', 'max_cost_units', 'max_started_workflows' ) as $key ) {
-			if ( isset( $limits[ $key ] ) && (int) $limits[ $key ] > 0 ) {
-				$normalized[ $key ] = (int) $limits[ $key ];
+			$limit_value = $this->to_int( $limits[ $key ] ?? 0 );
+			if ( $limit_value > 0 ) {
+				$normalized[ $key ] = $limit_value;
 			}
 		}
 
@@ -382,8 +539,8 @@ class Workflow {
 	/**
 	 * Build public budget metadata for workflow inspection.
 	 *
-	 * @param array $state Workflow state.
-	 * @return array<string,int>|null
+	 * @param array<string, mixed> $state Workflow state.
+	 * @return array<string, int>|null
 	 */
 	private function budget_summary_from_state( array $state ): ?array {
 		$limits = $this->workflow_budget_limits( $state );
@@ -391,11 +548,11 @@ class Workflow {
 			return null;
 		}
 
-		$counters                      = $state['_workflow_counters'] ?? array();
+		$counters                      = $this->as_array( $state['_workflow_counters'] ?? array() );
 		$summary                       = $limits;
-		$summary['transitions']        = (int) ( $counters['transitions'] ?? 0 );
-		$summary['cost_units']         = (int) ( $counters['cost_units'] ?? 0 );
-		$summary['started_workflows']  = (int) ( $counters['started_workflows'] ?? 0 );
+		$summary['transitions']        = $this->to_int( $counters['transitions'] ?? 0 );
+		$summary['cost_units']         = $this->to_int( $counters['cost_units'] ?? 0 );
+		$summary['started_workflows']  = $this->to_int( $counters['started_workflows'] ?? 0 );
 		$summary['public_state_bytes'] = $this->public_state_size_bytes( $state );
 
 		return $summary;
@@ -404,51 +561,54 @@ class Workflow {
 	/**
 	 * Increment the completed transition counter when budgets are enabled.
 	 *
-	 * @param array $state Workflow state.
+	 * @param array<string, mixed> $state Workflow state.
 	 */
 	private function increment_transition_counter( array &$state ): void {
 		if ( empty( $this->workflow_budget_limits( $state ) ) ) {
 			return;
 		}
 
-		$state['_workflow_counters']              ??= array();
-		$state['_workflow_counters']['transitions'] = (int) ( $state['_workflow_counters']['transitions'] ?? 0 ) + 1;
+		$counters = $this->as_array( $state['_workflow_counters'] ?? array() );
+		$counters['transitions'] = $this->to_int( $counters['transitions'] ?? 0 ) + 1;
+		$state['_workflow_counters'] = $counters;
 	}
 
 	/**
 	 * Increment consumed workflow cost units.
 	 *
-	 * @param array $state Workflow state.
-	 * @param int   $cost_units Cost units to add.
+	 * @param array<string, mixed> $state      Workflow state.
+	 * @param int                  $cost_units Cost units to add.
 	 */
 	private function increment_cost_units( array &$state, int $cost_units ): void {
 		if ( $cost_units < 1 || empty( $this->workflow_budget_limits( $state ) ) ) {
 			return;
 		}
 
-		$state['_workflow_counters']             ??= array();
-		$state['_workflow_counters']['cost_units'] = (int) ( $state['_workflow_counters']['cost_units'] ?? 0 ) + $cost_units;
+		$counters = $this->as_array( $state['_workflow_counters'] ?? array() );
+		$counters['cost_units'] = $this->to_int( $counters['cost_units'] ?? 0 ) + $cost_units;
+		$state['_workflow_counters'] = $counters;
 	}
 
 	/**
 	 * Increment the started workflow counter when budgets are enabled.
 	 *
-	 * @param array $state Workflow state.
-	 * @param int   $count Started workflow count to add.
+	 * @param array<string, mixed> $state Workflow state.
+	 * @param int                  $count Started workflow count to add.
 	 */
 	private function increment_started_workflow_counter( array &$state, int $count ): void {
 		if ( $count < 1 || empty( $this->workflow_budget_limits( $state ) ) ) {
 			return;
 		}
 
-		$state['_workflow_counters']                    ??= array();
-		$state['_workflow_counters']['started_workflows'] = (int) ( $state['_workflow_counters']['started_workflows'] ?? 0 ) + $count;
+		$counters = $this->as_array( $state['_workflow_counters'] ?? array() );
+		$counters['started_workflows'] = $this->to_int( $counters['started_workflows'] ?? 0 ) + $count;
+		$state['_workflow_counters'] = $counters;
 	}
 
 	/**
 	 * Extract internal workflow budget deltas emitted by orchestration steps.
 	 *
-	 * @param array $step_output Step output.
+	 * @param array<string, mixed> $step_output Step output.
 	 * @return array{started_workflows: int}
 	 */
 	private function workflow_budget_delta_from_step_output( array $step_output ): array {
@@ -460,14 +620,14 @@ class Workflow {
 		}
 
 		return array(
-			'started_workflows' => max( 0, (int) ( $delta['started_workflows'] ?? 0 ) ),
+			'started_workflows' => max( 0, $this->to_int( $delta['started_workflows'] ?? 0 ) ),
 		);
 	}
 
 	/**
 	 * Throw when the workflow has exceeded a configured guardrail.
 	 *
-	 * @param array $state Workflow state.
+	 * @param array<string, mixed> $state Workflow state.
 	 * @throws WorkflowConstraintViolationException If a configured guardrail is exceeded.
 	 */
 	private function assert_workflow_budget( array $state ): void {
@@ -476,7 +636,8 @@ class Workflow {
 			return;
 		}
 
-		$transitions = (int) ( $state['_workflow_counters']['transitions'] ?? 0 );
+		$counters    = $this->as_array( $state['_workflow_counters'] ?? array() );
+		$transitions = $this->to_int( $counters['transitions'] ?? 0 );
 		if ( isset( $limits['max_transitions'] ) && $transitions > $limits['max_transitions'] ) {
 			throw new WorkflowConstraintViolationException(
 				sprintf(
@@ -496,7 +657,7 @@ class Workflow {
 			);
 		}
 
-		$cost_units = (int) ( $state['_workflow_counters']['cost_units'] ?? 0 );
+		$cost_units = $this->to_int( $counters['cost_units'] ?? 0 );
 		if ( isset( $limits['max_cost_units'] ) && $cost_units > $limits['max_cost_units'] ) {
 			throw new WorkflowConstraintViolationException(
 				sprintf(
@@ -506,7 +667,7 @@ class Workflow {
 			);
 		}
 
-		$started_workflows = (int) ( $state['_workflow_counters']['started_workflows'] ?? 0 );
+		$started_workflows = $this->to_int( $counters['started_workflows'] ?? 0 );
 		if ( isset( $limits['max_started_workflows'] ) && $started_workflows > $limits['max_started_workflows'] ) {
 			throw new WorkflowConstraintViolationException(
 				sprintf(
@@ -520,8 +681,8 @@ class Workflow {
 	/**
 	 * Throw when a workflow is about to enter a for-each step that exceeds its cap.
 	 *
-	 * @param array        $state    Workflow state.
-	 * @param array|string $step_def Next step definition.
+	 * @param array<string, mixed>        $state    Workflow state.
+	 * @param array<string, mixed>|string $step_def Next step definition.
 	 * @throws WorkflowConstraintViolationException If the next for-each step exceeds its configured cap.
 	 */
 	private function assert_for_each_budget_for_step( array $state, array|string $step_def ): void {
@@ -548,7 +709,7 @@ class Workflow {
 			throw new WorkflowConstraintViolationException(
 				sprintf(
 					"For-each step '%s' planned %d items, exceeding max_for_each_items budget of %d.",
-					$step_def['name'] ?? $items_key,
+					$this->to_string( $step_def['name'] ?? $items_key ),
 					count( $items ),
 					$max_for_each_items
 				)
@@ -559,13 +720,13 @@ class Workflow {
 	/**
 	 * Store runtime wait metadata in workflow state.
 	 *
-	 * @param array       $state       Workflow state.
-	 * @param string      $type        Wait type.
-	 * @param int         $step_index  Step index.
-	 * @param array       $waiting_for Wait targets.
-	 * @param WaitMode    $mode        Wait mode.
-	 * @param string|null $result_key  Optional result key.
-	 * @param array       $details     Additional persisted wait metadata.
+	 * @param array<string, mixed> $state       Workflow state.
+	 * @param string               $type        Wait type.
+	 * @param int                  $step_index  Step index.
+	 * @param array<int, string>   $waiting_for Wait targets.
+	 * @param WaitMode             $mode        Wait mode.
+	 * @param string|null          $result_key  Optional result key.
+	 * @param array<string, mixed> $details     Additional persisted wait metadata.
 	 */
 	private function set_wait_context(
 		array &$state,
@@ -601,7 +762,7 @@ class Workflow {
 	/**
 	 * Remove runtime wait metadata from workflow state.
 	 *
-	 * @param array $state Workflow state.
+	 * @param array<string, mixed> $state Workflow state.
 	 */
 	private function clear_wait_context( array &$state ): void {
 		unset( $state['_wait'], $state['_waiting_for_signal'] );
@@ -610,12 +771,12 @@ class Workflow {
 	/**
 	 * Resolve the current step name from persisted workflow state.
 	 *
-	 * @param array $state        Workflow state.
-	 * @param int   $current_step Current step index.
+	 * @param array<string, mixed> $state        Workflow state.
+	 * @param int                  $current_step Current step index.
 	 * @return string|null
 	 */
 	private function current_step_name_from_state( array $state, int $current_step ): ?string {
-		$steps    = $state['_steps'] ?? array();
+		$steps    = $this->as_steps( $state['_steps'] ?? array() );
 		$step_def = $steps[ $current_step ] ?? null;
 
 		if ( is_array( $step_def ) && isset( $step_def['name'] ) && is_string( $step_def['name'] ) ) {
@@ -628,8 +789,8 @@ class Workflow {
 	/**
 	 * Resolve signal names from a signal step definition.
 	 *
-	 * @param array $step_def Step definition.
-	 * @return string[]
+	 * @param array<string, mixed> $step_def Step definition.
+	 * @return array<int, string>
 	 */
 	private function signal_names_for_step( array $step_def ): array {
 		$signal_names = $step_def['signal_names'] ?? null;
@@ -637,7 +798,7 @@ class Workflow {
 			return array_values(
 				array_filter(
 					array_map(
-						static fn( mixed $signal_name ): string => trim( (string) $signal_name ),
+						fn( mixed $signal_name ): string => trim( $this->to_string( $signal_name ) ),
 						$signal_names
 					),
 					static fn( string $signal_name ): bool => '' !== $signal_name
@@ -645,35 +806,35 @@ class Workflow {
 			);
 		}
 
-		$signal_name = trim( (string) ( $step_def['signal_name'] ?? '' ) );
+		$signal_name = trim( $this->to_string( $step_def['signal_name'] ?? '' ) );
 		return '' === $signal_name ? array() : array( $signal_name );
 	}
 
 	/**
 	 * Resolve the wait mode for a signal or workflow wait step.
 	 *
-	 * @param array $step_def Step definition.
+	 * @param array<string, mixed> $step_def Step definition.
 	 * @return WaitMode
 	 */
 	private function wait_mode_for_step( array $step_def ): WaitMode {
-		return WaitMode::tryFrom( (string) ( $step_def['wait_mode'] ?? WaitMode::All->value ) ) ?? WaitMode::All;
+		return WaitMode::tryFrom( $this->to_string( $step_def['wait_mode'] ?? WaitMode::All->value ) ) ?? WaitMode::All;
 	}
 
 	/**
 	 * Resolve the required quorum for a workflow wait step.
 	 *
-	 * @param array $step_def Step definition.
+	 * @param array<string, mixed> $step_def Step definition.
 	 * @return int|null
 	 */
 	private function wait_for_workflows_quorum_for_step( array $step_def ): ?int {
-		$quorum = isset( $step_def['quorum'] ) ? (int) $step_def['quorum'] : null;
+		$quorum = isset( $step_def['quorum'] ) ? $this->to_int( $step_def['quorum'] ) : null;
 		return null !== $quorum && $quorum > 0 ? $quorum : null;
 	}
 
 	/**
 	 * Resolve an internal started-workflow group key for a workflow wait step.
 	 *
-	 * @param array $step_def Step definition.
+	 * @param array<string, mixed> $step_def Step definition.
 	 * @return string|null
 	 */
 	private function wait_for_workflows_group_key_for_step( array $step_def ): ?string {
@@ -689,7 +850,7 @@ class Workflow {
 	/**
 	 * Resolve the public result key for a wait step.
 	 *
-	 * @param array $step_def Step definition.
+	 * @param array<string, mixed> $step_def Step definition.
 	 * @return string|null
 	 */
 	private function wait_result_key_for_step( array $step_def ): ?string {
@@ -706,7 +867,7 @@ class Workflow {
 	 * Normalize one workflow ID source into a de-duplicated list of IDs.
 	 *
 	 * @param mixed $value Workflow ID or list source.
-	 * @return int[]
+	 * @return array<int, int>
 	 */
 	private function normalize_workflow_ids( mixed $value ): array {
 		if ( is_array( $value ) ) {
@@ -714,7 +875,7 @@ class Workflow {
 				array_unique(
 					array_filter(
 						array_map(
-							static fn( mixed $workflow_id ): int => (int) $workflow_id,
+							fn( mixed $workflow_id ): int => $this->to_int( $workflow_id ),
 							$value
 						),
 						static fn( int $workflow_id ): bool => $workflow_id > 0
@@ -723,25 +884,24 @@ class Workflow {
 			);
 		}
 
-		$workflow_id = (int) $value;
+		$workflow_id = $this->to_int( $value );
 		return $workflow_id > 0 ? array( $workflow_id ) : array();
 	}
 
 	/**
 	 * Resolve the configured match payload subset for a signal step.
 	 *
-	 * @param array $step_def Step definition.
-	 * @return array
+	 * @param array<string, mixed> $step_def Step definition.
+	 * @return array<string, mixed>
 	 */
 	private function signal_match_payload_for_step( array $step_def ): array {
-		$match_payload = $step_def['match_payload'] ?? null;
-		return is_array( $match_payload ) ? $match_payload : array();
+		return $this->as_array( $step_def['match_payload'] ?? null );
 	}
 
 	/**
 	 * Resolve the configured correlation key for a signal step.
 	 *
-	 * @param array $step_def Step definition.
+	 * @param array<string, mixed> $step_def Step definition.
 	 * @return string|null
 	 */
 	private function signal_correlation_key_for_step( array $step_def ): ?string {
@@ -793,8 +953,8 @@ class Workflow {
 	/**
 	 * Resolve the persisted iteration count for a repeat step.
 	 *
-	 * @param array $state      Workflow state.
-	 * @param int   $step_index Step index.
+	 * @param array<string, mixed> $state      Workflow state.
+	 * @param int                  $step_index Step index.
 	 * @return int
 	 */
 	private function repeat_iteration_count( array $state, int $step_index ): int {
@@ -808,26 +968,38 @@ class Workflow {
 			return 0;
 		}
 
-		return max( 0, (int) ( $entry['iterations'] ?? 0 ) );
+		return max( 0, $this->to_int( $entry['iterations'] ?? 0 ) );
 	}
 
 	/**
 	 * Build updated internal repeat runtime state for a step.
 	 *
-	 * @param array $state       Workflow state.
-	 * @param int   $step_index  Step index.
-	 * @param int   $iterations  Persisted iteration count.
-	 * @return array
+	 * @param array<string, mixed> $state      Workflow state.
+	 * @param int                  $step_index Step index.
+	 * @param int                  $iterations Persisted iteration count.
+	 * @return array<int|string, array{iterations: int}>
 	 */
 	private function repeat_steps_state( array $state, int $step_index, int $iterations ): array {
-		$repeat_steps = $state['_repeat_steps'] ?? array();
-		if ( ! is_array( $repeat_steps ) ) {
-			$repeat_steps = array();
+		$raw = $state['_repeat_steps'] ?? array();
+
+		$repeat_steps = array();
+		if ( is_array( $raw ) ) {
+			foreach ( $raw as $key => $entry ) {
+				if ( ! is_array( $entry ) ) {
+					continue;
+				}
+				$entry_iterations = max( 0, $this->to_int( $entry['iterations'] ?? 0 ) );
+				$entry_value      = array(
+					'iterations' => (int) $entry_iterations,
+				);
+				$repeat_steps[ (string) $key ] = $entry_value;
+			}
 		}
 
-		$repeat_steps[ (string) $step_index ] = array(
-			'iterations' => max( 0, $iterations ),
+		$step_value = array(
+			'iterations' => (int) max( 0, $iterations ),
 		);
+		$repeat_steps[ (string) $step_index ] = $step_value;
 
 		return $repeat_steps;
 	}
@@ -835,13 +1007,13 @@ class Workflow {
 	/**
 	 * Decide whether a repeat step should jump back to its target.
 	 *
-	 * @param array $step_def Step definition.
-	 * @param array $state    Current workflow state.
+	 * @param array<string, mixed> $step_def Step definition.
+	 * @param array<string, mixed> $state    Current workflow state.
 	 * @return bool
 	 * @throws \JsonException|\RuntimeException If the comparable values cannot be encoded or the repeat mode is invalid.
 	 */
 	private function repeat_should_continue( array $step_def, array $state ): bool {
-		$mode           = (string) ( $step_def['repeat_mode'] ?? 'while' );
+		$mode           = $this->to_string( $step_def['repeat_mode'] ?? 'while' );
 		$condition_def  = $this->handler_definition( $step_def['condition'] ?? null )
 			?? $this->handler_definition( $step_def['condition_class'] ?? null );
 
@@ -856,9 +1028,9 @@ class Workflow {
 				throw new \RuntimeException( "Repeat condition '{$condition_class}' must implement Queuety\\Contracts\\RepeatCondition." );
 			}
 
-			$matches = $this->call_handler_method( $condition, 'matches', array( $this->public_state( $state ) ), $condition_def['payload'] );
+			$matches = (bool) $this->call_handler_method( $condition, 'matches', array( $this->public_state( $state ) ), $condition_def['payload'] );
 		} else {
-			$state_key = trim( (string) ( $step_def['state_key'] ?? '' ) );
+			$state_key = trim( $this->to_string( $step_def['state_key'] ?? '' ) );
 			if ( '' === $state_key ) {
 				throw new \RuntimeException( 'Repeat step is missing both a state key and a condition class.' );
 			}
@@ -878,8 +1050,8 @@ class Workflow {
 	/**
 	 * Check whether a payload contains the configured nested match subset.
 	 *
-	 * @param array $payload Full payload.
-	 * @param array $subset  Required subset.
+	 * @param array<array-key, mixed> $payload Full payload.
+	 * @param array<array-key, mixed> $subset  Required subset.
 	 * @return bool
 	 */
 	private function payload_contains_subset( array $payload, array $subset ): bool {
@@ -907,9 +1079,9 @@ class Workflow {
 	/**
 	 * Decide whether a signal payload satisfies the step's matching rules.
 	 *
-	 * @param array $payload Signal payload.
-	 * @param array $state   Current workflow state.
-	 * @param array $step_def Signal step definition.
+	 * @param array<string, mixed> $payload  Signal payload.
+	 * @param array<string, mixed> $state    Current workflow state.
+	 * @param array<string, mixed> $step_def Signal step definition.
 	 * @return bool
 	 */
 	private function signal_payload_matches( array $payload, array $state, array $step_def ): bool {
@@ -931,9 +1103,9 @@ class Workflow {
 	/**
 	 * Build the public step output for a signal wait that has been satisfied.
 	 *
-	 * @param array $step_def         Step definition.
-	 * @param array $matched_payloads Matched signal payloads keyed by signal name.
-	 * @return array
+	 * @param array<string, mixed>                $step_def         Step definition.
+	 * @param array<string, array<string, mixed>> $matched_payloads Matched signal payloads keyed by signal name.
+	 * @return array<string, mixed>
 	 */
 	private function signal_step_output( array $step_def, array $matched_payloads ): array {
 		$result_key   = $this->wait_result_key_for_step( $step_def );
@@ -1002,10 +1174,10 @@ class Workflow {
 	/**
 	 * Collect the first matching payload for each configured signal name.
 	 *
-	 * @param int   $workflow_id Workflow ID.
-	 * @param array $step_def    Signal step definition.
-	 * @param array $state       Current workflow state.
-	 * @return array{matched_payloads: array<string,array>, first_signal_name: ?string, first_signal_data: ?array}
+	 * @param int                  $workflow_id Workflow ID.
+	 * @param array<string, mixed> $step_def    Signal step definition.
+	 * @param array<string, mixed> $state       Current workflow state.
+	 * @return array{matched_payloads: array<string, array<string, mixed>>, first_signal_name: ?string, first_signal_data: ?array<string, mixed>}
 	 */
 	private function resolve_signal_wait_progress( int $workflow_id, array $step_def, array $state ): array {
 		$signal_names = $this->signal_names_for_step( $step_def );
@@ -1040,9 +1212,13 @@ class Workflow {
 		$first_signal_name = null;
 		$first_signal_data = null;
 
-		foreach ( $stmt->fetchAll() as $row ) {
-			$signal_name = (string) $row['signal_name'];
-			$payload     = $row['payload'] ? ( json_decode( $row['payload'], true ) ?: array() ) : array();
+		foreach ( $stmt->fetchAll() as $raw_row ) {
+			$row = $this->as_row( $raw_row );
+			if ( null === $row ) {
+				continue;
+			}
+			$signal_name = $this->to_string( $row['signal_name'] ?? '' );
+			$payload     = $this->decode_payload_column( $row['payload'] ?? null );
 
 			if ( ! $this->signal_payload_matches( $payload, $state, $step_def ) ) {
 				continue;
@@ -1068,10 +1244,10 @@ class Workflow {
 	/**
 	 * Fetch stored signal payloads that satisfy a signal wait definition.
 	 *
-	 * @param int   $workflow_id Workflow ID.
-	 * @param array $step_def    Signal step definition.
-	 * @param array $state       Current workflow state.
-	 * @return array<string,array>|null
+	 * @param int                  $workflow_id Workflow ID.
+	 * @param array<string, mixed> $step_def    Signal step definition.
+	 * @param array<string, mixed> $state       Current workflow state.
+	 * @return array<string, array<string, mixed>>|null
 	 */
 	private function resolve_signal_wait_payloads( int $workflow_id, array $step_def, array $state ): ?array {
 		$signal_names = $this->signal_names_for_step( $step_def );
@@ -1108,9 +1284,9 @@ class Workflow {
 	/**
 	 * Resolve workflow dependency IDs for a workflow wait step.
 	 *
-	 * @param array $step_def Step definition.
-	 * @param array $state    Current workflow state.
-	 * @return int[]
+	 * @param array<string, mixed> $step_def Step definition.
+	 * @param array<string, mixed> $state    Current workflow state.
+	 * @return array<int, int>
 	 */
 	private function resolve_wait_for_workflows_ids( array $step_def, array $state ): array {
 		$workflow_ids = $step_def['workflow_ids'] ?? null;
@@ -1132,7 +1308,7 @@ class Workflow {
 			return array();
 		}
 
-		$workflow_key = trim( (string) ( $step_def['workflow_id_key'] ?? '' ) );
+		$workflow_key = trim( $this->to_string( $step_def['workflow_id_key'] ?? '' ) );
 		if ( '' === $workflow_key ) {
 			return array();
 		}
@@ -1148,8 +1324,8 @@ class Workflow {
 	/**
 	 * Fetch dependency workflow rows keyed by workflow ID.
 	 *
-	 * @param int[] $workflow_ids Workflow IDs.
-	 * @return array<int,array>
+	 * @param array<int, int> $workflow_ids Workflow IDs.
+	 * @return array<int, array<string, mixed>>
 	 */
 	private function fetch_workflow_rows_by_id( array $workflow_ids ): array {
 		if ( empty( $workflow_ids ) ) {
@@ -1174,8 +1350,12 @@ class Workflow {
 		$stmt->execute( $params );
 
 		$rows = array();
-		foreach ( $stmt->fetchAll() as $row ) {
-			$rows[ (int) $row['id'] ] = $row;
+		foreach ( $stmt->fetchAll() as $raw_row ) {
+			$row = $this->as_row( $raw_row );
+			if ( null === $row ) {
+				continue;
+			}
+			$rows[ $this->to_int( $row['id'] ?? 0 ) ] = $row;
 		}
 
 		return $rows;
@@ -1184,9 +1364,9 @@ class Workflow {
 	/**
 	 * Evaluate whether a workflow wait is satisfied, still pending, or impossible.
 	 *
-	 * @param array $step_def      Step definition.
-	 * @param int[] $workflow_ids  Dependency workflow IDs.
-	 * @param array $workflow_rows Workflow rows keyed by ID.
+	 * @param array<string, mixed>             $step_def      Step definition.
+	 * @param array<int, int>                  $workflow_ids  Dependency workflow IDs.
+	 * @param array<int, array<string, mixed>> $workflow_rows Workflow rows keyed by ID.
 	 * @return string
 	 */
 	private function evaluate_wait_for_workflows_state( array $step_def, array $workflow_ids, array $workflow_rows ): string {
@@ -1207,7 +1387,7 @@ class Workflow {
 				return 'impossible';
 			}
 
-			$status = WorkflowStatus::from( $row['status'] );
+			$status = WorkflowStatus::from( $this->to_string( $row['status'] ?? '' ) );
 			if ( WorkflowStatus::Completed === $status ) {
 				++$completed_count;
 			} elseif ( in_array( $status, array( WorkflowStatus::Failed, WorkflowStatus::Cancelled ), true ) ) {
@@ -1247,10 +1427,10 @@ class Workflow {
 	/**
 	 * Build public step output for a satisfied workflow wait step.
 	 *
-	 * @param array $step_def      Step definition.
-	 * @param int[] $workflow_ids  Dependency workflow IDs.
-	 * @param array $workflow_rows Workflow rows keyed by ID.
-	 * @return array
+	 * @param array<string, mixed>             $step_def      Step definition.
+	 * @param array<int, int>                  $workflow_ids  Dependency workflow IDs.
+	 * @param array<int, array<string, mixed>> $workflow_rows Workflow rows keyed by ID.
+	 * @return array<string, mixed>
 	 */
 	private function wait_for_workflows_step_output( array $step_def, array $workflow_ids, array $workflow_rows ): array {
 		$result_key = $this->wait_result_key_for_step( $step_def );
@@ -1259,11 +1439,11 @@ class Workflow {
 
 		foreach ( $workflow_ids as $workflow_id ) {
 			$row = $workflow_rows[ $workflow_id ] ?? null;
-			if ( null === $row || WorkflowStatus::Completed->value !== $row['status'] ) {
+			if ( null === $row || WorkflowStatus::Completed->value !== ( $row['status'] ?? null ) ) {
 				continue;
 			}
 
-			$state                            = json_decode( $row['state'], true ) ?: array();
+			$state                            = $this->decode_state_column( $row['state'] ?? null );
 			$results[ (string) $workflow_id ] = $this->public_state( $state );
 
 			if ( WaitMode::Any === $mode ) {
@@ -1298,10 +1478,10 @@ class Workflow {
 	/**
 	 * Build inspectable wait details for a signal step.
 	 *
-	 * @param int   $workflow_id Workflow ID.
-	 * @param array $step_def    Signal step definition.
-	 * @param array $state       Workflow state.
-	 * @return array
+	 * @param int                  $workflow_id Workflow ID.
+	 * @param array<string, mixed> $step_def    Signal step definition.
+	 * @param array<string, mixed> $state       Workflow state.
+	 * @return array<string, mixed>
 	 */
 	private function signal_wait_details( int $workflow_id, array $step_def, array $state ): array {
 		$progress          = $this->resolve_signal_wait_progress( $workflow_id, $step_def, $state );
@@ -1332,9 +1512,9 @@ class Workflow {
 	/**
 	 * Build inspectable wait details for a workflow dependency step.
 	 *
-	 * @param array $step_def Workflow wait definition.
-	 * @param array $state    Workflow state.
-	 * @return array
+	 * @param array<string, mixed> $step_def Workflow wait definition.
+	 * @param array<string, mixed> $state    Workflow state.
+	 * @return array<string, mixed>
 	 */
 	private function wait_for_workflows_details( array $step_def, array $state ): array {
 		$workflow_ids  = $this->resolve_wait_for_workflows_ids( $step_def, $state );
@@ -1350,7 +1530,7 @@ class Workflow {
 				continue;
 			}
 
-			$status = WorkflowStatus::from( $row['status'] );
+			$status = WorkflowStatus::from( $this->to_string( $row['status'] ?? '' ) );
 			if ( WorkflowStatus::Completed === $status ) {
 				$matched[] = (string) $workflow_id;
 			} elseif ( in_array( $status, array( WorkflowStatus::Failed, WorkflowStatus::Cancelled ), true ) ) {
@@ -1377,18 +1557,19 @@ class Workflow {
 	/**
 	 * Build the public wait-inspection payload for a workflow state.
 	 *
-	 * @param int                      $workflow_id  Workflow ID.
-	 * @param array                    $state        Workflow state.
-	 * @param int                      $current_step Current step index.
-	 * @param array<string,mixed>|null $wait Wait context.
-	 * @return array|null
+	 * @param int                       $workflow_id  Workflow ID.
+	 * @param array<string, mixed>      $state        Workflow state.
+	 * @param int                       $current_step Current step index.
+	 * @param array<string, mixed>|null $wait         Wait context.
+	 * @return array<string, mixed>|null
 	 */
 	private function wait_details_from_state( int $workflow_id, array $state, int $current_step, ?array $wait ): ?array {
 		if ( null === $wait ) {
 			return null;
 		}
 
-		$step_def = $state['_steps'][ $current_step ] ?? null;
+		$steps    = $this->as_steps( $state['_steps'] ?? array() );
+		$step_def = $steps[ $current_step ] ?? null;
 		if ( ! is_array( $step_def ) ) {
 			return array_filter(
 				array(
@@ -1437,9 +1618,9 @@ class Workflow {
 	/**
 	 * Register workflow dependency rows for a pending wait step.
 	 *
-	 * @param int   $workflow_id Workflow ID.
-	 * @param int   $step_index  Step index.
-	 * @param int[] $workflow_ids Dependency workflow IDs.
+	 * @param int             $workflow_id  Workflow ID.
+	 * @param int             $step_index   Step index.
+	 * @param array<int, int> $workflow_ids Dependency workflow IDs.
 	 */
 	private function store_workflow_dependencies( int $workflow_id, int $step_index, array $workflow_ids ): void {
 		$this->clear_workflow_dependencies( $workflow_id, $step_index );
@@ -1469,13 +1650,13 @@ class Workflow {
 	/**
 	 * Advance a satisfied wait step without requiring a completing job row.
 	 *
-	 * @param \PDO  $pdo         Active PDO connection.
-	 * @param array $wf_row      Locked workflow row.
-	 * @param int   $workflow_id Workflow ID.
-	 * @param int   $step_index  Step index.
-	 * @param array $state       Workflow state.
-	 * @param array $step_output Wait step output.
-	 * @return int[] Completed workflow IDs that may unblock dependent waits.
+	 * @param \PDO                 $pdo         Active PDO connection.
+	 * @param array<string, mixed> $wf_row      Locked workflow row.
+	 * @param int                  $workflow_id Workflow ID.
+	 * @param int                  $step_index  Step index.
+	 * @param array<string, mixed> $state       Workflow state.
+	 * @param array<string, mixed> $step_output Wait step output.
+	 * @return array<int, int> Completed workflow IDs that may unblock dependent waits.
 	 */
 	private function settle_wait_step(
 		\PDO $pdo,
@@ -1486,8 +1667,8 @@ class Workflow {
 		array $step_output,
 	): array {
 		$wf_tbl      = $this->conn->table( Config::table_workflows() );
-		$steps       = $state['_steps'] ?? array();
-		$total_steps = (int) $wf_row['total_steps'];
+		$steps       = $this->as_steps( $state['_steps'] ?? array() );
+		$total_steps = $this->to_int( $wf_row['total_steps'] ?? 0 );
 		$state_before = $this->public_state( $state );
 
 		$this->clear_wait_context( $state );
@@ -1532,9 +1713,9 @@ class Workflow {
 				handler: $this->event_handler_for_step( $current_step_def ),
 				state_before: $state_before,
 				state_after: $this->public_state( $state ),
-				output: is_array( $trace['output'] ?? null ) ? $trace['output'] : $step_output,
+				output: is_array( $trace['output'] ?? null ) ? $this->as_array( $trace['output'] ) : $step_output,
 				step_name: $this->resolve_step_name( $current_step_def, $step_index ),
-				step_type: $this->resolve_step_type( $current_step_def ),
+				step_type: null === $current_step_def ? 'single' : $this->resolve_step_type( $current_step_def ),
 			);
 		}
 
@@ -1543,8 +1724,8 @@ class Workflow {
 				LogEvent::WorkflowCompleted,
 				array(
 					'workflow_id' => $workflow_id,
-					'handler'     => $wf_row['name'],
-					'queue'       => $state['_queue'] ?? 'default',
+					'handler'     => $this->to_string( $wf_row['name'] ?? '' ),
+					'queue'       => $this->state_queue( $state ),
 				)
 			);
 			return $this->on_workflow_completed( $workflow_id, $state, $pdo );
@@ -1553,17 +1734,13 @@ class Workflow {
 		if ( isset( $steps[ $next_step ] ) ) {
 			$this->assert_for_each_budget_for_step( $state, $steps[ $next_step ] );
 
-			$queue_name   = $state['_queue'] ?? 'default';
-			$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
-			$max_attempts = $state['_max_attempts'] ?? 3;
-
 			$this->enqueue_step_def(
 				$steps[ $next_step ],
 				$workflow_id,
 				$next_step,
-				$queue_name,
-				$priority,
-				$max_attempts,
+				$this->state_queue( $state ),
+				$this->state_priority( $state ),
+				$this->state_max_attempts( $state ),
 			);
 		}
 
@@ -1573,9 +1750,9 @@ class Workflow {
 	/**
 	 * Merge step output into workflow state and track keys for pruning.
 	 *
-	 * @param array $state        Workflow state.
-	 * @param array $step_output  Step output.
-	 * @param int   $current_step Current step index.
+	 * @param array<string, mixed> $state        Workflow state.
+	 * @param array<string, mixed> $step_output  Step output.
+	 * @param int                  $current_step Current step index.
 	 */
 	private function merge_step_output_into_state( array &$state, array $step_output, int $current_step ): void {
 		$output_keys = array();
@@ -1597,33 +1774,38 @@ class Workflow {
 		}
 
 		if ( isset( $state['_prune_state_after'] ) && is_array( $state['_step_outputs'] ?? null ) ) {
-			$state['_step_outputs'][ $current_step ] = $output_keys;
+			$step_outputs                  = is_array( $state['_step_outputs'] ) ? $state['_step_outputs'] : array();
+			$step_outputs[ $current_step ] = $output_keys;
 
-			$prune_after = (int) $state['_prune_state_after'];
+			$prune_after = $this->to_int( $state['_prune_state_after'] );
 			if ( $current_step >= $prune_after ) {
 				$cutoff = $current_step - $prune_after;
-				foreach ( $state['_step_outputs'] as $step_idx => $keys ) {
-					if ( (int) $step_idx <= $cutoff ) {
-						foreach ( $keys as $key ) {
-							if ( ! str_starts_with( $key, '_' ) && isset( $state[ $key ] ) ) {
-								unset( $state[ $key ] );
+				foreach ( $step_outputs as $step_idx => $keys ) {
+					if ( $this->to_int( $step_idx ) <= $cutoff ) {
+						if ( is_array( $keys ) ) {
+							foreach ( $keys as $key ) {
+								if ( is_string( $key ) && ! str_starts_with( $key, '_' ) && isset( $state[ $key ] ) ) {
+									unset( $state[ $key ] );
+								}
 							}
 						}
-						unset( $state['_step_outputs'][ $step_idx ] );
+						unset( $step_outputs[ $step_idx ] );
 					}
 				}
 			}
+
+			$state['_step_outputs'] = $step_outputs;
 		}
 	}
 
 	/**
 	 * Record a completed compensatable step on the compensation stack.
 	 *
-	 * @param array        $state      Workflow state.
-	 * @param array|string $step_def   Step definition.
-	 * @param int          $step_index Step index.
+	 * @param array<string, mixed>             $state      Workflow state.
+	 * @param array<string, mixed>|string|null $step_def   Step definition.
+	 * @param int                              $step_index Step index.
 	 */
-	private function push_compensation_snapshot( array &$state, array|string $step_def, int $step_index ): void {
+	private function push_compensation_snapshot( array &$state, array|string|null $step_def, int $step_index ): void {
 		if ( ! is_array( $step_def ) ) {
 			return;
 		}
@@ -1633,22 +1815,23 @@ class Workflow {
 			return;
 		}
 
-		$state['_compensation_stack'] ??= array();
-		$state['_compensation_stack'][] = array(
+		$stack   = $this->as_array( $state['_compensation_stack'] ?? array() );
+		$stack[] = array(
 			'step_index' => $step_index,
 			'handler'    => $handler_def['class'],
 			'payload'    => $handler_def['payload'],
 			'state'      => $this->public_state( $state ),
 		);
+		$state['_compensation_stack'] = $stack;
 	}
 
 	/**
 	 * Run stored compensations in reverse order.
 	 *
-	 * @param int    $workflow_id Workflow ID.
-	 * @param array  $state       Workflow state.
-	 * @param string $reason      Reason for running compensation.
-	 * @return array Updated workflow state.
+	 * @param int                  $workflow_id Workflow ID.
+	 * @param array<string, mixed> $state       Workflow state.
+	 * @param string               $reason      Reason for running compensation.
+	 * @return array<string, mixed> Updated workflow state.
 	 */
 	private function run_compensations( int $workflow_id, array $state, string $reason ): array {
 		if ( ! empty( $state['_compensated'] ) ) {
@@ -1663,10 +1846,13 @@ class Workflow {
 		}
 
 		for ( $i = count( $stack ) - 1; $i >= 0; --$i ) {
-			$entry         = $stack[ $i ];
+			$entry = $stack[ $i ];
+			if ( ! is_array( $entry ) ) {
+				continue;
+			}
 			$handler_class = $entry['handler'] ?? null;
-			$payload       = is_array( $entry['payload'] ?? null ) ? $entry['payload'] : array();
-			$snapshot      = is_array( $entry['state'] ?? null ) ? $entry['state'] : array();
+			$payload       = $this->as_array( $entry['payload'] ?? null );
+			$snapshot      = $this->as_array( $entry['state'] ?? null );
 
 			if ( ! is_string( $handler_class ) || ! class_exists( $handler_class ) ) {
 				continue;
@@ -1703,8 +1889,8 @@ class Workflow {
 	/**
 	 * Persist updated internal workflow state without changing lifecycle status.
 	 *
-	 * @param int   $workflow_id Workflow ID.
-	 * @param array $state       Workflow state.
+	 * @param int                  $workflow_id Workflow ID.
+	 * @param array<string, mixed> $state       Workflow state.
 	 */
 	private function persist_internal_state( int $workflow_id, array $state ): void {
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
@@ -1722,8 +1908,8 @@ class Workflow {
 	/**
 	 * Normalize persisted for-each branch entries so sparse indexes survive JSON round-trips.
 	 *
-	 * @param array $entries Persisted result or failure entries.
-	 * @return array<string,array>
+	 * @param array<int|string, mixed> $entries Persisted result or failure entries.
+	 * @return array<int|string, array<int|string, mixed>>
 	 */
 	private function normalize_for_each_entries( array $entries ): array {
 		$normalized = array();
@@ -1733,7 +1919,7 @@ class Workflow {
 				continue;
 			}
 
-			$index                         = array_key_exists( 'index', $entry ) ? (int) $entry['index'] : (int) $key;
+			$index                         = array_key_exists( 'index', $entry ) ? $this->to_int( $entry['index'] ) : (int) $key;
 			$normalized[ (string) $index ] = $entry;
 		}
 
@@ -1744,14 +1930,14 @@ class Workflow {
 	/**
 	 * Normalize for-each runtime state loaded from persisted workflow state.
 	 *
-	 * @param array $runtime Raw runtime state.
-	 * @return array
+	 * @param array<string, mixed> $runtime Raw runtime state.
+	 * @return array<string, mixed>
 	 */
 	private function normalize_for_each_runtime( array $runtime ): array {
 		$runtime['items']        = array_values( is_array( $runtime['items'] ?? null ) ? $runtime['items'] : array() );
 		$runtime['results']      = $this->normalize_for_each_entries( is_array( $runtime['results'] ?? null ) ? $runtime['results'] : array() );
 		$runtime['failures']     = $this->normalize_for_each_entries( is_array( $runtime['failures'] ?? null ) ? $runtime['failures'] : array() );
-		$runtime['winner_index'] = isset( $runtime['winner_index'] ) ? (int) $runtime['winner_index'] : null;
+		$runtime['winner_index'] = isset( $runtime['winner_index'] ) ? $this->to_int( $runtime['winner_index'] ) : null;
 		$runtime['settled']      = ! empty( $runtime['settled'] );
 
 		return $runtime;
@@ -1798,27 +1984,31 @@ class Workflow {
 	/**
 	 * Build the public aggregate payload for a settled for-each step.
 	 *
-	 * @param array $step_def Step definition.
-	 * @param array $runtime  Runtime for-each state.
-	 * @return array
+	 * @param array<string, mixed> $step_def Step definition.
+	 * @param array<string, mixed> $runtime  Runtime for-each state.
+	 * @return array<string, mixed>
 	 */
 	private function build_for_each_aggregate( array $step_def, array $runtime ): array {
-		$results  = array_values( $runtime['results'] ?? array() );
-		$failures = array_values( $runtime['failures'] ?? array() );
+		$results  = array_values( $this->as_array( $runtime['results'] ?? array() ) );
+		$failures = array_values( $this->as_array( $runtime['failures'] ?? array() ) );
+		$items    = $this->as_array( $runtime['items'] ?? array() );
 
-		usort(
-			$results,
-			fn( array $a, array $b ) => (int) $a['index'] <=> (int) $b['index']
+		$compare = fn( mixed $a, mixed $b ): int => $this->to_int(
+			is_array( $a ) ? ( $a['index'] ?? 0 ) : 0
+		) <=> $this->to_int(
+			is_array( $b ) ? ( $b['index'] ?? 0 ) : 0
 		);
-		usort(
-			$failures,
-			fn( array $a, array $b ) => (int) $a['index'] <=> (int) $b['index']
-		);
+
+		usort( $results, $compare );
+		usort( $failures, $compare );
 
 		$winner_index = $runtime['winner_index'] ?? null;
 		$winner       = null;
 		foreach ( $results as $entry ) {
-			if ( null !== $winner_index && (int) $entry['index'] === (int) $winner_index ) {
+			if ( ! is_array( $entry ) ) {
+				continue;
+			}
+			if ( null !== $winner_index && $this->to_int( $entry['index'] ?? 0 ) === $this->to_int( $winner_index ) ) {
 				$winner = $entry;
 				break;
 			}
@@ -1827,7 +2017,7 @@ class Workflow {
 		return array(
 			'mode'      => $step_def['mode'] ?? ForEachMode::All->value,
 			'quorum'    => $step_def['quorum'] ?? null,
-			'total'     => count( $runtime['items'] ?? array() ),
+			'total'     => count( $items ),
 			'succeeded' => count( $results ),
 			'failed'    => count( $failures ),
 			'settled'   => true,
@@ -1840,48 +2030,48 @@ class Workflow {
 	/**
 	 * Determine whether a for-each step has satisfied its completion condition.
 	 *
-	 * @param array $step_def Step definition.
-	 * @param array $runtime  Runtime for-each state.
+	 * @param array<string, mixed> $step_def Step definition.
+	 * @param array<string, mixed> $runtime  Runtime for-each state.
 	 * @return bool
 	 */
 	private function for_each_completion_satisfied( array $step_def, array $runtime ): bool {
-		$mode      = ForEachMode::from( $step_def['mode'] ?? ForEachMode::All->value );
-		$successes = count( $runtime['results'] ?? array() );
-		$total     = count( $runtime['items'] ?? array() );
+		$mode      = ForEachMode::from( $this->to_string( $step_def['mode'] ?? ForEachMode::All->value ) );
+		$successes = count( $this->as_array( $runtime['results'] ?? array() ) );
+		$total     = count( $this->as_array( $runtime['items'] ?? array() ) );
 
 		return match ( $mode ) {
 			ForEachMode::All => $successes >= $total,
 			ForEachMode::FirstSuccess => $successes >= 1,
-			ForEachMode::Quorum => $successes >= max( 1, (int) ( $step_def['quorum'] ?? 1 ) ),
+			ForEachMode::Quorum => $successes >= max( 1, $this->to_int( $step_def['quorum'] ?? 1 ) ),
 		};
 	}
 
 	/**
 	 * Determine whether a for-each step can no longer satisfy its completion condition.
 	 *
-	 * @param array $step_def Step definition.
-	 * @param array $runtime  Runtime for-each state.
+	 * @param array<string, mixed> $step_def Step definition.
+	 * @param array<string, mixed> $runtime  Runtime for-each state.
 	 * @return bool
 	 */
 	private function for_each_completion_impossible( array $step_def, array $runtime ): bool {
-		$mode      = ForEachMode::from( $step_def['mode'] ?? ForEachMode::All->value );
-		$successes = count( $runtime['results'] ?? array() );
-		$failures  = count( $runtime['failures'] ?? array() );
-		$total     = count( $runtime['items'] ?? array() );
+		$mode      = ForEachMode::from( $this->to_string( $step_def['mode'] ?? ForEachMode::All->value ) );
+		$successes = count( $this->as_array( $runtime['results'] ?? array() ) );
+		$failures  = count( $this->as_array( $runtime['failures'] ?? array() ) );
+		$total     = count( $this->as_array( $runtime['items'] ?? array() ) );
 		$remaining = max( 0, $total - $successes - $failures );
 
 		return match ( $mode ) {
 			ForEachMode::All => $failures > 0,
 			ForEachMode::FirstSuccess => 0 === $remaining && 0 === $successes,
-			ForEachMode::Quorum => $successes + $remaining < max( 1, (int) ( $step_def['quorum'] ?? 1 ) ),
+			ForEachMode::Quorum => $successes + $remaining < max( 1, $this->to_int( $step_def['quorum'] ?? 1 ) ),
 		};
 	}
 
 	/**
 	 * Resolve the public result key for a for-each aggregate.
 	 *
-	 * @param array $step_def    Step definition.
-	 * @param int   $step_index  Step index.
+	 * @param array<string, mixed> $step_def   Step definition.
+	 * @param int                  $step_index Step index.
 	 * @return string
 	 */
 	private function for_each_result_key( array $step_def, int $step_index ): string {
@@ -1890,18 +2080,18 @@ class Workflow {
 			return trim( $result_key );
 		}
 
-		$name = $step_def['name'] ?? (string) $step_index;
+		$name = $this->to_string( $step_def['name'] ?? (string) $step_index );
 		return $name . '_results';
 	}
 
 	/**
 	 * Build final step output for a settled for-each step.
 	 *
-	 * @param array $state      Workflow state.
-	 * @param array $step_def   Step definition.
-	 * @param array $runtime    Runtime for-each state.
-	 * @param int   $step_index Step index.
-	 * @return array
+	 * @param array<string, mixed> $state      Workflow state.
+	 * @param array<string, mixed> $step_def   Step definition.
+	 * @param array<string, mixed> $runtime    Runtime for-each state.
+	 * @param int                  $step_index Step index.
+	 * @return array<string, mixed>
 	 * @throws \RuntimeException If the reducer class is invalid or returns invalid output.
 	 */
 	private function for_each_step_output( array $state, array $step_def, array $runtime, int $step_index ): array {
@@ -1938,25 +2128,25 @@ class Workflow {
 			throw new \RuntimeException( "For-each reducer '{$reducer_class}' must return an array." );
 		}
 
-		return array_merge( $output, $reducer_output );
+		return $this->as_array( array_merge( $output, $reducer_output ) );
 	}
 
 	/**
 	 * Finalise a settled step and enqueue the next transition.
 	 *
-	 * @param \PDO  $pdo              Active PDO connection.
-	 * @param array $wf_row           Locked workflow row.
-	 * @param array $job_row          Locked job row.
-	 * @param int   $workflow_id      Workflow ID.
-	 * @param int   $completed_job_id Completed job ID.
-	 * @param int   $current_step     Current step index.
-	 * @param array $state            Workflow state.
-	 * @param array $steps            All step definitions.
-	 * @param int   $total_steps      Total step count.
-	 * @param array $step_output      Step output to merge into state.
-	 * @param int   $duration_ms      Step duration.
-	 * @param bool  $log_job_completion Whether to emit the job completion log entry.
-	 * @return int[] Completed workflow IDs that may unblock dependent waits.
+	 * @param \PDO                                    $pdo                Active PDO connection.
+	 * @param array<string, mixed>                    $wf_row             Locked workflow row.
+	 * @param array<string, mixed>                    $job_row            Locked job row.
+	 * @param int                                     $workflow_id        Workflow ID.
+	 * @param int                                     $completed_job_id   Completed job ID.
+	 * @param int                                     $current_step       Current step index.
+	 * @param array<string, mixed>                    $state              Workflow state.
+	 * @param array<int, array<string, mixed>|string> $steps              All step definitions.
+	 * @param int                                     $total_steps        Total step count.
+	 * @param array<string, mixed>                    $step_output        Step output to merge into state.
+	 * @param int                                     $duration_ms        Step duration.
+	 * @param bool                                    $log_job_completion Whether to emit the job completion log entry.
+	 * @return array<int, int> Completed workflow IDs that may unblock dependent waits.
 	 * @throws \RuntimeException If `_next_step` references an unknown step name.
 	 */
 	private function finalize_step_completion(
@@ -1981,7 +2171,7 @@ class Workflow {
 
 		$current_step_def = $steps[ $current_step ] ?? null;
 		$this->push_compensation_snapshot( $state, $current_step_def, $current_step );
-		$this->increment_cost_units( $state, (int) ( $job_row['cost_units'] ?? 0 ) );
+		$this->increment_cost_units( $state, $this->to_int( $job_row['cost_units'] ?? 0 ) );
 		$budget_delta = $this->workflow_budget_delta_from_step_output( $step_output );
 		$this->increment_started_workflow_counter( $state, $budget_delta['started_workflows'] );
 		$this->increment_transition_counter( $state );
@@ -1989,7 +2179,7 @@ class Workflow {
 
 		$next_step = $current_step + 1;
 		if ( isset( $step_output['_next_step'] ) ) {
-			$next_step_name  = $step_output['_next_step'];
+			$next_step_name  = $this->to_string( $step_output['_next_step'] );
 			$next_step_index = $this->find_step_index_by_name( $steps, $next_step_name );
 
 			if ( null === $next_step_index ) {
@@ -2002,7 +2192,7 @@ class Workflow {
 		}
 
 		$is_last   = $next_step >= $total_steps;
-		$is_paused = WorkflowStatus::Paused->value === $wf_row['status'];
+		$is_paused = WorkflowStatus::Paused->value === ( $wf_row['status'] ?? null );
 
 		if ( $is_last ) {
 			$stmt = $pdo->prepare(
@@ -2026,6 +2216,9 @@ class Workflow {
 
 		$this->mark_workflow_job_completed( $pdo, $completed_job_id );
 
+		$job_handler = $this->to_string( $job_row['handler'] ?? '' );
+		$job_queue   = $this->to_string( $job_row['queue'] ?? '' );
+
 		if ( $log_job_completion ) {
 			$this->logger->log(
 				LogEvent::Completed,
@@ -2033,8 +2226,8 @@ class Workflow {
 					'job_id'         => $completed_job_id,
 					'workflow_id'    => $workflow_id,
 					'step_index'     => $current_step,
-					'handler'        => $job_row['handler'] ?? '',
-					'queue'          => $job_row['queue'] ?? 'default',
+					'handler'        => $job_handler,
+					'queue'          => '' === $job_queue ? 'default' : $job_queue,
 					'duration_ms'    => $duration_ms,
 					'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
 				)
@@ -2046,17 +2239,17 @@ class Workflow {
 			$this->event_log->record_step_completed(
 				workflow_id: $workflow_id,
 				step_index: $current_step,
-				handler: $job_row['handler'] ?? '',
+				handler: $job_handler,
 				state_before: $state_before,
 				state_after: $this->public_state( $state ),
-				output: is_array( $trace['output'] ?? null ) ? $trace['output'] : $step_output,
+				output: is_array( $trace['output'] ?? null ) ? $this->as_array( $trace['output'] ) : $step_output,
 				duration_ms: $duration_ms,
-				step_name: $this->resolve_step_name( $current_step_def, $current_step ),
-				step_type: $this->resolve_step_type( $current_step_def ),
+				step_name: null === $current_step_def ? null : $this->resolve_step_name( $current_step_def, $current_step ),
+				step_type: null === $current_step_def ? 'single' : $this->resolve_step_type( $current_step_def ),
 				job_id: $completed_job_id,
-				attempt: isset( $job_row['attempts'] ) ? (int) $job_row['attempts'] : null,
-				queue: $job_row['queue'] ?? null,
-				input: $trace['input'] ?? $state_before,
+				attempt: isset( $job_row['attempts'] ) ? $this->to_int( $job_row['attempts'] ) : null,
+				queue: '' === $job_queue ? null : $job_queue,
+				input: is_array( $trace['input'] ?? null ) ? $this->as_array( $trace['input'] ) : $state_before,
 				context: is_array( $trace['context'] ?? null ) ? $trace['context'] : null,
 				artifacts: is_array( $trace['artifacts'] ?? null ) ? $trace['artifacts'] : null,
 				chunks: is_array( $trace['chunks'] ?? null ) ? $trace['chunks'] : null,
@@ -2068,8 +2261,8 @@ class Workflow {
 				LogEvent::WorkflowCompleted,
 				array(
 					'workflow_id' => $workflow_id,
-					'handler'     => $wf_row['name'],
-					'queue'       => $job_row['queue'] ?? 'default',
+					'handler'     => $this->to_string( $wf_row['name'] ?? '' ),
+					'queue'       => '' === $job_queue ? 'default' : $job_queue,
 				)
 			);
 			return $this->on_workflow_completed( $workflow_id, $state, $pdo );
@@ -2078,17 +2271,13 @@ class Workflow {
 		if ( ! $is_paused && isset( $steps[ $next_step ] ) ) {
 			$this->assert_for_each_budget_for_step( $state, $steps[ $next_step ] );
 
-			$queue_name   = $state['_queue'] ?? 'default';
-			$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
-			$max_attempts = $state['_max_attempts'] ?? 3;
-
 			$this->enqueue_step_def(
 				$steps[ $next_step ],
 				$workflow_id,
 				$next_step,
-				$queue_name,
-				$priority,
-				$max_attempts,
+				$this->state_queue( $state ),
+				$this->state_priority( $state ),
+				$this->state_max_attempts( $state ),
 			);
 		}
 
@@ -2098,16 +2287,16 @@ class Workflow {
 	/**
 	 * Dispatch one workflow step job with serialized runtime metadata.
 	 *
-	 * @param array|string $step_def     Step definition.
-	 * @param string       $handler      Handler class or alias.
-	 * @param array        $payload      Job payload.
-	 * @param int          $workflow_id  Workflow ID.
-	 * @param int          $step_index   Step index.
-	 * @param string       $queue_name   Workflow queue name.
-	 * @param Priority     $priority     Workflow priority.
-	 * @param int          $max_attempts Workflow max attempts.
-	 * @param int          $default_cost Default cost units when no metadata exists.
-	 * @param int|null     $delay        Explicit dispatch delay override.
+	 * @param array<string, mixed>|string $step_def     Step definition.
+	 * @param string                      $handler      Handler class or alias.
+	 * @param array<string, mixed>        $payload      Job payload.
+	 * @param int                         $workflow_id  Workflow ID.
+	 * @param int                         $step_index   Step index.
+	 * @param string                      $queue_name   Workflow queue name.
+	 * @param Priority                    $priority     Workflow priority.
+	 * @param int                         $max_attempts Workflow max attempts.
+	 * @param int                         $default_cost Default cost units when no metadata exists.
+	 * @param int|null                    $delay        Explicit dispatch delay override.
 	 */
 	private function dispatch_step_job(
 		array|string $step_def,
@@ -2149,12 +2338,12 @@ class Workflow {
 	/**
 	 * Enqueue a step definition as one or more jobs within a transaction.
 	 *
-	 * @param array|string $step_def    Step definition.
-	 * @param int          $workflow_id Workflow ID.
-	 * @param int          $step_index  Step index.
-	 * @param string       $queue_name  Queue name.
-	 * @param Priority     $priority    Priority level.
-	 * @param int          $max_attempts Maximum attempts.
+	 * @param array<string, mixed>|string $step_def     Step definition.
+	 * @param int                         $workflow_id  Workflow ID.
+	 * @param int                         $step_index   Step index.
+	 * @param string                      $queue_name   Queue name.
+	 * @param Priority                    $priority     Priority level.
+	 * @param int                         $max_attempts Maximum attempts.
 	 */
 	private function enqueue_step_def(
 		array|string $step_def,
@@ -2219,6 +2408,7 @@ class Workflow {
 				0,
 			);
 		} elseif ( 'delay' === $type ) {
+			$delay_seconds = is_array( $step_def ) ? $this->to_int( $step_def['delay_seconds'] ?? 0 ) : 0;
 			$this->dispatch_step_job(
 				$step_def,
 				'__queuety_delay',
@@ -2229,7 +2419,7 @@ class Workflow {
 				$priority,
 				$max_attempts,
 				0,
-				(int) ( $step_def['delay_seconds'] ?? 0 ),
+				$delay_seconds,
 			);
 		} elseif ( 'wait_for_signal' === $type ) {
 			$this->dispatch_step_job(
@@ -2289,9 +2479,9 @@ class Workflow {
 	 * already been sent. If so, the signal data is merged into state and the
 	 * workflow advances. If not, the workflow is set to 'waiting_for_signal' status.
 	 *
-	 * @param array $step_def    Signal step definition.
-	 * @param int   $workflow_id Workflow ID.
-	 * @param int   $step_index  Step index.
+	 * @param array<string, mixed> $step_def    Signal step definition.
+	 * @param int                  $workflow_id Workflow ID.
+	 * @param int                  $step_index  Step index.
 	 * @throws \Throwable If the database transaction fails.
 	 */
 	private function enqueue_signal_step( array $step_def, int $workflow_id, int $step_index ): void {
@@ -2303,17 +2493,17 @@ class Workflow {
 		try {
 			$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$wf_stmt->execute( array( 'id' => $workflow_id ) );
-			$wf_row = $wf_stmt->fetch();
+			$wf_row = $this->as_row( $wf_stmt->fetch() );
 
 			if ( ! $wf_row ) {
 				$pdo->rollBack();
 				return;
 			}
 
-			$state            = json_decode( $wf_row['state'], true ) ?: array();
+			$state            = $this->decode_state_column( $wf_row['state'] ?? null );
 			$state_before     = $this->public_state( $state );
-			$current_step     = (int) $wf_row['current_step'];
-			$status           = WorkflowStatus::from( $wf_row['status'] );
+			$current_step     = $this->to_int( $wf_row['current_step'] ?? 0 );
+			$status           = WorkflowStatus::from( $this->to_string( $wf_row['status'] ?? '' ) );
 			$matched_payloads = $this->resolve_signal_wait_payloads( $workflow_id, $step_def, $state );
 
 			if (
@@ -2403,10 +2593,10 @@ class Workflow {
 	/**
 	 * Expand a for-each placeholder into branch jobs for the current workflow step.
 	 *
-	 * @param int   $workflow_id    Workflow ID.
-	 * @param int   $job_id         Placeholder job ID.
-	 * @param int   $step_index     Step index.
-	 * @param array $workflow_state Current workflow state.
+	 * @param int                  $workflow_id    Workflow ID.
+	 * @param int                  $job_id         Placeholder job ID.
+	 * @param int                  $step_index     Step index.
+	 * @param array<string, mixed> $workflow_state Current workflow state.
 	 * @return bool True when the placeholder job should be logged as completed.
 	 * @throws WorkflowConstraintViolationException If the workflow exceeds a configured guardrail.
 	 * @throws \RuntimeException If the for-each step definition or source state is invalid.
@@ -2425,15 +2615,16 @@ class Workflow {
 		try {
 			$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$wf_stmt->execute( array( 'id' => $workflow_id ) );
-			$wf_row = $wf_stmt->fetch();
+			$wf_row = $this->as_row( $wf_stmt->fetch() );
 
 			if ( ! $wf_row ) {
 				$pdo->rollBack();
 				return false;
 			}
 
-			$state    = json_decode( $wf_row['state'], true ) ?: $workflow_state;
-			$steps    = $state['_steps'] ?? array();
+			$decoded  = $this->decode_state_column( $wf_row['state'] ?? null );
+			$state    = empty( $decoded ) ? $workflow_state : $decoded;
+			$steps    = $this->as_steps( $state['_steps'] ?? array() );
 			$step_def = $steps[ $step_index ] ?? null;
 
 			if ( ! is_array( $step_def ) || 'for_each' !== ( $step_def['type'] ?? '' ) ) {
@@ -2442,14 +2633,14 @@ class Workflow {
 
 			$job_stmt = $pdo->prepare( "SELECT * FROM {$jb_tbl} WHERE id = :id FOR UPDATE" );
 			$job_stmt->execute( array( 'id' => $job_id ) );
-			$job_row = $job_stmt->fetch();
+			$job_row = $this->as_row( $job_stmt->fetch() );
 
 			if ( ! $job_row || JobStatus::Processing->value !== $job_row['status'] ) {
 				$pdo->commit();
 				return false;
 			}
 
-			$current_step = (int) $wf_row['current_step'];
+			$current_step = $this->to_int( $wf_row['current_step'] ?? 0 );
 			if ( $current_step !== $step_index || ! in_array( $wf_row['status'], array( WorkflowStatus::Running->value, WorkflowStatus::Paused->value ), true ) ) {
 				$mark = $pdo->prepare(
 					"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
@@ -2464,12 +2655,15 @@ class Workflow {
 				return true;
 			}
 
-				$runtime = $state['_for_each_steps'][ $step_index ] ?? null;
+			$for_each_steps = $this->as_array( $state['_for_each_steps'] ?? array() );
+			$runtime        = $for_each_steps[ $step_index ] ?? null;
+			$items_key      = $this->to_string( $step_def['items_key'] ?? '' );
+			$step_def_name  = $this->to_string( $step_def['name'] ?? '' );
 			if ( ! is_array( $runtime ) || empty( $runtime['initialized'] ) ) {
-				$items = $state[ $step_def['items_key'] ] ?? array();
+				$items = '' === $items_key ? array() : ( $state[ $items_key ] ?? array() );
 				if ( ! is_array( $items ) ) {
 					throw new \RuntimeException(
-						"For-each step '{$step_def['name']}' expected state key '{$step_def['items_key']}' to contain an array."
+						"For-each step '{$step_def_name}' expected state key '{$items_key}' to contain an array."
 					);
 				}
 
@@ -2478,7 +2672,7 @@ class Workflow {
 					throw new WorkflowConstraintViolationException(
 						sprintf(
 							"For-each step '%s' planned %d items, exceeding max_for_each_items budget of %d.",
-							$step_def['name'],
+							$step_def_name,
 							count( $items ),
 							$max_for_each_items
 						)
@@ -2496,11 +2690,15 @@ class Workflow {
 				$runtime = $this->normalize_for_each_runtime( $runtime );
 			}
 
-			$all_indexes = array_keys( $runtime['items'] ?? array() );
-			$done        = array_map( 'intval', array_merge( array_keys( $runtime['results'] ?? array() ), array_keys( $runtime['failures'] ?? array() ) ) );
-			$missing     = array_values( array_diff( $all_indexes, $done ) );
+			$runtime_items   = $this->as_array( $runtime['items'] ?? array() );
+			$runtime_results = $this->as_array( $runtime['results'] ?? array() );
+			$runtime_failures = $this->as_array( $runtime['failures'] ?? array() );
+			$all_indexes     = array_keys( $runtime_items );
+			$done            = array_map( static fn( mixed $value ): int => (int) $value, array_merge( array_keys( $runtime_results ), array_keys( $runtime_failures ) ) );
+			$missing         = array_values( array_diff( $all_indexes, $done ) );
 
-			$state['_for_each_steps'][ $step_index ] = $runtime;
+			$for_each_steps[ $step_index ]  = $runtime;
+			$state['_for_each_steps']       = $for_each_steps;
 
 			if ( empty( $missing ) ) {
 				if ( $this->for_each_completion_satisfied( $step_def, $runtime ) ) {
@@ -2514,7 +2712,7 @@ class Workflow {
 						$step_index,
 						$state,
 						$steps,
-						(int) $wf_row['total_steps'],
+						$this->to_int( $wf_row['total_steps'] ?? 0 ),
 						$step_output,
 						0,
 						false,
@@ -2544,9 +2742,7 @@ class Workflow {
 				return $should_log_completion;
 			}
 
-			$queue_name       = $state['_queue'] ?? 'default';
-			$priority         = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
-			$branch_handler   = $step_def['class'];
+			$branch_handler = $this->to_string( $step_def['class'] ?? '' );
 
 			foreach ( $missing as $item_index ) {
 				$this->dispatch_step_job(
@@ -2555,14 +2751,14 @@ class Workflow {
 					array(
 						'__for_each' => array(
 							'item_index' => $item_index,
-							'item'       => $runtime['items'][ $item_index ],
+							'item'       => $runtime_items[ $item_index ] ?? null,
 						),
 					),
 					$workflow_id,
 					$step_index,
-					$queue_name,
-					$priority,
-					$state['_max_attempts'] ?? 3,
+					$this->state_queue( $state ),
+					$this->state_priority( $state ),
+					$this->state_max_attempts( $state ),
 				);
 			}
 
@@ -2603,11 +2799,11 @@ class Workflow {
 		try {
 			$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$wf_stmt->execute( array( 'id' => $workflow_id ) );
-			$wf_row = $wf_stmt->fetch();
+			$wf_row = $this->as_row( $wf_stmt->fetch() );
 
 			$job_stmt = $pdo->prepare( "SELECT * FROM {$jb_tbl} WHERE id = :id FOR UPDATE" );
 			$job_stmt->execute( array( 'id' => $failed_job_id ) );
-			$job_row = $job_stmt->fetch();
+			$job_row = $this->as_row( $job_stmt->fetch() );
 
 			if ( ! $wf_row || ! $job_row ) {
 				$pdo->commit();
@@ -2632,9 +2828,9 @@ class Workflow {
 				)
 			);
 
-			$state        = json_decode( $wf_row['state'], true ) ?: array();
-			$current_step = (int) $wf_row['current_step'];
-			$step_index   = $job_row['step_index'] !== null ? (int) $job_row['step_index'] : null;
+			$state        = $this->decode_state_column( $wf_row['state'] ?? null );
+			$current_step = $this->to_int( $wf_row['current_step'] ?? 0 );
+			$step_index   = $job_row['step_index'] !== null ? $this->to_int( $job_row['step_index'] ?? 0 ) : null;
 
 			if (
 				null === $step_index
@@ -2645,14 +2841,15 @@ class Workflow {
 				return false;
 			}
 
-			$steps    = $state['_steps'] ?? array();
+			$steps    = $this->as_steps( $state['_steps'] ?? array() );
 			$step_def = $steps[ $step_index ] ?? null;
 			if ( ! is_array( $step_def ) || 'for_each' !== ( $step_def['type'] ?? '' ) ) {
 				$pdo->commit();
 				return false;
 			}
 
-				$runtime = $state['_for_each_steps'][ $step_index ] ?? null;
+				$for_each_steps = $this->as_array( $state['_for_each_steps'] ?? array() );
+				$runtime        = $for_each_steps[ $step_index ] ?? null;
 			if ( ! is_array( $runtime ) ) {
 				$runtime = array(
 					'initialized'  => true,
@@ -2665,22 +2862,27 @@ class Workflow {
 				$runtime = $this->normalize_for_each_runtime( $runtime );
 			}
 
-				$payload     = $job_row['payload'] ? ( json_decode( $job_row['payload'], true ) ?: array() ) : array();
-				$branch_meta = $payload['__for_each'] ?? array();
+				$payload     = $this->decode_payload_column( $job_row['payload'] ?? null );
+				$branch_meta = $this->as_array( $payload['__for_each'] ?? array() );
 				$item_index  = $branch_meta['item_index'] ?? null;
 				$item        = $branch_meta['item'] ?? null;
 
 			if ( null !== $item_index ) {
-				$runtime['failures'][ (string) $item_index ] = array(
-					'index'         => (int) $item_index,
+				$failures = $this->as_array( $runtime['failures'] ?? array() );
+				$results  = $this->as_array( $runtime['results'] ?? array() );
+				$failures[ (string) $this->to_int( $item_index ) ] = array(
+					'index'         => $this->to_int( $item_index ),
 					'item'          => $item,
 					'error_message' => $error_message,
 					'job_id'        => $failed_job_id,
 				);
-				unset( $runtime['results'][ (string) $item_index ] );
+				unset( $results[ (string) $this->to_int( $item_index ) ] );
+				$runtime['failures'] = $failures;
+				$runtime['results']  = $results;
 			}
 
-				$state['_for_each_steps'][ $step_index ] = $runtime;
+				$for_each_steps[ $step_index ] = $runtime;
+				$state['_for_each_steps']      = $for_each_steps;
 
 			if ( ! $this->for_each_completion_impossible( $step_def, $runtime ) ) {
 				$this->persist_internal_state( $workflow_id, $state );
@@ -2716,9 +2918,9 @@ class Workflow {
 	 * Called by the Worker when it encounters a __queuety_wait_for_signal placeholder.
 	 * Delegates to the private enqueue_signal_step method.
 	 *
-	 * @param int   $workflow_id The workflow ID.
-	 * @param array $step_def    The signal step definition.
-	 * @param int   $step_index  The step index.
+	 * @param int                  $workflow_id The workflow ID.
+	 * @param array<string, mixed> $step_def    The signal step definition.
+	 * @param int                  $step_index  The step index.
 	 */
 	public function handle_signal_step( int $workflow_id, array $step_def, int $step_index ): void {
 		$this->enqueue_signal_step( $step_def, $workflow_id, $step_index );
@@ -2727,10 +2929,10 @@ class Workflow {
 	/**
 	 * Handle a workflow dependency wait step dispatched via the worker.
 	 *
-	 * @param int   $workflow_id    Workflow ID.
-	 * @param array $step_def       Step definition.
-	 * @param int   $step_index     Step index.
-	 * @param array $workflow_state Current workflow state.
+	 * @param int                  $workflow_id    Workflow ID.
+	 * @param array<string, mixed> $step_def       Step definition.
+	 * @param int                  $step_index     Step index.
+	 * @param array<string, mixed> $workflow_state Current workflow state.
 	 * @throws \Throwable If the database transaction fails.
 	 */
 	public function handle_wait_for_workflows_step( int $workflow_id, array $step_def, int $step_index, array $workflow_state ): void {
@@ -2745,17 +2947,18 @@ class Workflow {
 		try {
 			$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$wf_stmt->execute( array( 'id' => $workflow_id ) );
-			$wf_row = $wf_stmt->fetch();
+			$wf_row = $this->as_row( $wf_stmt->fetch() );
 
 			if ( ! $wf_row ) {
 				$pdo->rollBack();
 				return;
 			}
 
-			$state        = json_decode( $wf_row['state'], true ) ?: $workflow_state;
+			$decoded      = $this->decode_state_column( $wf_row['state'] ?? null );
+			$state        = empty( $decoded ) ? $workflow_state : $decoded;
 			$state_before = $this->public_state( $state );
-			$current_step = (int) $wf_row['current_step'];
-			$status       = WorkflowStatus::from( $wf_row['status'] );
+			$current_step = $this->to_int( $wf_row['current_step'] ?? 0 );
+			$status       = WorkflowStatus::from( $this->to_string( $wf_row['status'] ?? '' ) );
 
 			if (
 				$current_step !== $step_index
@@ -2861,11 +3064,11 @@ class Workflow {
 	/**
 	 * Evaluate a repeat control step and emit a `_next_step` when the repeat should continue.
 	 *
-	 * @param int   $workflow_id    Workflow ID.
-	 * @param array $step_def       Step definition.
-	 * @param int   $step_index     Step index.
-	 * @param array $workflow_state Current workflow state.
-	 * @return array
+	 * @param int                  $workflow_id    Workflow ID.
+	 * @param array<string, mixed> $step_def       Step definition.
+	 * @param int                  $step_index     Step index.
+	 * @param array<string, mixed> $workflow_state Current workflow state.
+	 * @return array<string, mixed>
 	 * @throws WorkflowConstraintViolationException If the repeat exceeds its configured max_iterations.
 	 * @throws \RuntimeException If the repeat definition is invalid.
 	 */
@@ -2874,8 +3077,8 @@ class Workflow {
 			throw new \RuntimeException( "Workflow {$workflow_id}: step {$step_index} is not a repeat definition." );
 		}
 
-		$target_step = trim( (string) ( $step_def['target_step'] ?? '' ) );
-		$state_key   = trim( (string) ( $step_def['state_key'] ?? '' ) );
+		$target_step = trim( $this->to_string( $step_def['target_step'] ?? '' ) );
+		$state_key   = trim( $this->to_string( $step_def['state_key'] ?? '' ) );
 
 		if ( '' === $target_step ) {
 			throw new \RuntimeException( "Workflow {$workflow_id}: repeat step {$step_index} is missing a target step." );
@@ -2903,13 +3106,13 @@ class Workflow {
 		$next_iterations = $this->repeat_iteration_count( $workflow_state, $step_index ) + 1;
 		$max_iterations  = $step_def['max_iterations'] ?? null;
 
-		if ( null !== $max_iterations && $next_iterations > (int) $max_iterations ) {
+		if ( null !== $max_iterations && $next_iterations > $this->to_int( $max_iterations ) ) {
 			throw new WorkflowConstraintViolationException(
 				sprintf(
 					"Workflow %d: repeat step '%s' exceeded max_iterations of %d.",
 					$workflow_id,
-					$step_def['name'] ?? (string) $step_index,
-					(int) $max_iterations
+					$this->to_string( $step_def['name'] ?? (string) $step_index ),
+					$this->to_int( $max_iterations )
 				)
 			);
 		}
@@ -2928,9 +3131,9 @@ class Workflow {
 	 * workflow by merging the signal data into state and advancing to the
 	 * next step.
 	 *
-	 * @param int    $workflow_id The workflow ID.
-	 * @param string $signal_name The signal name.
-	 * @param array  $data        Signal payload data.
+	 * @param int                  $workflow_id The workflow ID.
+	 * @param string               $signal_name The signal name.
+	 * @param array<string, mixed> $data        Signal payload data.
 	 * @throws \Throwable If the database transaction fails.
 	 */
 	public function handle_signal( int $workflow_id, string $signal_name, array $data = array() ): void {
@@ -2957,16 +3160,16 @@ class Workflow {
 
 			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$stmt->execute( array( 'id' => $workflow_id ) );
-			$wf_row = $stmt->fetch();
+			$wf_row = $this->as_row( $stmt->fetch() );
 
 			if ( ! $wf_row ) {
 				$pdo->commit();
 				return;
 			}
 
-			$state        = json_decode( $wf_row['state'], true ) ?: array();
-			$current_step = (int) $wf_row['current_step'];
-			$steps        = $state['_steps'] ?? array();
+			$state        = $this->decode_state_column( $wf_row['state'] ?? null );
+			$current_step = $this->to_int( $wf_row['current_step'] ?? 0 );
+			$steps        = $this->as_steps( $state['_steps'] ?? array() );
 			$step_def     = $steps[ $current_step ] ?? null;
 
 			if (
@@ -3019,13 +3222,13 @@ class Workflow {
 
 		$dep_stmt = $pdo->prepare( "SELECT status FROM {$wf_tbl} WHERE id = :id" );
 		$dep_stmt->execute( array( 'id' => $dependency_workflow_id ) );
-		$dependency_row = $dep_stmt->fetch();
+		$dependency_row = $this->as_row( $dep_stmt->fetch() );
 
 		if ( ! $dependency_row ) {
 			return;
 		}
 
-		$dependency_status = WorkflowStatus::from( $dependency_row['status'] );
+		$dependency_status = WorkflowStatus::from( $this->to_string( $dependency_row['status'] ?? '' ) );
 
 		$stmt = $pdo->prepare(
 			"SELECT DISTINCT waiting_workflow_id, step_index
@@ -3035,9 +3238,13 @@ class Workflow {
 		);
 		$stmt->execute( array( 'dependency_workflow_id' => $dependency_workflow_id ) );
 
-		foreach ( $stmt->fetchAll() as $row ) {
-			$waiting_workflow_id = (int) $row['waiting_workflow_id'];
-			$step_index          = (int) $row['step_index'];
+		foreach ( $stmt->fetchAll() as $raw_row ) {
+			$row = $this->as_row( $raw_row );
+			if ( null === $row ) {
+				continue;
+			}
+			$waiting_workflow_id = $this->to_int( $row['waiting_workflow_id'] ?? 0 );
+			$step_index          = $this->to_int( $row['step_index'] ?? 0 );
 			$completed_ids       = array();
 			$terminal_ids        = array();
 			$should_compensate   = false;
@@ -3065,7 +3272,7 @@ class Workflow {
 
 				$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 				$wf_stmt->execute( array( 'id' => $waiting_workflow_id ) );
-				$wf_row = $wf_stmt->fetch();
+				$wf_row = $this->as_row( $wf_stmt->fetch() );
 
 				if ( ! $wf_row ) {
 					$this->clear_workflow_dependencies( $waiting_workflow_id, $step_index );
@@ -3073,10 +3280,10 @@ class Workflow {
 					continue;
 				}
 
-				$state = json_decode( $wf_row['state'], true ) ?: array();
+				$state = $this->decode_state_column( $wf_row['state'] ?? null );
 				if (
 					WorkflowStatus::WaitingForWorkflows->value !== $wf_row['status']
-					|| (int) $wf_row['current_step'] !== $step_index
+					|| $this->to_int( $wf_row['current_step'] ?? 0 ) !== $step_index
 				) {
 					$this->clear_workflow_dependencies( $waiting_workflow_id, $step_index );
 					$pdo->commit();
@@ -3084,7 +3291,7 @@ class Workflow {
 					continue;
 				}
 
-				$steps    = $state['_steps'] ?? array();
+				$steps    = $this->as_steps( $state['_steps'] ?? array() );
 				$step_def = $steps[ $step_index ] ?? null;
 				if ( ! is_array( $step_def ) || 'wait_for_workflows' !== ( $step_def['type'] ?? '' ) ) {
 					$this->clear_workflow_dependencies( $waiting_workflow_id, $step_index );
@@ -3173,8 +3380,8 @@ class Workflow {
 				'status'      => JobStatus::Completed->value,
 			)
 		);
-		$row = $stmt->fetch();
-		return (int) ( $row['cnt'] ?? 0 );
+		$row = $this->as_row( $stmt->fetch() );
+		return $this->to_int( null === $row ? 0 : ( $row['cnt'] ?? 0 ) );
 	}
 
 	/**
@@ -3184,10 +3391,10 @@ class Workflow {
 	 * merge step output into state, advance current_step, complete the job,
 	 * enqueue the next step (or mark workflow completed), and log.
 	 *
-	 * @param int   $workflow_id    The workflow ID.
-	 * @param int   $completed_job_id The job ID that just completed.
-	 * @param array $step_output    Data returned by the step handler.
-	 * @param int   $duration_ms    Step execution duration in milliseconds.
+	 * @param int                  $workflow_id      The workflow ID.
+	 * @param int                  $completed_job_id The job ID that just completed.
+	 * @param array<string, mixed> $step_output      Data returned by the step handler.
+	 * @param int                  $duration_ms      Step execution duration in milliseconds.
 	 * @throws \RuntimeException If the workflow is not found or if _next_step target is invalid.
 	 * @throws \Throwable If the database transaction fails.
 	 */
@@ -3201,7 +3408,7 @@ class Workflow {
 		try {
 			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$stmt->execute( array( 'id' => $workflow_id ) );
-			$wf_row = $stmt->fetch();
+			$wf_row = $this->as_row( $stmt->fetch() );
 
 			if ( ! $wf_row ) {
 				throw new \RuntimeException( "Workflow {$workflow_id} not found." );
@@ -3209,14 +3416,14 @@ class Workflow {
 
 				$job_stmt = $pdo->prepare( "SELECT * FROM {$jb_tbl} WHERE id = :id FOR UPDATE" );
 				$job_stmt->execute( array( 'id' => $completed_job_id ) );
-				$job_row = $job_stmt->fetch();
+				$job_row = $this->as_row( $job_stmt->fetch() );
 
 			if ( ! $job_row ) {
 				throw new \RuntimeException( "Job {$completed_job_id} not found." );
 			}
 
 			if ( ! in_array( $wf_row['status'], array( WorkflowStatus::Running->value, WorkflowStatus::Paused->value ), true ) ) {
-				if ( $this->is_completable_workflow_job_status( $job_row['status'] ) ) {
+				if ( $this->is_completable_workflow_job_status( $this->to_string( $job_row['status'] ?? '' ) ) ) {
 					$stmt = $pdo->prepare(
 						"UPDATE {$jb_tbl}
 							SET status = :status, failed_at = NOW(), error_message = :error
@@ -3234,17 +3441,17 @@ class Workflow {
 				return;
 			}
 
-			if ( ! $this->is_completable_workflow_job_status( $job_row['status'] ) ) {
+			if ( ! $this->is_completable_workflow_job_status( $this->to_string( $job_row['status'] ?? '' ) ) ) {
 				$pdo->commit();
 				return;
 			}
 
-				$state        = json_decode( $wf_row['state'], true ) ?: array();
-				$current_step = (int) $wf_row['current_step'];
-				$total_steps  = (int) $wf_row['total_steps'];
-				$steps        = $state['_steps'] ?? array();
+				$state        = $this->decode_state_column( $wf_row['state'] ?? null );
+				$current_step = $this->to_int( $wf_row['current_step'] ?? 0 );
+				$total_steps  = $this->to_int( $wf_row['total_steps'] ?? 0 );
+				$steps        = $this->as_steps( $state['_steps'] ?? array() );
 
-			if ( $job_row['step_index'] !== null && (int) $job_row['step_index'] !== $current_step ) {
+			if ( $job_row['step_index'] !== null && $this->to_int( $job_row['step_index'] ?? 0 ) !== $current_step ) {
 				$stmt = $pdo->prepare(
 					"UPDATE {$jb_tbl}
 						SET status = :status, failed_at = NOW(), error_message = :error
@@ -3262,10 +3469,10 @@ class Workflow {
 			}
 
 				$current_step_def  = $steps[ $current_step ] ?? null;
-				$current_step_type = $this->resolve_step_type( $current_step_def );
+				$current_step_type = null === $current_step_def ? 'single' : $this->resolve_step_type( $current_step_def );
 
 			if ( 'for_each' === $current_step_type ) {
-				$payload     = json_decode( $job_row['payload'], true ) ?: array();
+				$payload     = $this->decode_payload_column( $job_row['payload'] ?? null );
 				$branch_meta = $payload['__for_each'] ?? null;
 				$state_before = $this->public_state( $state );
 				$step_output  = $this->extract_trace_from_step_output( $step_output );
@@ -3274,7 +3481,8 @@ class Workflow {
 					throw new \RuntimeException( "Workflow {$workflow_id}: invalid for-each branch payload." );
 				}
 
-				$runtime = $state['_for_each_steps'][ $current_step ] ?? null;
+				$for_each_steps = $this->as_array( $state['_for_each_steps'] ?? array() );
+				$runtime        = $for_each_steps[ $current_step ] ?? null;
 				if ( ! is_array( $runtime ) || empty( $runtime['initialized'] ) ) {
 					throw new \RuntimeException( "Workflow {$workflow_id}: for-each runtime state missing for step {$current_step}." );
 				}
@@ -3297,25 +3505,31 @@ class Workflow {
 					return;
 				}
 
-				$item_index = (int) $branch_meta['item_index'];
-				$item       = $runtime['items'][ $item_index ] ?? $branch_meta['item'] ?? null;
+				$item_index   = $this->to_int( $branch_meta['item_index'] );
+				$runtime_items = $this->as_array( $runtime['items'] ?? array() );
+				$item         = $runtime_items[ $item_index ] ?? $branch_meta['item'] ?? null;
 
-				$runtime['results'][ (string) $item_index ] = array(
+				$runtime_results                          = $this->as_array( $runtime['results'] ?? array() );
+				$runtime_failures                         = $this->as_array( $runtime['failures'] ?? array() );
+				$runtime_results[ (string) $item_index ]  = array(
 					'index'  => $item_index,
 					'item'   => $item,
 					'output' => $step_output,
 					'job_id' => $completed_job_id,
 				);
-				unset( $runtime['failures'][ (string) $item_index ] );
+				unset( $runtime_failures[ (string) $item_index ] );
+				$runtime['results']  = $runtime_results;
+				$runtime['failures'] = $runtime_failures;
 
 				if ( null === $runtime['winner_index'] ) {
 					$runtime['winner_index'] = $item_index;
 				}
 
-				$state['_for_each_steps'][ $current_step ] = $runtime;
+				$for_each_steps[ $current_step ] = $runtime;
+				$state['_for_each_steps']        = $for_each_steps;
 
 				if ( ! $this->for_each_completion_satisfied( $current_step_def, $runtime ) ) {
-					$this->increment_cost_units( $state, (int) ( $job_row['cost_units'] ?? 0 ) );
+					$this->increment_cost_units( $state, $this->to_int( $job_row['cost_units'] ?? 0 ) );
 					$this->assert_workflow_budget( $state );
 					$this->persist_internal_state( $workflow_id, $state );
 
@@ -3345,7 +3559,7 @@ class Workflow {
 								'step_type'    => $this->resolve_step_type( $current_step_def ),
 								'handler'      => $job_row['handler'] ?? '',
 								'queue'        => $job_row['queue'] ?? null,
-								'attempt'      => isset( $job_row['attempts'] ) ? (int) $job_row['attempts'] : null,
+								'attempt'      => isset( $job_row['attempts'] ) ? $this->to_int( $job_row['attempts'] ?? 0 ) : null,
 								'input'        => $trace['input'] ?? array(
 									'state'      => $state_before,
 									'item'       => $item,
@@ -3373,8 +3587,9 @@ class Workflow {
 					return;
 				}
 
-				$runtime['settled']                        = true;
-				$state['_for_each_steps'][ $current_step ] = $runtime;
+				$runtime['settled']              = true;
+				$for_each_steps[ $current_step ] = $runtime;
+				$state['_for_each_steps']        = $for_each_steps;
 				$this->persist_internal_state( $workflow_id, $state );
 				$this->bury_active_jobs_for_step( $workflow_id, $current_step, 'For-each completion settled early.', $completed_job_id );
 
@@ -3389,7 +3604,7 @@ class Workflow {
 							'step_type'    => $this->resolve_step_type( $current_step_def ),
 							'handler'      => $job_row['handler'] ?? '',
 							'queue'        => $job_row['queue'] ?? null,
-							'attempt'      => isset( $job_row['attempts'] ) ? (int) $job_row['attempts'] : null,
+							'attempt'      => isset( $job_row['attempts'] ) ? $this->to_int( $job_row['attempts'] ?? 0 ) : null,
 							'input'        => $trace['input'] ?? array(
 								'state'      => $state_before,
 								'item'       => $item,
@@ -3439,7 +3654,7 @@ class Workflow {
 				$state_before = $this->public_state( $state );
 				$step_output  = $this->extract_trace_from_step_output( $step_output );
 				$this->merge_step_output_into_state( $state, $step_output, $current_step );
-				$this->increment_cost_units( $state, (int) ( $job_row['cost_units'] ?? 0 ) );
+				$this->increment_cost_units( $state, $this->to_int( $job_row['cost_units'] ?? 0 ) );
 				$total_handlers = is_array( $current_step_def )
 					? StepDispatchOptions::parallel_branch_count( $current_step_def )
 					: 0;
@@ -3467,14 +3682,17 @@ class Workflow {
 					)
 				);
 
+				$job_handler = $this->to_string( $job_row['handler'] ?? '' );
+				$job_queue   = $this->to_string( $job_row['queue'] ?? '' );
+
 				$this->logger->log(
 					LogEvent::Completed,
 					array(
 						'job_id'         => $completed_job_id,
 						'workflow_id'    => $workflow_id,
 						'step_index'     => $current_step,
-						'handler'        => $job_row['handler'] ?? '',
-						'queue'          => $job_row['queue'] ?? 'default',
+						'handler'        => $job_handler,
+						'queue'          => '' === $job_queue ? 'default' : $job_queue,
 						'duration_ms'    => $duration_ms,
 						'memory_peak_kb' => (int) ( memory_get_peak_usage( true ) / 1024 ),
 					)
@@ -3489,9 +3707,9 @@ class Workflow {
 							'step_index'   => $current_step,
 							'step_name'    => $this->resolve_step_name( $current_step_def, $current_step ),
 							'step_type'    => $current_step_type,
-							'handler'      => $job_row['handler'] ?? '',
-							'queue'        => $job_row['queue'] ?? null,
-							'attempt'      => isset( $job_row['attempts'] ) ? (int) $job_row['attempts'] : null,
+							'handler'      => $job_handler,
+							'queue'        => '' === $job_queue ? null : $job_queue,
+							'attempt'      => isset( $job_row['attempts'] ) ? $this->to_int( $job_row['attempts'] ?? 0 ) : null,
 							'input'        => $trace['input'] ?? $state_before,
 							'output'       => is_array( $trace['output'] ?? null ) ? $trace['output'] : $step_output,
 							'state_before' => $state_before,
@@ -3512,8 +3730,8 @@ class Workflow {
 				// Another branch may have merged fresher state before this one won the completion race.
 				$re_stmt = $pdo->prepare( "SELECT state FROM {$wf_tbl} WHERE id = :id" );
 				$re_stmt->execute( array( 'id' => $workflow_id ) );
-				$re_row = $re_stmt->fetch();
-				$state  = json_decode( $re_row['state'], true ) ?: array();
+				$re_row = $this->as_row( $re_stmt->fetch() );
+				$state  = $this->decode_state_column( $re_row['state'] ?? null );
 
 				if ( null !== $this->event_log ) {
 					$snapshot = array_filter(
@@ -3525,7 +3743,7 @@ class Workflow {
 					$this->event_log->record_step_completed(
 						workflow_id: $workflow_id,
 						step_index: $current_step,
-						handler: $job_row['handler'] ?? '',
+						handler: $job_handler,
 						state_before: $state_before,
 						state_after: $snapshot,
 						output: $step_output,
@@ -3533,15 +3751,15 @@ class Workflow {
 						step_name: $this->resolve_step_name( $current_step_def, $current_step ),
 						step_type: $current_step_type,
 						job_id: $completed_job_id,
-						attempt: isset( $job_row['attempts'] ) ? (int) $job_row['attempts'] : null,
-						queue: $job_row['queue'] ?? null,
+						attempt: isset( $job_row['attempts'] ) ? $this->to_int( $job_row['attempts'] ?? 0 ) : null,
+						queue: '' === $job_queue ? null : $job_queue,
 						input: $state_before,
 					);
 				}
 
 				$next_step = $current_step + 1;
 				$is_last   = $next_step >= $total_steps;
-				$is_paused = WorkflowStatus::Paused->value === $wf_row['status'];
+				$is_paused = WorkflowStatus::Paused->value === ( $wf_row['status'] ?? null );
 				$this->push_compensation_snapshot( $state, $current_step_def, $current_step );
 				$this->increment_transition_counter( $state );
 				$this->assert_workflow_budget( $state );
@@ -3577,25 +3795,21 @@ class Workflow {
 						LogEvent::WorkflowCompleted,
 						array(
 							'workflow_id' => $workflow_id,
-							'handler'     => $wf_row['name'],
-							'queue'       => $job_row['queue'] ?? 'default',
+							'handler'     => $this->to_string( $wf_row['name'] ?? '' ),
+							'queue'       => '' === $job_queue ? 'default' : $job_queue,
 						)
 					);
 					$terminal_ids = $this->on_workflow_completed( $workflow_id, $state, $pdo );
 				} elseif ( ! $is_paused && isset( $steps[ $next_step ] ) ) {
 					$this->assert_for_each_budget_for_step( $state, $steps[ $next_step ] );
 
-					$queue_name   = $state['_queue'] ?? 'default';
-					$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
-					$max_attempts = $state['_max_attempts'] ?? 3;
-
 					$this->enqueue_step_def(
 						$steps[ $next_step ],
 						$workflow_id,
 						$next_step,
-						$queue_name,
-						$priority,
-						$max_attempts,
+						$this->state_queue( $state ),
+						$this->state_priority( $state ),
+						$this->state_max_attempts( $state ),
 					);
 				}
 
@@ -3639,9 +3853,10 @@ class Workflow {
 	 *
 	 * If this workflow has a parent workflow, advance the parent.
 	 *
-	 * @param int   $workflow_id The completed workflow ID.
-	 * @param array $state       The completed workflow's state.
-	 * @param \PDO  $pdo         Active PDO connection (may be in a transaction).
+	 * @param int                  $workflow_id The completed workflow ID.
+	 * @param array<string, mixed> $state       The completed workflow's state.
+	 * @param \PDO                 $pdo         Active PDO connection (may be in a transaction).
+	 * @return array<int, int> Completed workflow IDs that may unblock dependent waits.
 	 */
 	private function on_workflow_completed( int $workflow_id, array $state, \PDO $pdo ): array {
 		$wf_tbl        = $this->conn->table( Config::table_workflows() );
@@ -3651,24 +3866,24 @@ class Workflow {
 			"SELECT parent_workflow_id, parent_step_index FROM {$wf_tbl} WHERE id = :id"
 		);
 		$stmt->execute( array( 'id' => $workflow_id ) );
-		$row = $stmt->fetch();
+		$row = $this->as_row( $stmt->fetch() );
 
 		if ( ! $row || empty( $row['parent_workflow_id'] ) ) {
 			return $completed_ids;
 		}
 
-		$parent_id   = (int) $row['parent_workflow_id'];
-		$parent_step = (int) $row['parent_step_index'];
+		$parent_id   = $this->to_int( $row['parent_workflow_id'] ?? 0 );
+		$parent_step = $this->to_int( $row['parent_step_index'] ?? 0 );
 
 		$parent_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 		$parent_stmt->execute( array( 'id' => $parent_id ) );
-		$parent_row = $parent_stmt->fetch();
+		$parent_row = $this->as_row( $parent_stmt->fetch() );
 
 		if ( ! $parent_row ) {
 			return $completed_ids;
 		}
 
-		$parent_state = json_decode( $parent_row['state'], true ) ?: array();
+		$parent_state = $this->decode_state_column( $parent_row['state'] ?? null );
 
 		foreach ( $state as $key => $value ) {
 			if ( ! str_starts_with( $key, '_' ) ) {
@@ -3676,16 +3891,16 @@ class Workflow {
 			}
 		}
 
-			$parent_steps     = $parent_state['_steps'] ?? array();
+			$parent_steps     = $this->as_steps( $parent_state['_steps'] ?? array() );
 			$current_step_def = $parent_steps[ $parent_step ] ?? null;
 			$this->push_compensation_snapshot( $parent_state, $current_step_def, $parent_step );
 			$this->increment_transition_counter( $parent_state );
 			$this->assert_workflow_budget( $parent_state );
 
-			$parent_total_steps = (int) $parent_row['total_steps'];
+			$parent_total_steps = $this->to_int( $parent_row['total_steps'] ?? 0 );
 			$next_step          = $parent_step + 1;
 		$is_last                = $next_step >= $parent_total_steps;
-		$is_paused              = WorkflowStatus::Paused->value === $parent_row['status'];
+		$is_paused              = WorkflowStatus::Paused->value === ( $parent_row['status'] ?? null );
 
 		if ( $is_last ) {
 			$upd_stmt = $pdo->prepare(
@@ -3705,8 +3920,8 @@ class Workflow {
 				LogEvent::WorkflowCompleted,
 				array(
 					'workflow_id' => $parent_id,
-					'handler'     => $parent_row['name'],
-					'queue'       => $parent_state['_queue'] ?? 'default',
+					'handler'     => $this->to_string( $parent_row['name'] ?? '' ),
+					'queue'       => $this->state_queue( $parent_state ),
 				)
 			);
 
@@ -3727,17 +3942,13 @@ class Workflow {
 			if ( ! $is_paused && isset( $parent_steps[ $next_step ] ) ) {
 				$this->assert_for_each_budget_for_step( $parent_state, $parent_steps[ $next_step ] );
 
-				$queue_name   = $parent_state['_queue'] ?? 'default';
-				$priority     = Priority::tryFrom( $parent_state['_priority'] ?? 0 ) ?? Priority::Low;
-				$max_attempts = $parent_state['_max_attempts'] ?? 3;
-
 				$this->enqueue_step_def(
 					$parent_steps[ $next_step ],
 					$parent_id,
 					$next_step,
-					$queue_name,
-					$priority,
-					$max_attempts,
+					$this->state_queue( $parent_state ),
+					$this->state_priority( $parent_state ),
+					$this->state_max_attempts( $parent_state ),
 				);
 			}
 		}
@@ -3748,12 +3959,12 @@ class Workflow {
 	/**
 	 * Materialize persisted workflow state from a serialised definition bundle.
 	 *
-	 * @param array    $definition          Workflow definition bundle.
-	 * @param array    $initial_state       Initial public state.
-	 * @param int|null $started_by_workflow Workflow ID that started this workflow, if any.
-	 * @param int|null $started_by_step     Parent step index that started this workflow, if any.
-	 * @param array    $dispatch_options    Per-dispatch options.
-	 * @return array{state: array, deadline_at: string|null}
+	 * @param array<string, mixed> $definition          Workflow definition bundle.
+	 * @param array<string, mixed> $initial_state       Initial public state.
+	 * @param int|null             $started_by_workflow Workflow ID that started this workflow, if any.
+	 * @param int|null             $started_by_step     Parent step index that started this workflow, if any.
+	 * @param array<string, mixed> $dispatch_options    Per-dispatch options.
+	 * @return array{state: array<string, mixed>, deadline_at: string|null}
 	 * @throws \RuntimeException If the definition requires an initial-state budget that is already exceeded.
 	 */
 	private function materialize_defined_workflow_state(
@@ -3768,8 +3979,8 @@ class Workflow {
 		$state['_queue']        = is_string( $definition['queue'] ?? null ) && '' !== trim( $definition['queue'] )
 			? trim( $definition['queue'] )
 			: 'default';
-		$state['_priority']     = (int) ( $definition['priority'] ?? 0 );
-		$state['_max_attempts'] = max( 1, (int) ( $definition['max_attempts'] ?? 3 ) );
+		$state['_priority']     = $this->to_int( $definition['priority'] ?? 0 );
+		$state['_max_attempts'] = max( 1, $this->to_int( $definition['max_attempts'] ?? 3 ) );
 
 		$cancel_handler = $this->handler_definition( $definition['cancel_handler'] ?? null );
 		if ( null !== $cancel_handler ) {
@@ -3857,13 +4068,13 @@ class Workflow {
 	/**
 	 * Dispatch a workflow from a serialised definition bundle.
 	 *
-	 * @param array    $definition          Workflow definition bundle.
-	 * @param array    $initial_state       Initial public state.
-	 * @param int|null $parent_workflow_id  Parent workflow ID when dispatching a run-workflow.
-	 * @param int|null $parent_step_index   Parent step index when dispatching a run-workflow.
-	 * @param int|null $started_by_workflow Workflow ID that started this workflow, if any.
-	 * @param int|null $started_by_step     Step index that started this workflow, if any.
-	 * @param array    $dispatch_options    Per-dispatch options.
+	 * @param array<string, mixed> $definition          Workflow definition bundle.
+	 * @param array<string, mixed> $initial_state       Initial public state.
+	 * @param int|null             $parent_workflow_id  Parent workflow ID when dispatching a run-workflow.
+	 * @param int|null             $parent_step_index   Parent step index when dispatching a run-workflow.
+	 * @param int|null             $started_by_workflow Workflow ID that started this workflow, if any.
+	 * @param int|null             $started_by_step     Step index that started this workflow, if any.
+	 * @param array<string, mixed> $dispatch_options    Per-dispatch options.
 	 * @return int
 	 * @throws \PDOException If the idempotency key insert races with another dispatch.
 	 * @throws \Throwable If the database transaction fails.
@@ -3883,10 +4094,10 @@ class Workflow {
 		$state_bundle    = $this->materialize_defined_workflow_state( $definition, $initial_state, $started_by_workflow, $started_by_step, $dispatch_options );
 		$state           = $state_bundle['state'];
 		$deadline_at     = $state_bundle['deadline_at'];
-		$steps           = $state['_steps'] ?? array();
-		$queue_name      = $state['_queue'] ?? 'default';
-		$priority        = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
-		$max_attempts    = $state['_max_attempts'] ?? 3;
+		$steps           = $this->as_steps( $state['_steps'] ?? array() );
+		$queue_name      = $this->state_queue( $state );
+		$priority        = $this->state_priority( $state );
+		$max_attempts    = $this->state_max_attempts( $state );
 		$idempotency_key = $this->idempotency_key_from_state( $state );
 		$workflow_name   = is_string( $definition['name'] ?? null ) && '' !== trim( $definition['name'] )
 			? trim( $definition['name'] )
@@ -3980,9 +4191,9 @@ class Workflow {
 	/**
 	 * Dispatch a workflow from a runtime definition bundle.
 	 *
-	 * @param array $definition       Workflow definition bundle.
-	 * @param array $initial_state    Initial public state.
-	 * @param array $dispatch_options Per-dispatch options.
+	 * @param array<string, mixed> $definition       Workflow definition bundle.
+	 * @param array<string, mixed> $initial_state    Initial public state.
+	 * @param array<string, mixed> $dispatch_options Per-dispatch options.
 	 * @return int
 	 * @throws \RuntimeException If the definition has no steps or the workflow dispatch fails.
 	 */
@@ -3997,14 +4208,14 @@ class Workflow {
 	/**
 	 * Dispatch a run-workflow linked to a parent workflow.
 	 *
-	 * @param int    $parent_workflow_id The parent workflow ID.
-	 * @param int    $parent_step_index  The step index in the parent.
-	 * @param string $name               Run-workflow name.
-	 * @param array  $steps              Step definitions array (from build_steps()).
-	 * @param array  $initial_state      Initial state for the run-workflow.
-	 * @param string $queue_name         Queue name.
-	 * @param int    $priority_value     Priority value.
-	 * @param int    $max_attempts       Max attempts.
+	 * @param int                                     $parent_workflow_id The parent workflow ID.
+	 * @param int                                     $parent_step_index  The step index in the parent.
+	 * @param string                                  $name               Run-workflow name.
+	 * @param array<int, array<string, mixed>|string> $steps              Step definitions array (from build_steps()).
+	 * @param array<string, mixed>                    $initial_state      Initial state for the run-workflow.
+	 * @param string                                  $queue_name         Queue name.
+	 * @param int                                     $priority_value     Priority value.
+	 * @param int                                     $max_attempts       Max attempts.
 	 * @return int The run-workflow ID.
 	 * @throws \Throwable If the database operation fails.
 	 */
@@ -4037,26 +4248,26 @@ class Workflow {
 	 *
 	 * Called by the Worker when it encounters a __queuety_run_workflow handler.
 	 *
-	 * @param int   $workflow_id    The parent workflow ID.
-	 * @param int   $job_id         The placeholder job ID.
-	 * @param int   $step_index     The step index.
-	 * @param array $workflow_state The parent workflow's current state.
+	 * @param int                  $workflow_id    The parent workflow ID.
+	 * @param int                  $job_id         The placeholder job ID.
+	 * @param int                  $step_index     The step index.
+	 * @param array<string, mixed> $workflow_state The parent workflow's current state.
 	 * @throws \RuntimeException If the step definition is not a run_workflow.
 	 */
 	public function handle_run_workflow_step( int $workflow_id, int $job_id, int $step_index, array $workflow_state ): void {
 		$jb_tbl = $this->conn->table( Config::table_jobs() );
-		$steps  = $workflow_state['_steps'] ?? array();
+		$steps  = $this->as_steps( $workflow_state['_steps'] ?? array() );
 
 		$step_def = $steps[ $step_index ] ?? null;
 		if ( ! $step_def || ! is_array( $step_def ) || 'run_workflow' !== ( $step_def['type'] ?? '' ) ) {
 			throw new \RuntimeException( "Step {$step_index} is not a run_workflow definition." );
 		}
 
-		$workflow_steps    = $step_def['workflow_steps'] ?? array();
-		$workflow_name     = $step_def['workflow_name'] ?? 'run_workflow';
-		$workflow_queue    = $step_def['workflow_queue'] ?? ( $workflow_state['_queue'] ?? 'default' );
-		$workflow_priority = $step_def['workflow_priority'] ?? ( $workflow_state['_priority'] ?? 0 );
-		$sub_max           = $step_def['workflow_max_attempts'] ?? ( $workflow_state['_max_attempts'] ?? 3 );
+		$workflow_steps    = $this->as_steps( $step_def['workflow_steps'] ?? array() );
+		$workflow_name     = $this->to_string( $step_def['workflow_name'] ?? 'run_workflow' );
+		$workflow_queue    = $this->to_string( $step_def['workflow_queue'] ?? ( $workflow_state['_queue'] ?? 'default' ) );
+		$workflow_priority = $this->to_int( $step_def['workflow_priority'] ?? ( $workflow_state['_priority'] ?? 0 ) );
+		$sub_max           = $this->to_int( $step_def['workflow_max_attempts'] ?? ( $workflow_state['_max_attempts'] ?? 3 ) );
 
 		$initial_state = array();
 		foreach ( $workflow_state as $key => $value ) {
@@ -4071,9 +4282,9 @@ class Workflow {
 			name: $workflow_name,
 			steps: $workflow_steps,
 			initial_state: $initial_state,
-			queue_name: $workflow_queue,
+			queue_name: '' === $workflow_queue ? 'default' : $workflow_queue,
 			priority_value: $workflow_priority,
-			max_attempts: $sub_max,
+			max_attempts: $sub_max > 0 ? $sub_max : 3,
 		);
 
 		$stmt = $this->conn->pdo()->prepare(
@@ -4092,40 +4303,43 @@ class Workflow {
 	/**
 	 * Start independent top-level workflows from runtime-discovered items.
 	 *
-	 * @param int   $workflow_id    Parent workflow ID.
-	 * @param int   $step_index     Step index.
-	 * @param array $workflow_state Parent workflow state.
-	 * @return array Step output containing the started workflow IDs.
+	 * @param int                  $workflow_id    Parent workflow ID.
+	 * @param int                  $step_index     Step index.
+	 * @param array<string, mixed> $workflow_state Parent workflow state.
+	 * @return array<string, mixed> Step output containing the started workflow IDs.
 	 * @throws \RuntimeException If the step definition or source payloads are invalid.
 	 * @throws WorkflowConstraintViolationException If the step would exceed the configured start budget.
 	 */
 	public function handle_start_workflows_step( int $workflow_id, int $step_index, array $workflow_state ): array {
-		$steps    = $workflow_state['_steps'] ?? array();
+		$steps    = $this->as_steps( $workflow_state['_steps'] ?? array() );
 		$step_def = $steps[ $step_index ] ?? null;
 
 		if ( ! is_array( $step_def ) || 'start_workflows' !== ( $step_def['type'] ?? '' ) ) {
 			throw new \RuntimeException( "Step {$step_index} is not a start_workflows definition." );
 		}
 
-		$items_key = trim( (string) ( $step_def['items_key'] ?? '' ) );
-		$items     = $workflow_state[ $items_key ] ?? array();
+		$items_key = trim( $this->to_string( $step_def['items_key'] ?? '' ) );
+		$items     = '' === $items_key ? array() : ( $workflow_state[ $items_key ] ?? array() );
+		$step_name = $this->to_string( $step_def['name'] ?? '' );
 		if ( ! is_array( $items ) ) {
-			throw new \RuntimeException( "Start step '{$step_def['name']}' requires state['{$items_key}'] to be an array." );
+			throw new \RuntimeException( "Start step '{$step_name}' requires state['{$items_key}'] to be an array." );
 		}
 
-		$definition = $step_def['workflow_definition'] ?? null;
-		if ( ! is_array( $definition ) || ! is_array( $definition['steps'] ?? null ) ) {
-			throw new \RuntimeException( "Start step '{$step_def['name']}' is missing a valid workflow definition." );
+		$definition_raw = $step_def['workflow_definition'] ?? null;
+		if ( ! is_array( $definition_raw ) || ! is_array( $definition_raw['steps'] ?? null ) ) {
+			throw new \RuntimeException( "Start step '{$step_name}' is missing a valid workflow definition." );
 		}
+		$definition = $this->as_array( $definition_raw );
 
-		$result_key     = trim( (string) ( $step_def['result_key'] ?? 'started_workflow_ids' ) );
-		$payload_key    = trim( (string) ( $step_def['payload_key'] ?? 'item' ) );
-		$group_key      = trim( (string) ( $step_def['group_key'] ?? '' ) );
+		$result_key     = trim( $this->to_string( $step_def['result_key'] ?? 'started_workflow_ids' ) );
+		$payload_key    = trim( $this->to_string( $step_def['payload_key'] ?? 'item' ) );
+		$group_key      = trim( $this->to_string( $step_def['group_key'] ?? '' ) );
 		$inherit_state  = ! empty( $step_def['inherit_state'] );
 		$base_state     = $inherit_state ? $this->public_state( $workflow_state ) : array();
 		$start_count    = count( $items );
 		$budget_limits  = $this->workflow_budget_limits( $workflow_state );
-		$started_so_far = (int) ( $workflow_state['_workflow_counters']['started_workflows'] ?? 0 );
+		$counters       = $this->as_array( $workflow_state['_workflow_counters'] ?? array() );
+		$started_so_far = $this->to_int( $counters['started_workflows'] ?? 0 );
 
 		unset( $base_state[ $items_key ], $base_state[ $result_key ] );
 
@@ -4136,7 +4350,7 @@ class Workflow {
 			throw new WorkflowConstraintViolationException(
 				sprintf(
 					"Start step '%s' would exceed max_started_workflows budget of %d.",
-					$step_def['name'] ?? (string) $step_index,
+					'' === $step_name ? (string) $step_index : $step_name,
 					$budget_limits['max_started_workflows']
 				)
 			);
@@ -4206,7 +4420,7 @@ class Workflow {
 		try {
 			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$stmt->execute( array( 'id' => $workflow_id ) );
-			$wf_row = $stmt->fetch();
+			$wf_row = $this->as_row( $stmt->fetch() );
 
 			if ( ! $wf_row ) {
 				$pdo->rollBack();
@@ -4222,7 +4436,7 @@ class Workflow {
 				);
 			}
 
-			$state = json_decode( $wf_row['state'], true ) ?: array();
+			$state = $this->decode_state_column( $wf_row['state'] ?? null );
 
 			$upd = $pdo->prepare(
 				"UPDATE {$wf_tbl}
@@ -4298,7 +4512,7 @@ class Workflow {
 		try {
 			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$stmt->execute( array( 'id' => $workflow_id ) );
-			$wf_row = $stmt->fetch();
+			$wf_row = $this->as_row( $stmt->fetch() );
 
 			if ( ! $wf_row ) {
 				$pdo->rollBack();
@@ -4336,33 +4550,46 @@ class Workflow {
 	/**
 	 * Get the current status of a workflow.
 	 *
-	 * @param array      $row Workflow row.
-	 * @param array|null $artifact_meta Preloaded artifact summary, if available.
-	 * @param bool       $include_wait_details Whether to resolve detailed wait inspection data.
+	 * @param array<string, mixed>      $row                  Workflow row.
+	 * @param array<string, mixed>|null $artifact_meta        Preloaded artifact summary, if available.
+	 * @param bool                      $include_wait_details Whether to resolve detailed wait inspection data.
 	 * @return WorkflowState
 	 */
 	private function build_workflow_state_from_row( array $row, ?array $artifact_meta = null, bool $include_wait_details = true ): WorkflowState {
-		$state         = json_decode( $row['state'], true ) ?: array();
-		$current_step  = (int) $row['current_step'];
+		$state         = $this->decode_state_column( $row['state'] ?? null );
+		$current_step  = $this->to_int( $row['current_step'] ?? 0 );
 		$wait          = $this->wait_context_from_state( $state );
 		$public_state  = $this->public_state( $state );
 		$waiting_for   = $wait['waiting_for'] ?? ( $wait['signal_names'] ?? null );
 		$wait_mode     = isset( $wait['wait_mode'] ) && is_string( $wait['wait_mode'] ) ? $wait['wait_mode'] : null;
 		$wait_details  = $include_wait_details
-			? $this->wait_details_from_state( (int) $row['id'], $state, $current_step, $wait )
+			? $this->wait_details_from_state( $this->to_int( $row['id'] ?? 0 ), $state, $current_step, $wait )
 			: null;
-		$artifact_meta = $artifact_meta ?? ( null !== $this->artifacts ? $this->artifacts->summary( (int) $row['id'] ) : null );
+		$artifact_meta = $artifact_meta ?? ( null !== $this->artifacts ? $this->artifacts->summary( $this->to_int( $row['id'] ?? 0 ) ) : null );
+
+		$wait_type      = $wait['type'] ?? null;
+		$artifact_count = $artifact_meta['count'] ?? null;
+		$artifact_keys  = $artifact_meta['keys'] ?? null;
+		$artifact_keys_list = null;
+		if ( is_array( $artifact_keys ) ) {
+			$artifact_keys_list = array();
+			foreach ( $artifact_keys as $artifact_key ) {
+				if ( is_string( $artifact_key ) ) {
+					$artifact_keys_list[] = $artifact_key;
+				}
+			}
+		}
 
 		return new WorkflowState(
-			workflow_id: (int) $row['id'],
-			name: $row['name'],
-			status: WorkflowStatus::from( $row['status'] ),
+			workflow_id: $this->to_int( $row['id'] ?? 0 ),
+			name: $this->to_string( $row['name'] ?? '' ),
+			status: WorkflowStatus::from( $this->to_string( $row['status'] ?? '' ) ),
 			current_step: $current_step,
-			total_steps: (int) $row['total_steps'],
+			total_steps: $this->to_int( $row['total_steps'] ?? 0 ),
 			state: $public_state,
-			parent_workflow_id: $row['parent_workflow_id'] ? (int) $row['parent_workflow_id'] : null,
-			parent_step_index: $row['parent_step_index'] !== null ? (int) $row['parent_step_index'] : null,
-			wait_type: $wait['type'] ?? null,
+			parent_workflow_id: $row['parent_workflow_id'] ? $this->to_int( $row['parent_workflow_id'] ?? 0 ) : null,
+			parent_step_index: $row['parent_step_index'] !== null ? $this->to_int( $row['parent_step_index'] ?? 0 ) : null,
+			wait_type: is_string( $wait_type ) ? $wait_type : null,
 			waiting_for: is_array( $waiting_for ) ? $waiting_for : null,
 			definition_version: $this->definition_version_from_state( $state ),
 			definition_hash: $this->definition_hash_from_state( $state ),
@@ -4371,8 +4598,8 @@ class Workflow {
 			current_step_name: $this->current_step_name_from_state( $state, $current_step ),
 			wait_mode: $wait_mode,
 			wait_details: $wait_details,
-			artifact_count: $artifact_meta['count'] ?? null,
-			artifact_keys: $artifact_meta['keys'] ?? null,
+			artifact_count: is_int( $artifact_count ) ? $artifact_count : null,
+			artifact_keys: $artifact_keys_list,
 		);
 	}
 
@@ -4399,7 +4626,7 @@ class Workflow {
 			WHERE id = :id"
 		);
 		$stmt->execute( array( 'id' => $workflow_id ) );
-		$row = $stmt->fetch();
+		$row = $this->as_row( $stmt->fetch() );
 
 		if ( ! $row ) {
 			return null;
@@ -4427,7 +4654,7 @@ class Workflow {
 
 		$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id" );
 		$stmt->execute( array( 'id' => $workflow_id ) );
-		$row = $stmt->fetch();
+		$row = $this->as_row( $stmt->fetch() );
 
 		if ( ! $row ) {
 			throw new \RuntimeException( "Workflow {$workflow_id} not found." );
@@ -4437,12 +4664,9 @@ class Workflow {
 			throw new \RuntimeException( "Workflow {$workflow_id} is not in failed state." );
 		}
 
-		$state        = json_decode( $row['state'], true ) ?: array();
-		$current_step = (int) $row['current_step'];
-		$steps        = $state['_steps'] ?? array();
-		$queue_name   = $state['_queue'] ?? 'default';
-		$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
-		$max_attempts = $state['_max_attempts'] ?? 3;
+		$state        = $this->decode_state_column( $row['state'] ?? null );
+		$current_step = $this->to_int( $row['current_step'] ?? 0 );
+		$steps        = $this->as_steps( $state['_steps'] ?? array() );
 
 		if ( ! empty( $state['_compensated'] ) ) {
 			throw new \RuntimeException( "Workflow {$workflow_id} has already been compensated and cannot be retried." );
@@ -4462,11 +4686,13 @@ class Workflow {
 				$stmt->execute( array( 'id' => $workflow_id ) );
 
 			if ( is_array( $steps[ $current_step ] ) && 'for_each' === ( $steps[ $current_step ]['type'] ?? '' ) ) {
-				$runtime = $state['_for_each_steps'][ $current_step ] ?? null;
+				$for_each_steps = $this->as_array( $state['_for_each_steps'] ?? array() );
+				$runtime        = $for_each_steps[ $current_step ] ?? null;
 				if ( is_array( $runtime ) ) {
-					$runtime['failures']                       = array();
-					$runtime['settled']                        = false;
-					$state['_for_each_steps'][ $current_step ] = $runtime;
+					$runtime['failures']             = array();
+					$runtime['settled']              = false;
+					$for_each_steps[ $current_step ] = $runtime;
+					$state['_for_each_steps']        = $for_each_steps;
 					$this->persist_internal_state( $workflow_id, $state );
 				}
 			}
@@ -4475,9 +4701,9 @@ class Workflow {
 				$steps[ $current_step ],
 				$workflow_id,
 				$current_step,
-				$queue_name,
-				$priority,
-				$max_attempts,
+				$this->state_queue( $state ),
+				$this->state_priority( $state ),
+				$this->state_max_attempts( $state ),
 			);
 
 			$pdo->commit();
@@ -4525,24 +4751,20 @@ class Workflow {
 
 		$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id" );
 		$stmt->execute( array( 'id' => $workflow_id ) );
-		$row = $stmt->fetch();
+		$row = $this->as_row( $stmt->fetch() );
 
 		if ( ! $row || WorkflowStatus::Paused->value !== $row['status'] ) {
 			throw new \RuntimeException( "Workflow {$workflow_id} is not paused." );
 		}
 
-		$state        = json_decode( $row['state'], true ) ?: array();
-		$current_step = (int) $row['current_step'];
-		$total_steps  = (int) $row['total_steps'];
-		$steps        = $state['_steps'] ?? array();
+		$state        = $this->decode_state_column( $row['state'] ?? null );
+		$current_step = $this->to_int( $row['current_step'] ?? 0 );
+		$total_steps  = $this->to_int( $row['total_steps'] ?? 0 );
+		$steps        = $this->as_steps( $state['_steps'] ?? array() );
 
 		if ( $current_step >= $total_steps ) {
 			throw new \RuntimeException( "Workflow {$workflow_id} has no more steps." );
 		}
-
-		$queue_name   = $state['_queue'] ?? 'default';
-		$priority     = Priority::tryFrom( $state['_priority'] ?? 0 ) ?? Priority::Low;
-		$max_attempts = $state['_max_attempts'] ?? 3;
 
 		$pdo->beginTransaction();
 		try {
@@ -4555,9 +4777,9 @@ class Workflow {
 				$steps[ $current_step ],
 				$workflow_id,
 				$current_step,
-				$queue_name,
-				$priority,
-				$max_attempts,
+				$this->state_queue( $state ),
+				$this->state_priority( $state ),
+				$this->state_max_attempts( $state ),
 			);
 
 			$this->logger->log(
@@ -4601,8 +4823,12 @@ class Workflow {
 
 		$artifact_summaries = $this->workflow_artifact_summaries( array_column( $rows, 'id' ) );
 		$results            = array();
-		foreach ( $rows as $row ) {
-			$workflow_id = (int) $row['id'];
+		foreach ( $rows as $raw_row ) {
+			$row = $this->as_row( $raw_row );
+			if ( null === $row ) {
+				continue;
+			}
+			$workflow_id = $this->to_int( $row['id'] ?? 0 );
 			$results[]   = $this->build_workflow_state_from_row(
 				$row,
 				$artifact_summaries[ $workflow_id ] ?? null,
@@ -4626,7 +4852,7 @@ class Workflow {
 
 		return $this->artifacts->summaries(
 			array_map(
-				'intval',
+				fn( mixed $value ): int => $this->to_int( $value ),
 				$workflow_ids
 			)
 		);
@@ -4655,28 +4881,28 @@ class Workflow {
 	 * Used by the Worker to pass accumulated state to step handlers.
 	 *
 	 * @param int $workflow_id The workflow ID.
-	 * @return array|null Full state array, or null if not found.
+	 * @return array<string, mixed>|null Full state array, or null if not found.
 	 */
 	public function get_state( int $workflow_id ): ?array {
 		if ( null !== $this->cache ) {
 			$cache_key = "queuety:wf_state:{$workflow_id}";
 			$cached    = $this->cache->get( $cache_key );
 
-			if ( null !== $cached ) {
-				return $cached;
+			if ( is_array( $cached ) ) {
+				return $this->as_array( $cached );
 			}
 		}
 
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
 		$stmt   = $this->conn->pdo()->prepare( "SELECT state FROM {$wf_tbl} WHERE id = :id" );
 		$stmt->execute( array( 'id' => $workflow_id ) );
-		$row = $stmt->fetch();
+		$row = $this->as_row( $stmt->fetch() );
 
 		if ( ! $row ) {
 			return null;
 		}
 
-		$state = json_decode( $row['state'], true ) ?: array();
+		$state = $this->decode_state_column( $row['state'] ?? null );
 
 		if ( null !== $this->cache ) {
 			$this->cache->set( "queuety:wf_state:{$workflow_id}", $state, self::STATE_CACHE_TTL );
@@ -4717,19 +4943,19 @@ class Workflow {
 		try {
 			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$stmt->execute( array( 'id' => $workflow_id ) );
-			$wf_row = $stmt->fetch();
+			$wf_row = $this->as_row( $stmt->fetch() );
 
 			if ( ! $wf_row ) {
 				$pdo->rollBack();
 				throw new \RuntimeException( "Workflow {$workflow_id} not found." );
 			}
 
-			$full_state = json_decode( $wf_row['state'], true ) ?: array();
+			$full_state = $this->decode_state_column( $wf_row['state'] ?? null );
 
-			$steps        = $full_state['_steps'] ?? array();
-			$queue_name   = $full_state['_queue'] ?? 'default';
-			$priority_val = $full_state['_priority'] ?? 0;
-			$max_attempts = $full_state['_max_attempts'] ?? 3;
+			$steps        = $this->as_steps( $full_state['_steps'] ?? array() );
+			$queue_name   = $this->state_queue( $full_state );
+			$priority_val = $this->to_int( $full_state['_priority'] ?? 0 );
+			$max_attempts = $this->state_max_attempts( $full_state );
 
 			// Event snapshots only contain public state, so rewind has to restore runtime metadata from the live row.
 			$new_state                  = $snapshot;
@@ -4786,7 +5012,7 @@ class Workflow {
 				LogEvent::WorkflowRewound,
 				array(
 					'workflow_id' => $workflow_id,
-					'handler'     => $wf_row['name'],
+					'handler'     => $this->to_string( $wf_row['name'] ?? '' ),
 					'queue'       => $queue_name,
 					'context'     => array( 'rewound_to_step' => $to_step ),
 				)
@@ -4822,21 +5048,21 @@ class Workflow {
 		try {
 			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$stmt->execute( array( 'id' => $workflow_id ) );
-			$wf_row = $stmt->fetch();
+			$wf_row = $this->as_row( $stmt->fetch() );
 
 			if ( ! $wf_row ) {
 				$pdo->rollBack();
 				throw new \RuntimeException( "Workflow {$workflow_id} not found." );
 			}
 
-			$state        = json_decode( $wf_row['state'], true ) ?: array();
-			$current_step = (int) $wf_row['current_step'];
-			$total_steps  = (int) $wf_row['total_steps'];
-			$steps        = $state['_steps'] ?? array();
-			$queue_name   = $state['_queue'] ?? 'default';
-			$priority_val = $state['_priority'] ?? 0;
-			$max_attempts = $state['_max_attempts'] ?? 3;
-			$fork_name    = $wf_row['name'] . '_fork_' . time();
+			$state        = $this->decode_state_column( $wf_row['state'] ?? null );
+			$current_step = $this->to_int( $wf_row['current_step'] ?? 0 );
+			$total_steps  = $this->to_int( $wf_row['total_steps'] ?? 0 );
+			$steps        = $this->as_steps( $state['_steps'] ?? array() );
+			$queue_name   = $this->state_queue( $state );
+			$max_attempts = $this->state_max_attempts( $state );
+			$wf_name      = $this->to_string( $wf_row['name'] ?? '' );
+			$fork_name    = $wf_name . '_fork_' . time();
 
 			$ins = $pdo->prepare(
 				"INSERT INTO {$wf_tbl}
@@ -4854,14 +5080,12 @@ class Workflow {
 			$forked_id = (int) $pdo->lastInsertId();
 
 			if ( isset( $steps[ $current_step ] ) ) {
-				$priority = Priority::tryFrom( $priority_val ) ?? Priority::Low;
-
 				$this->enqueue_step_def(
 					$steps[ $current_step ],
 					$forked_id,
 					$current_step,
 					$queue_name,
-					$priority,
+					$this->state_priority( $state ),
 					$max_attempts,
 				);
 			}
@@ -4870,7 +5094,7 @@ class Workflow {
 				LogEvent::WorkflowForked,
 				array(
 					'workflow_id' => $workflow_id,
-					'handler'     => $wf_row['name'],
+					'handler'     => $wf_name,
 					'queue'       => $queue_name,
 					'context'     => array( 'forked_workflow_id' => $forked_id ),
 				)
@@ -4920,8 +5144,12 @@ class Workflow {
 		$stmt->execute();
 		$rows = $stmt->fetchAll();
 
-		foreach ( $rows as $wf_row ) {
-			$state         = json_decode( $wf_row['state'], true ) ?: array();
+		foreach ( $rows as $raw_wf_row ) {
+			$wf_row = $this->as_row( $raw_wf_row );
+			if ( null === $wf_row ) {
+				continue;
+			}
+			$state         = $this->decode_state_column( $wf_row['state'] ?? null );
 			$handler_def   = $this->handler_definition( $state['_on_deadline'] ?? null );
 
 			if ( null !== $handler_def && class_exists( $handler_def['class'] ) ) {
@@ -4939,12 +5167,12 @@ class Workflow {
 				}
 			}
 
-			$workflow_id = (int) $wf_row['id'];
+			$workflow_id = $this->to_int( $wf_row['id'] ?? 0 );
 			$pdo->beginTransaction();
 			try {
 				$lock_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 				$lock_stmt->execute( array( 'id' => $workflow_id ) );
-				$locked_row = $lock_stmt->fetch();
+				$locked_row = $this->as_row( $lock_stmt->fetch() );
 
 				if ( ! $locked_row || WorkflowStatus::Running->value !== $locked_row['status'] ) {
 					$pdo->rollBack();
@@ -5053,17 +5281,17 @@ class Workflow {
 	/**
 	 * Mark a locked workflow row as failed and bury active jobs.
 	 *
-	 * @param \PDO       $pdo          Active PDO connection.
-	 * @param array      $wf_row       Locked workflow row.
-	 * @param int        $workflow_id  Workflow ID.
-	 * @param int        $failed_job_id Failed job ID.
-	 * @param string     $error_message Error description.
-	 * @param array|null $state_override Optional in-memory state to persist with the failure.
-	 * @return array Decoded workflow state.
+	 * @param \PDO                      $pdo            Active PDO connection.
+	 * @param array<string, mixed>      $wf_row         Locked workflow row.
+	 * @param int                       $workflow_id    Workflow ID.
+	 * @param int                       $failed_job_id  Failed job ID.
+	 * @param string                    $error_message  Error description.
+	 * @param array<string, mixed>|null $state_override Optional in-memory state to persist with the failure.
+	 * @return array<string, mixed> Decoded workflow state.
 	 */
 	private function mark_workflow_failed_locked( \PDO $pdo, array $wf_row, int $workflow_id, int $failed_job_id, string $error_message, ?array $state_override = null ): array {
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
-		$state  = $state_override ?? ( json_decode( $wf_row['state'], true ) ?: array() );
+		$state  = $state_override ?? ( $this->decode_state_column( $wf_row['state'] ?? null ) );
 
 		$stmt = $pdo->prepare(
 			"UPDATE {$wf_tbl}

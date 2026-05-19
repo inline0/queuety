@@ -56,7 +56,7 @@ class ActionWorkflowBridge {
 		add_action(
 			$hook,
 			static function ( mixed ...$args ) use ( $hook, $workflow, $map, $when, $idempotency_key ): void {
-				self::dispatch_action( $hook, $workflow, $args, $map, $when, $idempotency_key );
+				self::dispatch_action( $hook, $workflow, array_values( $args ), $map, $when, $idempotency_key );
 			},
 			$priority,
 			$accepted_args
@@ -158,20 +158,7 @@ class ActionWorkflowBridge {
 	 * @return int
 	 */
 	private static function callable_arity( callable $callable ): int {
-		if ( $callable instanceof \Closure ) {
-			$reflection = new \ReflectionFunction( $callable );
-		} elseif ( is_string( $callable ) ) {
-			if ( str_contains( $callable, '::' ) ) {
-				list( $class, $method ) = explode( '::', $callable, 2 );
-				$reflection             = new \ReflectionMethod( $class, $method );
-			} else {
-				$reflection = new \ReflectionFunction( $callable );
-			}
-		} elseif ( is_array( $callable ) ) {
-			$reflection = new \ReflectionMethod( $callable[0], $callable[1] );
-		} else {
-			$reflection = new \ReflectionMethod( $callable, '__invoke' );
-		}
+		$reflection = new \ReflectionFunction( \Closure::fromCallable( $callable ) );
 
 		if ( $reflection->isVariadic() ) {
 			return 99;
@@ -183,8 +170,8 @@ class ActionWorkflowBridge {
 	/**
 	 * Normalize a mapped payload to a durable state-safe array.
 	 *
-	 * @param array<mixed> $payload Action payload.
-	 * @return array<mixed>
+	 * @param array<mixed, mixed> $payload Action payload.
+	 * @return array<string, mixed>
 	 * @throws \InvalidArgumentException If the payload contains reserved keys or unsupported values.
 	 */
 	private static function normalize_payload( array $payload ): array {
@@ -195,7 +182,7 @@ class ActionWorkflowBridge {
 				throw new \InvalidArgumentException( 'Action workflow payload keys cannot start with "_".' );
 			}
 
-			$normalized[ $key ] = self::normalize_payload_value( $value );
+			$normalized[ (string) $key ] = self::normalize_payload_value( $value );
 		}
 
 		return $normalized;

@@ -24,9 +24,9 @@ class BatchManager {
 	/**
 	 * Create a new batch row.
 	 *
-	 * @param int         $total_jobs Total number of jobs in the batch.
-	 * @param string|null $name       Optional batch name.
-	 * @param array       $options    Batch options (callback classes, etc.).
+	 * @param int                  $total_jobs Total number of jobs in the batch.
+	 * @param string|null          $name       Optional batch name.
+	 * @param array<string, mixed> $options    Batch options (callback classes, etc.).
 	 * @return int The new batch ID.
 	 */
 	public function create( int $total_jobs, ?string $name = null, array $options = array() ): int {
@@ -65,7 +65,7 @@ class BatchManager {
 		$stmt->execute( array( 'id' => $id ) );
 		$row = $stmt->fetch();
 
-		return $row ? Batch::from_row( $row ) : null;
+		return is_array( $row ) ? Batch::from_row( self::normalize_row( $row ) ) : null;
 	}
 
 	/**
@@ -90,14 +90,20 @@ class BatchManager {
 			$stmt->execute( array( 'id' => $batch_id ) );
 			$row = $stmt->fetch();
 
-			if ( ! $row || ! empty( $row['finished_at'] ) ) {
+			if ( ! is_array( $row ) ) {
+				$pdo->commit();
+				return;
+			}
+			$row = self::normalize_row( $row );
+
+			if ( ! empty( $row['finished_at'] ) ) {
 				$pdo->commit();
 				return;
 			}
 
-			$pending_jobs    = max( (int) $row['pending_jobs'] - 1, 0 );
-			$failed_jobs     = (int) $row['failed_jobs'];
-			$options         = json_decode( $row['options'], true ) ?: array();
+			$pending_jobs    = max( self::row_int( $row, 'pending_jobs' ) - 1, 0 );
+			$failed_jobs     = self::row_int( $row, 'failed_jobs' );
+			$options         = self::decode_json_column( $row, 'options' );
 			$allow_failures  = ! empty( $options['allow_failures'] );
 			$finished_at_sql = 0 === $pending_jobs ? ', finished_at = NOW()' : '';
 
@@ -159,15 +165,21 @@ class BatchManager {
 			$stmt->execute( array( 'id' => $batch_id ) );
 			$row = $stmt->fetch();
 
-			if ( ! $row || ! empty( $row['finished_at'] ) ) {
+			if ( ! is_array( $row ) ) {
+				$pdo->commit();
+				return;
+			}
+			$row = self::normalize_row( $row );
+
+			if ( ! empty( $row['finished_at'] ) ) {
 				$pdo->commit();
 				return;
 			}
 
-			$pending_jobs   = max( (int) $row['pending_jobs'] - 1, 0 );
-			$failed_jobs    = (int) $row['failed_jobs'];
-			$failed_job_ids = json_decode( $row['failed_job_ids'], true ) ?: array();
-			$options        = json_decode( $row['options'], true ) ?: array();
+			$pending_jobs   = max( self::row_int( $row, 'pending_jobs' ) - 1, 0 );
+			$failed_jobs    = self::row_int( $row, 'failed_jobs' );
+			$failed_job_ids = self::decode_json_column( $row, 'failed_job_ids' );
+			$options        = self::decode_json_column( $row, 'options' );
 			$allow_failures = ! empty( $options['allow_failures'] );
 
 			if ( in_array( $job_id, $failed_job_ids, true ) ) {
@@ -278,9 +290,52 @@ class BatchManager {
 
 		try {
 			$handler = new $handler_class();
-			$handler->handle( $batch );
+			if ( method_exists( $handler, 'handle' ) ) {
+				$handler->handle( $batch );
+			}
 		} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Callback failures are non-fatal.
 			unset( $e );
 		}
+	}
+
+	/**
+	 * Read an int column from a PDO row, coercing scalar values.
+	 *
+	 * @param array<string, mixed> $row Row data.
+	 * @param string               $key Column key.
+	 */
+	private static function row_int( array $row, string $key ): int {
+		$value = $row[ $key ] ?? 0;
+		return is_scalar( $value ) ? (int) $value : 0;
+	}
+
+	/**
+	 * Decode a JSON-encoded column into an array.
+	 *
+	 * @param array<string, mixed> $row Row data.
+	 * @param string               $key Column key.
+	 * @return array<int|string, mixed>
+	 */
+	private static function decode_json_column( array $row, string $key ): array {
+		$raw = $row[ $key ] ?? '';
+		if ( ! is_string( $raw ) || '' === $raw ) {
+			return array();
+		}
+		$decoded = json_decode( $raw, true );
+		return is_array( $decoded ) ? $decoded : array();
+	}
+
+	/**
+	 * Normalize a PDO row into an array keyed by string column names.
+	 *
+	 * @param array<mixed, mixed> $row Row data.
+	 * @return array<string, mixed>
+	 */
+	private static function normalize_row( array $row ): array {
+		$normalized = array();
+		foreach ( $row as $key => $value ) {
+			$normalized[ (string) $key ] = $value;
+		}
+		return $normalized;
 	}
 }

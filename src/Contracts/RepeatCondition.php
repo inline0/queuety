@@ -15,7 +15,7 @@ interface RepeatCondition {
 	/**
 	 * Decide whether the current public workflow state satisfies the condition.
 	 *
-	 * @param array $state Public workflow state.
+	 * @param array<string, mixed> $state Public workflow state.
 	 * @return bool
 	 */
 	public function matches( array $state ): bool;

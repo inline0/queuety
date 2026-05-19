@@ -126,10 +126,10 @@ class PendingJob {
 	/**
 	 * Constructor.
 	 *
-	 * @param string           $handler      Handler name or class.
-	 * @param array            $payload      Job payload.
-	 * @param Queue            $queue_ops    Queue operations instance.
-	 * @param JobContract|null $job_instance Optional original Job instance for middleware.
+	 * @param string               $handler      Handler name or class.
+	 * @param array<string, mixed> $payload      Job payload.
+	 * @param Queue                $queue_ops    Queue operations instance.
+	 * @param JobContract|null     $job_instance Optional original Job instance for middleware.
 	 */
 	public function __construct(
 		private readonly string $handler,
@@ -300,10 +300,14 @@ class PendingJob {
 	 * Get the dispatched job ID. Forces dispatch if not yet done.
 	 *
 	 * @return int
+	 * @throws \RuntimeException If dispatch did not produce a job ID.
 	 */
 	public function id(): int {
 		if ( ! $this->dispatched ) {
 			$this->do_dispatch();
+		}
+		if ( null === $this->job_id ) {
+			throw new \RuntimeException( 'Job dispatch did not produce an ID.' );
 		}
 		return $this->job_id;
 	}

@@ -43,13 +43,13 @@ class StateMachineEventLog {
 	 * This method is kept as a compact lifecycle-event adapter. New code should
 	 * prefer record_event() so it can provide the full trace shape.
 	 *
-	 * @param int         $machine_id      Machine ID.
-	 * @param string      $state_name      State name at the time of the event.
-	 * @param string      $event           Event type.
-	 * @param string|null $event_name      Incoming or emitted event name.
-	 * @param array|null  $state_snapshot  Public state snapshot.
-	 * @param array|null  $payload         Event output or transition metadata.
-	 * @param string|null $error_message   Failure message, if any.
+	 * @param int                       $machine_id     Machine ID.
+	 * @param string                    $state_name     State name at the time of the event.
+	 * @param string                    $event          Event type.
+	 * @param string|null               $event_name     Incoming or emitted event name.
+	 * @param array<string, mixed>|null $state_snapshot Public state snapshot.
+	 * @param array<string, mixed>|null $payload        Event output or transition metadata.
+	 * @param string|null               $error_message  Failure message, if any.
 	 */
 	public function record(
 		int $machine_id,
@@ -117,7 +117,18 @@ class StateMachineEventLog {
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( array( 'machine_id' => $machine_id ) );
 
-		return array_map( array( $this, 'decode_event_row' ), $stmt->fetchAll() );
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $raw_row ) {
+			if ( ! is_array( $raw_row ) ) {
+				continue;
+			}
+			$assoc = array();
+			foreach ( $raw_row as $key => $value ) {
+				$assoc[ (string) $key ] = $value;
+			}
+			$rows[] = $this->decode_event_row( $assoc );
+		}
+		return $rows;
 	}
 
 	/**
@@ -147,7 +158,7 @@ class StateMachineEventLog {
 	 *
 	 * @param int $machine_id Machine ID.
 	 * @param int $event_id   Trace event ID.
-	 * @return array|null
+	 * @return array<string, mixed>|null
 	 */
 	public function get_state_at_event( int $machine_id, int $event_id ): ?array {
 		$table = $this->conn->table( Config::table_state_machine_events() );
@@ -168,11 +179,23 @@ class StateMachineEventLog {
 		);
 
 		$row = $stmt->fetch();
-		if ( ! $row || null === $row['state_after'] ) {
+		if ( ! is_array( $row ) ) {
+			return null;
+		}
+		$state_after = $row['state_after'] ?? null;
+		if ( null === $state_after || ! is_string( $state_after ) ) {
 			return null;
 		}
 
-		return json_decode( (string) $row['state_after'], true );
+		$decoded = json_decode( $state_after, true );
+		if ( ! is_array( $decoded ) ) {
+			return null;
+		}
+		$normalized = array();
+		foreach ( $decoded as $k => $v ) {
+			$normalized[ (string) $k ] = $v;
+		}
+		return $normalized;
 	}
 
 	/**
@@ -239,9 +262,13 @@ class StateMachineEventLog {
 	 */
 	private function decode_event_row( array $row ): array {
 		foreach ( self::JSON_COLUMNS as $column ) {
-			$row[ $column ] = null === $row[ $column ]
-				? null
-				: json_decode( (string) $row[ $column ], true );
+			$value = $row[ $column ] ?? null;
+			if ( null === $value ) {
+				$row[ $column ] = null;
+				continue;
+			}
+			$json           = is_string( $value ) ? $value : '';
+			$row[ $column ] = json_decode( $json, true );
 		}
 
 		$error                = is_array( $row['error'] ) ? $row['error'] : array();
@@ -263,15 +290,38 @@ class StateMachineEventLog {
 		$stmt->execute( array( 'id' => $machine_id ) );
 		$row = $stmt->fetch();
 
-		if ( ! $row ) {
+		if ( ! is_array( $row ) ) {
 			throw new \RuntimeException( "State machine {$machine_id} not found." );
 		}
 
-		$row['id']         = (int) $row['id'];
-		$row['state']      = json_decode( (string) $row['state'], true ) ?: array();
-		$row['definition'] = json_decode( (string) $row['definition'], true ) ?: array();
+		$normalized = array();
+		foreach ( $row as $key => $value ) {
+			$normalized[ (string) $key ] = $value;
+		}
 
-		return $row;
+		$id_value         = $normalized['id'] ?? 0;
+		$state_value      = $normalized['state'] ?? null;
+		$definition_value = $normalized['definition'] ?? null;
+
+		$normalized['id']         = is_scalar( $id_value ) ? (int) $id_value : 0;
+		$normalized['state']      = self::decode_json_array( is_string( $state_value ) ? $state_value : '' );
+		$normalized['definition'] = self::decode_json_array( is_string( $definition_value ) ? $definition_value : '' );
+
+		return $normalized;
+	}
+
+	/**
+	 * Decode a JSON string into an array (empty on failure).
+	 *
+	 * @param string $json JSON string.
+	 * @return array<int|string, mixed>
+	 */
+	private static function decode_json_array( string $json ): array {
+		if ( '' === $json ) {
+			return array();
+		}
+		$decoded = json_decode( $json, true );
+		return is_array( $decoded ) ? $decoded : array();
 	}
 
 	/**
@@ -284,7 +334,8 @@ class StateMachineEventLog {
 		$states = array();
 
 		foreach ( $events as $event ) {
-			$state_name = (string) $event['state_name'];
+			$state_name_raw = $event['state_name'] ?? '';
+			$state_name     = is_scalar( $state_name_raw ) ? (string) $state_name_raw : '';
 			if ( ! isset( $states[ $state_name ] ) ) {
 				$states[ $state_name ] = array(
 					'state_name' => $state_name,
@@ -329,7 +380,10 @@ class StateMachineEventLog {
 			array_unique(
 				array_filter(
 					array_map(
-						static fn( array $event ): int => isset( $event['job_id'] ) ? (int) $event['job_id'] : 0,
+						static function ( array $event ): int {
+							$job_id = $event['job_id'] ?? null;
+							return is_scalar( $job_id ) ? (int) $job_id : 0;
+						},
 						$events
 					),
 					static fn( int $job_id ): bool => $job_id > 0
@@ -363,14 +417,22 @@ class StateMachineEventLog {
 		);
 		$stmt->execute( $params );
 
-		return array_map(
-			static function ( array $row ): array {
-				$row['payload']        = json_decode( (string) $row['payload'], true ) ?: array();
-				$row['heartbeat_data'] = null === $row['heartbeat_data'] ? null : json_decode( (string) $row['heartbeat_data'], true );
-				return $row;
-			},
-			$stmt->fetchAll()
-		);
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $raw_row ) {
+			if ( ! is_array( $raw_row ) ) {
+				continue;
+			}
+			$row = array();
+			foreach ( $raw_row as $key => $value ) {
+				$row[ (string) $key ] = $value;
+			}
+			$payload_raw           = $row['payload'] ?? null;
+			$row['payload']        = is_scalar( $payload_raw ) ? ( json_decode( (string) $payload_raw, true ) ?: array() ) : array();
+			$heartbeat_raw         = $row['heartbeat_data'] ?? null;
+			$row['heartbeat_data'] = is_scalar( $heartbeat_raw ) ? json_decode( (string) $heartbeat_raw, true ) : null;
+			$rows[]                = $row;
+		}
+		return $rows;
 	}
 
 	/**
@@ -398,13 +460,20 @@ class StateMachineEventLog {
 		);
 		$stmt->execute( $params );
 
-		return array_map(
-			static function ( array $row ): array {
-				$row['context'] = null === $row['context'] ? null : json_decode( (string) $row['context'], true );
-				return $row;
-			},
-			$stmt->fetchAll()
-		);
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $raw_row ) {
+			if ( ! is_array( $raw_row ) ) {
+				continue;
+			}
+			$row = array();
+			foreach ( $raw_row as $key => $value ) {
+				$row[ (string) $key ] = $value;
+			}
+			$context_raw    = $row['context'] ?? null;
+			$row['context'] = is_scalar( $context_raw ) ? json_decode( (string) $context_raw, true ) : null;
+			$rows[]         = $row;
+		}
+		return $rows;
 	}
 
 	/**

@@ -23,7 +23,7 @@ class JobMetadata {
 	 *     tries: int|null,
 	 *     timeout: int|null,
 	 *     max_exceptions: int|null,
-	 *     backoff: array|null,
+	 *     backoff: array<int|string, mixed>|null,
 	 *     concurrency_group: string|null,
 	 *     concurrency_limit: int|null,
 	 *     cost_units: int|null
@@ -69,7 +69,8 @@ class JobMetadata {
 		if ( $reflection->hasProperty( 'concurrency_group' ) ) {
 			$prop = $reflection->getProperty( 'concurrency_group' );
 			if ( $prop->isPublic() && $prop->hasDefaultValue() ) {
-				$value = trim( (string) $prop->getDefaultValue() );
+				$raw   = $prop->getDefaultValue();
+				$value = trim( is_scalar( $raw ) ? (string) $raw : '' );
 				if ( '' !== $value ) {
 					$result['concurrency_group'] = $value;
 				}
@@ -79,7 +80,8 @@ class JobMetadata {
 		if ( $reflection->hasProperty( 'concurrency_limit' ) ) {
 			$prop = $reflection->getProperty( 'concurrency_limit' );
 			if ( $prop->isPublic() && $prop->hasDefaultValue() ) {
-				$value = (int) $prop->getDefaultValue();
+				$raw   = $prop->getDefaultValue();
+				$value = is_scalar( $raw ) ? (int) $raw : 0;
 				if ( $value > 0 ) {
 					$result['concurrency_limit'] = $value;
 				}
@@ -89,7 +91,8 @@ class JobMetadata {
 		if ( $reflection->hasProperty( 'cost_units' ) ) {
 			$prop = $reflection->getProperty( 'cost_units' );
 			if ( $prop->isPublic() && $prop->hasDefaultValue() ) {
-				$value = (int) $prop->getDefaultValue();
+				$raw   = $prop->getDefaultValue();
+				$value = is_scalar( $raw ) ? (int) $raw : 0;
 				if ( $value > 0 ) {
 					$result['cost_units'] = $value;
 				}

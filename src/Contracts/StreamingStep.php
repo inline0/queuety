@@ -37,9 +37,9 @@ interface StreamingStep {
 	 * On retry, $existing_chunks contains previously persisted chunks.
 	 * The implementation can use this to resume (e.g., skip already-processed items).
 	 *
-	 * @param array $state            Accumulated workflow state.
-	 * @param array $existing_chunks  Chunks from previous attempts (empty on first run).
-	 * @return \Generator              Yields string chunks.
+	 * @param array<string, mixed> $state           Accumulated workflow state.
+	 * @param array<int, mixed>    $existing_chunks Chunks from previous attempts (empty on first run).
+	 * @return \Generator Yields string chunks.
 	 */
 	public function stream( array $state, array $existing_chunks = array() ): \Generator;
 
@@ -47,9 +47,9 @@ interface StreamingStep {
 	 * Called when the stream completes. Receives all chunks and returns
 	 * data to merge into workflow state.
 	 *
-	 * @param array $chunks All accumulated chunks (previous + new).
-	 * @param array $state  Accumulated workflow state.
-	 * @return array         Data to merge into workflow state.
+	 * @param array<int, mixed>    $chunks All accumulated chunks (previous + new).
+	 * @param array<string, mixed> $state  Accumulated workflow state.
+	 * @return array<string, mixed> Data to merge into workflow state.
 	 */
 	public function on_complete( array $chunks, array $state ): array;
 
@@ -58,7 +58,7 @@ interface StreamingStep {
 	 *
 	 * Supported keys: max_attempts, backoff, concurrency_group, concurrency_limit, cost_units.
 	 *
-	 * @return array Configuration array.
+	 * @return array<string, mixed> Configuration array.
 	 */
 	public function config(): array;
 }

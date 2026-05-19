@@ -29,8 +29,8 @@ interface Step {
 	/**
 	 * Execute the step.
 	 *
-	 * @param array $state Accumulated workflow state from all previous steps.
-	 * @return array Data to merge into the workflow state.
+	 * @param array<string, mixed> $state Accumulated workflow state from all previous steps.
+	 * @return array<string, mixed> Data to merge into the workflow state.
 	 */
 	public function handle( array $state ): array;
 
@@ -39,7 +39,7 @@ interface Step {
 	 *
 	 * Supported keys: max_attempts, backoff, concurrency_group, concurrency_limit, cost_units.
 	 *
-	 * @return array Configuration array.
+	 * @return array<string, mixed> Configuration array.
 	 */
 	public function config(): array;
 }

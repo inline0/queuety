@@ -67,9 +67,9 @@ class PendingSchedule {
 	/**
 	 * Constructor.
 	 *
-	 * @param string    $handler   Handler name or class.
-	 * @param array     $payload   Job payload.
-	 * @param Scheduler $scheduler Scheduler instance.
+	 * @param string               $handler   Handler name or class.
+	 * @param array<string, mixed> $payload   Job payload.
+	 * @param Scheduler            $scheduler Scheduler instance.
 	 */
 	public function __construct(
 		private readonly string $handler,
@@ -136,10 +136,14 @@ class PendingSchedule {
 	 * Get the dispatched schedule ID. Forces dispatch if not yet done.
 	 *
 	 * @return int
+	 * @throws \RuntimeException If dispatch did not produce a schedule ID.
 	 */
 	public function id(): int {
 		if ( ! $this->dispatched ) {
 			$this->do_dispatch();
+		}
+		if ( null === $this->schedule_id ) {
+			throw new \RuntimeException( 'Schedule dispatch did not produce an ID.' );
 		}
 		return $this->schedule_id;
 	}

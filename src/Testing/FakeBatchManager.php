@@ -37,9 +37,9 @@ class FakeBatchManager extends BatchManager {
 	/**
 	 * Create a fake batch.
 	 *
-	 * @param int         $total_jobs Total number of jobs.
-	 * @param string|null $name       Optional name.
-	 * @param array       $options    Batch options.
+	 * @param int                  $total_jobs Total number of jobs.
+	 * @param string|null          $name       Optional name.
+	 * @param array<string, mixed> $options    Batch options.
 	 * @return int
 	 */
 	public function create( int $total_jobs, ?string $name = null, array $options = array() ): int {

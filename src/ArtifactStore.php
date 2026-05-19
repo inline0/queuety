@@ -24,12 +24,12 @@ class ArtifactStore {
 	/**
 	 * Store or replace one artifact for a workflow.
 	 *
-	 * @param int      $workflow_id  Workflow ID.
-	 * @param string   $artifact_key Artifact key.
-	 * @param mixed    $content      Artifact content.
-	 * @param string   $kind         Artifact kind, such as json, text, or markdown.
-	 * @param int|null $step_index   Related workflow step index, if any.
-	 * @param array    $metadata     Optional metadata.
+	 * @param int                  $workflow_id  Workflow ID.
+	 * @param string               $artifact_key Artifact key.
+	 * @param mixed                $content      Artifact content.
+	 * @param string               $kind         Artifact kind, such as json, text, or markdown.
+	 * @param int|null             $step_index   Related workflow step index, if any.
+	 * @param array<string, mixed> $metadata     Optional metadata.
 	 * @throws \InvalidArgumentException If the workflow ID, key, or kind is invalid.
 	 */
 	public function put(
@@ -114,7 +114,18 @@ class ArtifactStore {
 		);
 
 		$row = $stmt->fetch();
-		return $row ? $this->map_row( $row, true ) : null;
+		if ( ! is_array( $row ) ) {
+			return null;
+		}
+
+		$typed = array();
+		foreach ( $row as $key => $value ) {
+			if ( is_string( $key ) ) {
+				$typed[ $key ] = $value;
+			}
+		}
+
+		return $this->map_row( $typed, true );
 	}
 
 	/**
@@ -133,10 +144,21 @@ class ArtifactStore {
 		);
 		$stmt->execute( array( 'workflow_id' => $workflow_id ) );
 
-		return array_map(
-			fn( array $row ): array => $this->map_row( $row, $include_content ),
-			$stmt->fetchAll()
-		);
+		$rows = array();
+		foreach ( $stmt->fetchAll() as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$typed = array();
+			foreach ( $row as $key => $value ) {
+				if ( is_string( $key ) ) {
+					$typed[ $key ] = $value;
+				}
+			}
+			$rows[] = $this->map_row( $typed, $include_content );
+		}
+
+		return $rows;
 	}
 
 	/**
@@ -214,9 +236,14 @@ class ArtifactStore {
 
 		$summaries = array();
 		foreach ( $stmt->fetchAll() as $row ) {
-			$workflow_id               = (int) $row['workflow_id'];
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$workflow_id_value         = $row['workflow_id'] ?? 0;
+			$workflow_id               = is_scalar( $workflow_id_value ) ? (int) $workflow_id_value : 0;
+			$count_value               = $row['artifact_count'] ?? 0;
 			$summaries[ $workflow_id ] = array(
-				'count' => (int) $row['artifact_count'],
+				'count' => is_scalar( $count_value ) ? (int) $count_value : 0,
 				'keys'  => $this->decode_summary_keys( $row['artifact_keys'] ?? null ),
 			);
 		}
@@ -242,26 +269,36 @@ class ArtifactStore {
 	/**
 	 * Decode one artifact row for public consumption.
 	 *
-	 * @param array $row             Raw database row.
-	 * @param bool  $include_content Whether to include decoded content.
+	 * @param array<string, mixed> $row             Raw database row.
+	 * @param bool                 $include_content Whether to include decoded content.
 	 * @return array<string,mixed>
 	 */
 	private function map_row( array $row, bool $include_content ): array {
+		$id_raw         = $row['id'] ?? 0;
+		$workflow_raw   = $row['workflow_id'] ?? 0;
+		$step_index_raw = $row['step_index'] ?? null;
+		$metadata_raw   = $row['metadata'] ?? null;
+		$kind_raw       = $row['kind'] ?? 'json';
+		$kind_str       = is_string( $kind_raw ) ? $kind_raw : 'json';
+
 		$result = array(
-			'id'          => (int) $row['id'],
-			'workflow_id' => (int) $row['workflow_id'],
-			'key'         => $row['artifact_key'],
-			'kind'        => $row['kind'],
-			'step_index'  => null !== $row['step_index'] ? (int) $row['step_index'] : null,
-			'metadata'    => null !== $row['metadata'] ? json_decode( $row['metadata'], true ) : array(),
-			'created_at'  => $row['created_at'],
-			'updated_at'  => $row['updated_at'],
+			'id'          => is_numeric( $id_raw ) ? (int) $id_raw : 0,
+			'workflow_id' => is_numeric( $workflow_raw ) ? (int) $workflow_raw : 0,
+			'key'         => $row['artifact_key'] ?? null,
+			'kind'        => $kind_str,
+			'step_index'  => is_numeric( $step_index_raw ) ? (int) $step_index_raw : null,
+			'metadata'    => is_string( $metadata_raw ) ? json_decode( $metadata_raw, true ) : array(),
+			'created_at'  => $row['created_at'] ?? null,
+			'updated_at'  => $row['updated_at'] ?? null,
 		);
 
 		if ( $include_content ) {
-			$result['content'] = 'json' === strtolower( (string) $row['kind'] )
-				? json_decode( $row['content'], true )
-				: $row['content'];
+			$content_raw = $row['content'] ?? null;
+			if ( 'json' === strtolower( $kind_str ) ) {
+				$result['content'] = is_string( $content_raw ) ? json_decode( $content_raw, true ) : null;
+			} else {
+				$result['content'] = $content_raw;
+			}
 		}
 
 		return $result;

@@ -17,12 +17,12 @@ readonly class WorkflowTemplate {
 	/**
 	 * Constructor.
 	 *
-	 * @param string   $name         Template name.
-	 * @param array    $steps        Step definitions (from WorkflowBuilder::build_steps()).
-	 * @param string   $queue        Queue name.
-	 * @param Priority $priority     Priority level.
-	 * @param int      $max_attempts Maximum retry attempts per step.
-	 * @param array    $definition   Full runtime workflow definition bundle.
+	 * @param string                           $name         Template name.
+	 * @param array<int, array<string, mixed>> $steps        Step definitions (from WorkflowBuilder::build_steps()).
+	 * @param string                           $queue        Queue name.
+	 * @param Priority                         $priority     Priority level.
+	 * @param int                              $max_attempts Maximum retry attempts per step.
+	 * @param array<string, mixed>             $definition   Full runtime workflow definition bundle.
 	 */
 	public function __construct(
 		public string $name,
@@ -36,8 +36,8 @@ readonly class WorkflowTemplate {
 	/**
 	 * Dispatch a new workflow instance from this template.
 	 *
-	 * @param array $payload Initial payload/state for the workflow.
-	 * @param array $options Per-dispatch options like idempotency_key.
+	 * @param array<string, mixed> $payload Initial payload/state for the workflow.
+	 * @param array<string, mixed> $options Per-dispatch options like idempotency_key.
 	 * @return int The workflow ID.
 	 * @throws \RuntimeException If Queuety is not initialized.
 	 * @throws \Throwable If the database transaction fails.

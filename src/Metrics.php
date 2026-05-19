@@ -47,7 +47,7 @@ class Metrics {
 		$stmt->execute( $params );
 		$row = $stmt->fetch();
 
-		$count = $row ? (int) $row['cnt'] : 0;
+		$count = is_array( $row ) && isset( $row['cnt'] ) && is_scalar( $row['cnt'] ) ? (int) $row['cnt'] : 0;
 
 		if ( 0 === $minutes ) {
 			return 0.0;
@@ -83,7 +83,11 @@ class Metrics {
 		$stmt->execute( $params );
 		$row = $stmt->fetch();
 
-		return $row && null !== $row['avg_ms'] ? (float) $row['avg_ms'] : 0.0;
+		if ( ! is_array( $row ) || ! isset( $row['avg_ms'] ) || ! is_scalar( $row['avg_ms'] ) ) {
+			return 0.0;
+		}
+
+		return (float) $row['avg_ms'];
 	}
 
 	/**
@@ -111,8 +115,9 @@ class Metrics {
 
 		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( $params );
-		$row   = $stmt->fetch();
-		$count = (int) ( $row['cnt'] ?? 0 );
+		$row       = $stmt->fetch();
+		$cnt_value = is_array( $row ) ? ( $row['cnt'] ?? 0 ) : 0;
+		$count     = is_scalar( $cnt_value ) ? (int) $cnt_value : 0;
 		if ( 0 === $count ) {
 			return 0.0;
 		}
@@ -133,7 +138,11 @@ class Metrics {
 		$stmt->execute( $params );
 		$row = $stmt->fetch();
 
-		return null !== ( $row['duration_ms'] ?? null ) ? (float) $row['duration_ms'] : 0.0;
+		if ( ! is_array( $row ) ) {
+			return 0.0;
+		}
+		$duration_ms = $row['duration_ms'] ?? null;
+		return null !== $duration_ms && is_scalar( $duration_ms ) ? (float) $duration_ms : 0.0;
 	}
 
 	/**
@@ -165,14 +174,18 @@ class Metrics {
 		$failed    = 0;
 		while ( true ) {
 			$row = $stmt->fetch();
-			if ( false === $row ) {
+			if ( ! is_array( $row ) ) {
 				break;
 			}
 
-			if ( 'completed' === $row['event'] ) {
-				$completed = (int) $row['cnt'];
-			} elseif ( 'failed' === $row['event'] || 'buried' === $row['event'] ) {
-				$failed += (int) $row['cnt'];
+			$event_value = $row['event'] ?? null;
+			$cnt_value   = $row['cnt'] ?? 0;
+			$cnt         = is_scalar( $cnt_value ) ? (int) $cnt_value : 0;
+
+			if ( 'completed' === $event_value ) {
+				$completed = $cnt;
+			} elseif ( 'failed' === $event_value || 'buried' === $event_value ) {
+				$failed += $cnt;
 			}
 		}
 
@@ -188,8 +201,7 @@ class Metrics {
 	 * Get per-handler breakdown of stats.
 	 *
 	 * @param int $minutes Time window in minutes.
-	 * @return array Array of associative arrays with keys: handler, completed, failed,
-	 *               avg_ms, p95_ms, error_rate.
+	 * @return array<int, array{handler: string, completed: int, failed: int, avg_ms: float, p95_ms: float, error_rate: float}>
 	 */
 	public function handler_stats( int $minutes = 60 ): array {
 		$table = $this->conn->table( Config::table_logs() );
@@ -208,11 +220,15 @@ class Metrics {
 		$handlers = array();
 		while ( true ) {
 			$row = $stmt->fetch();
-			if ( false === $row ) {
+			if ( ! is_array( $row ) ) {
 				break;
 			}
 
-			$h = $row['handler'];
+			$handler_value = $row['handler'] ?? null;
+			if ( ! is_string( $handler_value ) ) {
+				continue;
+			}
+			$h = $handler_value;
 			if ( ! isset( $handlers[ $h ] ) ) {
 				$handlers[ $h ] = array(
 					'handler'   => $h,
@@ -222,11 +238,17 @@ class Metrics {
 				);
 			}
 
-			if ( 'completed' === $row['event'] ) {
-				$handlers[ $h ]['completed'] = (int) $row['cnt'];
-				$handlers[ $h ]['avg_ms']    = round( (float) $row['avg_ms'], 2 );
-			} elseif ( 'failed' === $row['event'] || 'buried' === $row['event'] ) {
-				$handlers[ $h ]['failed'] += (int) $row['cnt'];
+			$event_value  = $row['event'] ?? null;
+			$cnt_value    = $row['cnt'] ?? 0;
+			$avg_ms_value = $row['avg_ms'] ?? 0;
+			$cnt          = is_scalar( $cnt_value ) ? (int) $cnt_value : 0;
+			$avg_ms       = is_scalar( $avg_ms_value ) ? (float) $avg_ms_value : 0.0;
+
+			if ( 'completed' === $event_value ) {
+				$handlers[ $h ]['completed'] = $cnt;
+				$handlers[ $h ]['avg_ms']    = round( $avg_ms, 2 );
+			} elseif ( 'failed' === $event_value || 'buried' === $event_value ) {
+				$handlers[ $h ]['failed'] += $cnt;
 			}
 		}
 

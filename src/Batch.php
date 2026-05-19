@@ -20,8 +20,8 @@ readonly class Batch {
 	 * @param int                     $total_jobs     Total number of jobs in the batch.
 	 * @param int                     $pending_jobs   Number of jobs still pending.
 	 * @param int                     $failed_jobs    Number of failed jobs.
-	 * @param array                   $failed_job_ids IDs of failed jobs.
-	 * @param array                   $options        Batch options (callbacks, etc.).
+	 * @param array<int, int>         $failed_job_ids IDs of failed jobs.
+	 * @param array<string, mixed>    $options        Batch options (callbacks, etc.).
 	 * @param \DateTimeImmutable|null $cancelled_at   When the batch was cancelled.
 	 * @param \DateTimeImmutable      $created_at     When the batch was created.
 	 * @param \DateTimeImmutable|null $finished_at    When the batch finished.
@@ -83,21 +83,57 @@ readonly class Batch {
 	/**
 	 * Hydrate a Batch from a database row.
 	 *
-	 * @param array $row Associative array from PDO fetch.
+	 * @param array<string, mixed> $row Associative array from PDO fetch.
 	 * @return self
+	 * @throws \InvalidArgumentException If the row is missing a created_at timestamp.
 	 */
 	public static function from_row( array $row ): self {
+		$id_raw           = $row['id'] ?? 0;
+		$total_raw        = $row['total_jobs'] ?? 0;
+		$pending_raw      = $row['pending_jobs'] ?? 0;
+		$failed_raw       = $row['failed_jobs'] ?? 0;
+		$name_raw         = $row['name'] ?? null;
+		$failed_ids_json  = $row['failed_job_ids'] ?? '';
+		$options_json     = $row['options'] ?? '';
+		$cancelled_at_raw = $row['cancelled_at'] ?? null;
+		$created_at_raw   = $row['created_at'] ?? null;
+		$finished_at_raw  = $row['finished_at'] ?? null;
+
+		$failed_ids   = is_string( $failed_ids_json ) ? json_decode( $failed_ids_json, true ) : array();
+		$options_data = is_string( $options_json ) ? json_decode( $options_json, true ) : array();
+		$options      = array();
+		if ( is_array( $options_data ) ) {
+			foreach ( $options_data as $key => $value ) {
+				$options[ (string) $key ] = $value;
+			}
+		}
+
+		if ( ! is_string( $created_at_raw ) ) {
+			throw new \InvalidArgumentException( 'Batch row is missing a valid created_at timestamp.' );
+		}
+
 		return new self(
-			id: (int) $row['id'],
-			name: $row['name'],
-			total_jobs: (int) $row['total_jobs'],
-			pending_jobs: (int) $row['pending_jobs'],
-			failed_jobs: (int) $row['failed_jobs'],
-			failed_job_ids: json_decode( $row['failed_job_ids'], true ) ?: array(),
-			options: json_decode( $row['options'], true ) ?: array(),
-			cancelled_at: ! empty( $row['cancelled_at'] ) ? new \DateTimeImmutable( $row['cancelled_at'] ) : null,
-			created_at: new \DateTimeImmutable( $row['created_at'] ),
-			finished_at: ! empty( $row['finished_at'] ) ? new \DateTimeImmutable( $row['finished_at'] ) : null,
+			id: is_numeric( $id_raw ) ? (int) $id_raw : 0,
+			name: is_string( $name_raw ) ? $name_raw : null,
+			total_jobs: is_numeric( $total_raw ) ? (int) $total_raw : 0,
+			pending_jobs: is_numeric( $pending_raw ) ? (int) $pending_raw : 0,
+			failed_jobs: is_numeric( $failed_raw ) ? (int) $failed_raw : 0,
+			failed_job_ids: is_array( $failed_ids )
+				? array_values(
+					array_map(
+						static fn( mixed $value ): int => is_numeric( $value ) ? (int) $value : 0,
+						$failed_ids
+					)
+				)
+				: array(),
+			options: $options,
+			cancelled_at: is_string( $cancelled_at_raw ) && '' !== $cancelled_at_raw
+				? new \DateTimeImmutable( $cancelled_at_raw )
+				: null,
+			created_at: new \DateTimeImmutable( $created_at_raw ),
+			finished_at: is_string( $finished_at_raw ) && '' !== $finished_at_raw
+				? new \DateTimeImmutable( $finished_at_raw )
+				: null,
 		);
 	}
 }
