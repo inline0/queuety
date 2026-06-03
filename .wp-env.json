@@ -1,5 +1,4 @@
 {
-	"core": "WordPress/WordPress#7.0",
 	"plugins": [ "." ],
 	"port": 8002,
 	"testsPort": 8003,

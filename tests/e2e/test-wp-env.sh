@@ -13,7 +13,6 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EXPECTED_VERSION="$(sed -n "s/^define( 'QUEUETY_VERSION', '\\([^']*\\)' );$/\\1/p" "$PROJECT_DIR/queuety.php" | head -n 1)"
-WP_ENV_CORE_REF="$(node -e "const config = require(process.argv[1]); const core = config.core ?? ''; console.log(String(core).includes('#') ? String(core).split('#').pop() : '');" "$PROJECT_DIR/.wp-env.json")"
 WP_ENV_PORT="$(node -e "const config = require(process.argv[1]); console.log(config.port ?? 8888);" "$PROJECT_DIR/.wp-env.json")"
 WP_ENV_TESTS_PORT="$(node -e "const config = require(process.argv[1]); console.log(config.testsPort ?? 8889);" "$PROJECT_DIR/.wp-env.json")"
 PASS=0
@@ -175,11 +174,6 @@ assert_contains "$ACTIVE_PLUGINS" "queuety" "Plugin is active"
 # Test: version constant is defined.
 VERSION=$(wp_cli eval "echo QUEUETY_VERSION;" 2>/dev/null || true)
 assert_equals "$EXPECTED_VERSION" "$VERSION" "QUEUETY_VERSION matches plugin constant"
-
-if [ -n "$WP_ENV_CORE_REF" ]; then
-    WORDPRESS_VERSION=$(wp_cli core version 2>/dev/null || true)
-    assert_equals "$WP_ENV_CORE_REF" "$WORDPRESS_VERSION" "wp-env uses configured WordPress core version"
-fi
 
 MYSQLI_AVAILABLE=$(wp_cli eval "echo extension_loaded('mysqli') ? 'yes' : 'no';" 2>/dev/null || true)
 assert_equals "yes" "$MYSQLI_AVAILABLE" "wp-env CLI has mysqli"
