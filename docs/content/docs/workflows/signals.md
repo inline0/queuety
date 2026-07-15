@@ -1,0 +1,296 @@
+---
+title: "Workflow Signals"
+description: "Pause a workflow and wait for an external signal before continuing."
+path: "workflows/signals"
+order: 16
+section: "Workflows"
+meta_title: "Workflow Signals"
+meta_description: "Pause a workflow and wait for an external signal before continuing."
+---
+
+# Workflow Signals
+
+Workflows can pause and wait for external input using signals. The `wait_for_signal()` and `wait_for_signals()` builder methods insert steps that block the workflow until your application, an operator, or another system sends the expected signal via `Queuety::signal()`.
+
+For human-in-the-loop flows, Queuety also includes:
+
+- `wait_for_approval()` for a namespaced approval payload
+- `wait_for_input()` for structured human input
+- `wait_for_decision()` for explicit approve/reject outcomes
+
+For a bigger end-to-end example that combines agent runs with human gates, see [Agent Orchestration](/docs/workflows/agent-orchestration).
+
+## The `->wait_for_signal()` method
+
+Add a signal wait step to a workflow:
+
+```php
+use Queuety\Queuety;
+
+$workflow_id = Queuety::workflow( 'content_approval' )
+    ->then( DraftContentHandler::class )
+    ->wait_for_signal( 'approved' )
+    ->then( PublishContentHandler::class )
+    ->dispatch( [ 'post_id' => 99 ] );
+```
+
+When the workflow reaches the `wait_for_signal` step, it sets its status to `waiting_for_signal` and pauses. No jobs are running and no resources are consumed while waiting.
+
+By default, a single signal payload is merged into the top-level workflow state. If you want the payload namespaced instead, pass a `result_key`:
+
+```php
+$workflow_id = Queuety::workflow( 'content_approval' )
+    ->then( DraftContentHandler::class )
+    ->wait_for_signal( 'approved', 'approval' )
+    ->then( PublishContentHandler::class )
+    ->dispatch( [ 'post_id' => 99 ] );
+```
+
+After the signal arrives, `$state['approval']` contains the signal payload array.
+
+## Waiting for multiple signals
+
+Use `wait_for_signals()` when the workflow should unblock on several possible signals, or when it must collect all required signals before continuing.
+
+```php
+use Queuety\Enums\WaitMode;
+
+$workflow_id = Queuety::workflow( 'moderation_gate' )
+    ->then( SubmitForReviewHandler::class )
+    ->wait_for_signals(
+        [ 'editor_approved', 'legal_approved' ],
+        WaitMode::All,
+        'approvals'
+    )
+    ->then( PublishContentHandler::class )
+    ->dispatch();
+```
+
+- `WaitMode::All` waits until every configured signal has been recorded.
+- `WaitMode::Any` resumes as soon as the first configured signal arrives.
+
+With a `result_key`, a multi-signal wait stores an associative array keyed by signal name:
+
+```php
+[
+    'editor_approved' => [ 'by' => 'editor@example.com' ],
+    'legal_approved' => [ 'by' => 'legal@example.com' ],
+]
+```
+
+Without a `result_key`, the matched signal payloads are merged into top-level state in the order the step was configured.
+
+## Matching and correlation
+
+Signal waits can ignore unrelated events by matching payload content or correlating on a shared key.
+
+```php
+$workflow_id = Queuety::workflow( 'review_gate' )
+    ->wait_for_signal(
+        name: 'review_ready',
+        result_key: 'review',
+        match_payload: [ 'source' => 'editorial' ],
+        correlation_key: 'task_id',
+    )
+    ->dispatch( [ 'task_id' => 'task-42' ] );
+```
+
+In that example, the wait only resumes when:
+
+- the signal name is `review_ready`
+- the payload contains `source: editorial`
+- the payload `task_id` matches `$state['task_id']`
+
+This is useful when several external systems or agents publish the same event names but only one payload belongs to the current workflow run.
+
+## Human approval and input helpers
+
+`wait_for_approval()` and `wait_for_input()` are convenience wrappers around signal waits. They behave like `wait_for_signal()` but default to a namespaced result key.
+
+```php
+$workflow_id = Queuety::workflow( 'blog_review' )
+    ->then( GenerateDraftHandler::class )
+    ->wait_for_approval()
+    ->wait_for_input()
+    ->then( HandleDecisionHandler::class )
+    ->dispatch();
+```
+
+After the `approval` signal, `$state['approval']` contains the approval payload. After the `input` signal, `$state['input']` contains the input payload.
+
+Use `wait_for_decision()` when you want a single step to resume on either approval or rejection:
+
+```php
+$workflow_id = Queuety::workflow( 'legal_review' )
+    ->then( DraftContractHandler::class )
+    ->wait_for_decision( result_key: 'review' )
+    ->then( HandleReviewDecisionHandler::class )
+    ->dispatch();
+```
+
+After the signal arrives, `$state['review']` contains:
+
+```php
+[
+    'outcome' => 'approved', // or 'rejected'
+    'signal'  => 'approved', // or 'rejected'
+    'data'    => [ 'reviewer' => 'ops@example.com' ],
+]
+```
+
+## Sending a signal
+
+Send a signal to a workflow using `Queuety::signal()`:
+
+```php
+Queuety::signal( $workflow_id, 'approved' );
+```
+
+When the signal matches the one the workflow is waiting for, the workflow resumes and advances to the next step.
+
+For human-in-the-loop flows, the facade also exposes semantic helpers:
+
+```php
+Queuety::approve_workflow( $workflow_id, [ 'reviewer' => 'editor@example.com' ] );
+Queuety::reject_workflow( $workflow_id, [ 'reason' => 'needs citations' ] );
+Queuety::submit_workflow_input( $workflow_id, [ 'notes' => 'Ship after copy edit' ] );
+```
+
+### Signal data
+
+You can pass a data array with the signal. The data is merged into the workflow state, making it available to subsequent steps:
+
+```php
+Queuety::signal( $workflow_id, 'approved', [
+    'approved_by' => 'admin@example.com',
+    'approved_at' => time(),
+] );
+```
+
+In the next step:
+
+```php
+class PublishContentHandler implements Step {
+    public function handle( array $state ): array {
+        // $state['approved_by'] is 'admin@example.com'
+        // $state['approved_at'] is the timestamp
+        // $state['post_id'] is 99
+        wp_update_post( [
+            'ID'          => $state['post_id'],
+            'post_status' => 'publish',
+        ] );
+        return [ 'published' => true ];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+```
+
+Keys that start with `_` (underscore) are reserved for internal use and are not merged into the state.
+
+## Pre-existing signals
+
+Signals can be sent before the workflow reaches the wait step. When a signal arrives, it is recorded in the `queuety_signals` table regardless of the workflow's current status. When the workflow later reaches the `wait_for_signal` step, it checks for pre-existing signals and continues immediately if one is found.
+
+This means the order does not matter:
+
+```php
+// Dispatch workflow
+$workflow_id = Queuety::workflow( 'order_fulfillment' )
+    ->then( PrepareOrderHandler::class )
+    ->wait_for_signal( 'payment_confirmed' )
+    ->then( ShipOrderHandler::class )
+    ->dispatch( [ 'order_id' => 123 ] );
+
+// Signal arrives before the workflow reaches the wait step
+Queuety::signal( $workflow_id, 'payment_confirmed', [ 'transaction_id' => 'txn_abc' ] );
+
+// When the workflow finishes PrepareOrderHandler and reaches the wait step,
+// it sees the pre-existing signal and continues immediately.
+```
+
+## Workflow status during signal wait
+
+While waiting for a signal, the workflow status is `WorkflowStatus::WaitingForSignal` (`waiting_for_signal`):
+
+```php
+$state = Queuety::workflow_status( $workflow_id );
+echo $state->status->value; // 'waiting_for_signal'
+echo $state->wait_type;     // 'signal'
+echo $state->wait_mode;     // 'all' or 'any'
+print_r( $state->waiting_for ); // ['approved']
+print_r( $state->wait_details ); // matched/remaining, correlation info, result key, ...
+```
+
+## Use case: human approval
+
+Build an approval workflow where a human reviewer must approve content before it goes live:
+
+```php
+$workflow_id = Queuety::workflow( 'blog_review' )
+    ->then( GenerateDraftHandler::class )
+    ->then( NotifyReviewerHandler::class )
+    ->wait_for_decision( result_key: 'review' )
+    ->then( HandleDecisionHandler::class )
+    ->dispatch( [ 'topic' => 'PHP middleware patterns' ] );
+```
+
+The `NotifyReviewerHandler` sends an email or Slack message with approve/reject links. Those links call your controller, which sends the signal:
+
+```php
+// In your approval controller
+Queuety::approve_workflow(
+    $workflow_id,
+    [
+        'reviewer'    => $current_user->user_email,
+        'reviewed_at' => time(),
+    ],
+    'approved'
+);
+```
+
+The `HandleDecisionHandler` step reads `$state['review']['outcome']` and either publishes or archives the draft.
+
+## Use case: external API callback
+
+Wait for a webhook from an external service:
+
+```php
+$workflow_id = Queuety::workflow( 'generate_video' )
+    ->then( SubmitToRenderServiceHandler::class )
+    ->wait_for_signal( 'render_complete' )
+    ->then( DownloadVideoHandler::class )
+    ->then( NotifyUserHandler::class )
+    ->dispatch( [ 'template_id' => 'promo_v2', 'user_id' => 42 ] );
+```
+
+When the external service posts to your webhook endpoint:
+
+```php
+// In your webhook handler
+$payload = json_decode( file_get_contents( 'php://input' ), true );
+$workflow_id = (int) $payload['metadata']['workflow_id'];
+
+Queuety::signal( $workflow_id, 'render_complete', [
+    'video_url'  => $payload['output_url'],
+    'duration'   => $payload['duration_seconds'],
+] );
+```
+
+## Multiple signal gates in one workflow
+
+A workflow can wait for signals at multiple points:
+
+```php
+Queuety::workflow( 'multi_approval' )
+    ->then( CreateProposalHandler::class )
+    ->wait_for_signal( 'manager_approval' )
+    ->then( EscalateToDirectorHandler::class )
+    ->wait_for_signal( 'director_approval' )
+    ->then( ExecuteProposalHandler::class )
+    ->dispatch( [ 'proposal_id' => 7 ] );
+```
+
+Each signal wait step is independent. You can mix `wait_for_signal()`, `wait_for_signals()`, `wait_for_approval()`, `wait_for_input()`, and `wait_for_decision()` in the same workflow.

@@ -1,0 +1,155 @@
+---
+title: "Resource Management"
+description: "Concurrency groups, cost units, budgets, worker admission, and adaptive pools."
+path: "features/resource-management"
+order: 35
+section: "Features"
+meta_title: "Resource Management"
+meta_description: "Concurrency groups, cost units, budgets, worker admission, and adaptive pools."
+---
+
+# Resource management
+
+Queuety separates resource control into four core layers, plus optional pool sizing on top.
+
+The first layer describes how expensive one unit of work is. The second limits how much shared pressure one queue or provider group is allowed to carry at once. The third defines how much a single workflow run is allowed to consume. The fourth decides whether a worker should start the next claimed job right now or defer it until the current process and container still have enough headroom.
+
+Those layers work together. A handler can declare that it belongs to an expensive shared pool, a queue can reserve only so much weighted work for one provider, a workflow can cap how much such work it is willing to create, and the worker can still refuse to start more of that work when the current process or container is already too close to its limits.
+
+## Describe the cost of one unit of work
+
+Jobs, workflow steps, and state-entry actions can all publish the same three resource hints:
+
+- `concurrency_group`
+- `concurrency_limit`
+- `cost_units`
+
+`concurrency_group` and `concurrency_limit` describe shared pressure on one downstream system. If several handlers all hit the same provider, API account, or tenant, they can use the same group so workers do not start too many at once.
+
+`cost_units` describes relative weight. A cache refresh and a large provider call may both be “one job”, but they should not contribute equally when a workflow budget or worker admission rule is deciding whether more work is still safe.
+
+```php
+final class CallProviderStep implements \Queuety\Step
+{
+    public function handle( array $state ): array
+    {
+        // ...
+    }
+
+    public function config(): array
+    {
+        return [
+            'concurrency_group' => 'providers',
+            'concurrency_limit' => 3,
+            'cost_units' => 5,
+        ];
+    }
+}
+```
+
+The same idea applies to dispatchable jobs through class properties, and to individual dispatches through `PendingJob::concurrency_group()` and `PendingJob::cost_units()`.
+
+## Budget shared queues and provider groups
+
+Shared pressure is not always about a simple concurrency count. Sometimes the expensive part is the combined weight of what is already running.
+
+Queuety supports that through weighted queue and group budgets. Queue budgets are keyed by queue name. Group budgets are keyed by `concurrency_group`, which lets unrelated handlers participate in the same shared envelope.
+
+```php
+define( 'QUEUETY_RESOURCE_QUEUE_COST_BUDGETS', [
+    'providers' => 20,
+    'exports' => 8,
+] );
+
+define( 'QUEUETY_RESOURCE_GROUP_COST_BUDGETS', [
+    'openai' => 12,
+    'tenant:acme' => 6,
+] );
+```
+
+When a worker claims a job, it looks at the active `processing` rows that already belong to that queue or group. If the currently running cost plus the claimed job's `cost_units` would exceed the configured budget, the worker releases the job and tries again later.
+
+That gives you a different control than `concurrency_limit`. A provider can allow three concurrent requests, but still reserve fewer total cost units for larger requests than for smaller ones.
+
+## Keep one workflow inside an envelope
+
+Workflow budgets exist for cases where the problem is not one heavy job, but a run that keeps discovering more work than intended.
+
+That is common in agentic systems. A planner may revisit the same expensive branch, for each into too many subtasks, or keep starting child workflows while technically staying inside a normal retry model.
+
+Queuety exposes workflow-level limits for that:
+
+```php
+Queuety::workflow( 'research_run' )
+    ->max_transitions( 20 )
+    ->max_for_each_items( 12 )
+    ->max_state_bytes( 32768 )
+    ->max_cost_units( 40 )
+    ->max_started_workflows( 8 )
+    ->then( PlanResearchStep::class )
+    ->for_each( 'tasks', ExecuteResearchTask::class, 'results' )
+    ->dispatch();
+```
+
+`max_cost_units()` keeps the run from consuming more weighted work than intended. `max_started_workflows()` stops a parent from turning into an unbounded tree of top-level child runs. The other guardrails still matter because not every runaway workflow is expensive in the same way.
+
+Workflow status exposes the configured limits and the current usage through the public `budget` payload, so the run stays inspectable while those limits are active.
+
+## Let workers defer work when the process is already too full
+
+Even when metadata and workflow budgets are configured well, the final decision still belongs to the worker process that is about to execute the job.
+
+That is where resource-aware admission comes in. Before a claimed job starts, Queuety can look at:
+
+- the job's shared concurrency group
+- weighted queue and provider-group budgets
+- recent duration and peak-memory history for the handler
+- the current worker's remaining memory headroom
+- the current container or host's remaining memory headroom
+- the remaining time envelope for one-shot style runs
+
+If the worker is already too close to its configured ceiling, Queuety releases the job instead of starting work that is unlikely to finish cleanly.
+
+This is intentionally conservative. It is not a full cluster scheduler. It is a safety layer that helps a busy worker avoid oversubscribing the process it is running in and, when memory telemetry is available, the container or host around it.
+
+The container or host part is optional. When `QUEUETY_RESOURCE_SYSTEM_MEMORY_AWARENESS` is enabled, Queuety tries to read cgroup memory data first and falls back to `/proc/meminfo` on Linux hosts. If no reliable system-level snapshot is available, the worker still keeps using the process-local checks.
+
+## Scale worker pools without ignoring capacity
+
+Fixed worker pools are easy to reason about, but they also force you to pick one number for both quiet periods and spikes.
+
+Adaptive pools let you set a floor and a ceiling instead:
+
+```bash
+wp queuety work --queue=providers --min-workers=2 --max-workers=6
+```
+
+The parent process keeps at least the minimum number of children alive, grows toward the maximum when claimable backlog rises, and scales back down after the queue has been quiet for the configured idle grace window.
+
+Scale-up still respects available capacity. If system-memory awareness is enabled and the parent cannot see enough remaining memory for another full worker envelope, it keeps the pool at its current size instead of starting more children.
+
+## A realistic way to combine the layers
+
+Imagine a research workflow that plans provider calls, starts specialist workflows, and then synthesizes the result.
+
+The provider-facing step can publish `cost_units` and a shared `concurrency_group` so multiple workers do not stampede the same model provider. The queue can reserve a weighted budget for that provider traffic. The parent workflow can cap `max_cost_units()` and `max_started_workflows()` so a planner cannot grow the run forever. Then the worker can still defer a newly claimed provider call if recent peak-memory data says the process or container is already too close to its ceiling.
+
+That gives you four separate controls:
+
+1. describe the weight of the work
+2. reserve shared queue or provider capacity
+3. cap what one run is allowed to create
+4. keep a hot worker from starting more than it should
+
+## Where the detailed APIs live
+
+This page is the conceptual overview.
+
+For the concrete knobs:
+
+- [Workers](/docs/features/workers) covers admission behavior and runtime constants
+- [CLI](/docs/cli) covers fixed and adaptive worker pool commands
+- [Workflow Guardrails](/docs/workflows/guardrails) covers workflow budgets
+- [Jobs](/docs/jobs) covers job and handler metadata
+- [State Machines](/docs/state-machines) covers state-action resource metadata
+- [API](/docs/api) lists the exact methods and return shapes

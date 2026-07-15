@@ -1,0 +1,134 @@
+---
+title: "Run Workflows"
+description: "Nesting child workflows within a parent workflow."
+path: "workflows/run-workflows"
+order: 12
+section: "Workflows"
+meta_title: "Run Workflows"
+meta_description: "Nesting child workflows within a parent workflow."
+---
+
+# Run Workflows
+
+A workflow can start a child workflow as one of its steps. The parent pauses until the run-workflow completes, then merges the child's final state into the parent's state.
+
+## The `->run_workflow()` method
+
+```php
+use Queuety\Queuety;
+
+$enrichment = Queuety::workflow( 'enrich_user' )
+    ->then( FetchSocialHandler::class )
+    ->then( FetchCreditScoreHandler::class );
+
+Queuety::workflow( 'onboarding' )
+    ->then( CreateAccountHandler::class )
+    ->run_workflow( 'enrich_user', $enrichment )
+    ->then( SendWelcomeEmailHandler::class )
+    ->dispatch( [ 'email' => 'user@example.com' ] );
+```
+
+The `run_workflow()` method takes two arguments:
+1. A name for the run-workflow
+2. A `WorkflowBuilder` instance defining the run-workflow's steps
+
+## How it works
+
+When the parent workflow reaches a `run_workflow` step:
+
+1. The run-workflow is dispatched as an independent workflow with its own ID
+2. The parent workflow pauses
+3. The run-workflow runs through its steps normally
+4. When the run-workflow completes, its final state is merged into the parent's state
+5. The parent workflow resumes with the next step
+
+## Parent/child state
+
+The run-workflow receives the parent's current accumulated state as its initial payload. This means child steps can access any data produced by earlier parent steps:
+
+```php
+class CreateAccountHandler implements Step {
+    public function handle( array $state ): array {
+        $user_id = wp_create_user( $state['email'], wp_generate_password() );
+        return [ 'user_id' => $user_id ];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+
+// This run-workflow step can access 'user_id' from the parent
+class FetchSocialHandler implements Step {
+    public function handle( array $state ): array {
+        $profile = fetch_social_profile( $state['user_id'] );
+        return [ 'social_data' => $profile ];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+```
+
+## State merging
+
+When the run-workflow completes, its final state (excluding internal keys like `_steps`, `_queue`, `_priority`, `_max_attempts`) is merged into the parent's state. The next parent step sees all data from both the parent's earlier steps and the run-workflow:
+
+```php
+class SendWelcomeEmailHandler implements Step {
+    public function handle( array $state ): array {
+        // Has access to:
+        // - $state['email'] (from initial dispatch)
+        // - $state['user_id'] (from CreateAccountHandler)
+        // - $state['social_data'] (from run-workflow's FetchSocialHandler)
+        // - $state['credit_score'] (from run-workflow's FetchCreditScoreHandler)
+
+        send_welcome_email( $state['email'], $state['social_data'] );
+        return [ 'welcome_sent' => true ];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+```
+
+## Run-workflow options
+
+The run-workflow builder supports the same options as a regular workflow:
+
+```php
+$sub = Queuety::workflow( 'heavy_processing' )
+    ->on_queue( 'background' )
+    ->with_priority( Priority::Normal )
+    ->max_attempts( 5 )
+    ->then( StepA::class )
+    ->then( StepB::class );
+
+Queuety::workflow( 'parent' )
+    ->run_workflow( 'heavy', $sub )
+    ->then( FinalStep::class )
+    ->dispatch( $payload );
+```
+
+## Nested run-workflows
+
+Run-workflows can themselves contain run-workflows, allowing arbitrary nesting:
+
+```php
+$inner = Queuety::workflow( 'inner' )
+    ->then( InnerStepA::class )
+    ->then( InnerStepB::class );
+
+$middle = Queuety::workflow( 'middle' )
+    ->then( MiddleStepA::class )
+    ->run_workflow( 'inner', $inner )
+    ->then( MiddleStepB::class );
+
+Queuety::workflow( 'outer' )
+    ->then( OuterStepA::class )
+    ->run_workflow( 'middle', $middle )
+    ->then( OuterStepB::class )
+    ->dispatch( $payload );
+```

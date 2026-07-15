@@ -1,0 +1,208 @@
+---
+title: "Export and Replay"
+description: "Export a workflow's full execution history and replay it in another environment."
+path: "workflows/export-replay"
+order: 25
+section: "Workflows"
+meta_title: "Export and Replay"
+meta_description: "Export a workflow's full execution history and replay it in another environment."
+---
+
+# Workflow Export and Replay
+
+Queuety can export a workflow's complete execution history to a portable JSON format and replay it in a different environment. This is useful for reproducing production bugs locally, migrating workflows between environments, and auditing.
+
+## Exporting a workflow
+
+### PHP API
+
+Call `Queuety::export_workflow()` with the workflow ID. It returns a JSON-serializable array:
+
+```php
+use Queuety\Queuety;
+
+$data = Queuety::export_workflow( $workflow_id );
+```
+
+To get a JSON string directly:
+
+```php
+$json = json_encode( $data, JSON_PRETTY_PRINT );
+file_put_contents( '/tmp/workflow-42.json', $json );
+```
+
+### CLI
+
+```bash
+wp queuety workflow export <id> [--output=<file>]
+```
+
+| Option | Description |
+|---|---|
+| `<id>` | Workflow ID (required) |
+| `--output=<file>` | File path to write the JSON to. Defaults to stdout. |
+
+```bash
+# Print to stdout
+wp queuety workflow export 42
+
+# Write to a file
+wp queuety workflow export 42 --output=/tmp/workflow-42.json
+```
+
+## Replaying a workflow
+
+### PHP API
+
+Call `Queuety::replay_workflow()` with the export data. It returns the new workflow ID:
+
+```php
+use Queuety\Queuety;
+
+$json = file_get_contents( '/tmp/workflow-42.json' );
+$data = json_decode( $json, true );
+
+$new_id = Queuety::replay_workflow( $data );
+```
+
+### CLI
+
+```bash
+wp queuety workflow replay <file>
+```
+
+| Option | Description |
+|---|---|
+| `<file>` | Path to the exported JSON file (required) |
+
+```bash
+wp queuety workflow replay /tmp/workflow-42.json
+# Success: Workflow replayed. New workflow ID: 85.
+```
+
+## JSON structure
+
+The export contains the full workflow state, associated jobs, trace events, log entries, stored signals, artifacts, chunks, and any workflow-dependency wait rows:
+
+```json
+{
+    "workflow": {
+        "id": 42,
+        "name": "generate_report",
+        "status": "failed",
+        "state": { "user_id": 1, "_steps": [...], "_queue": "default" },
+        "current_step": 2,
+        "total_steps": 4,
+        "parent_workflow_id": null,
+        "parent_step_index": null,
+        "started_at": "2026-03-28 10:00:00",
+        "completed_at": null,
+        "failed_at": "2026-03-28 10:05:00",
+        "error_message": "API timeout",
+        "deadline_at": null
+    },
+    "jobs": [
+        {
+            "id": 100,
+            "queue": "default",
+            "handler": "App\\Handlers\\FetchDataHandler",
+            "payload": {},
+            "status": "completed",
+            "attempts": 1,
+            "max_attempts": 3,
+            "step_index": 0
+        }
+    ],
+    "events": [
+        {
+            "id": 1,
+            "job_id": 100,
+            "step_index": 0,
+            "step_name": "fetchData",
+            "step_type": "single",
+            "handler": "App\\Handlers\\FetchDataHandler",
+            "event": "step_completed",
+            "input": { "user_id": 1 },
+            "output": { "records": 150 },
+            "state_before": { "user_id": 1 },
+            "state_after": { "user_id": 1, "records": 150 },
+            "context": { "source": "api" },
+            "error": null,
+            "duration_ms": 230,
+            "created_at": "2026-03-28 10:00:01"
+        }
+    ],
+    "logs": [
+        {
+            "id": 1,
+            "event": "workflow_started",
+            "handler": "generate_report",
+            "created_at": "2026-03-28 10:00:00"
+        }
+    ],
+    "signals": [],
+    "artifacts": [],
+    "chunks": [],
+    "wait_dependencies": [],
+    "exported_at": "2026-03-28T12:00:00+00:00",
+    "queuety_version": "0.14.0"
+}
+```
+
+Some fields are abbreviated in the example above. The actual export includes all trace columns from each event row.
+
+Workflow exports also preserve workflow metadata such as `definition_version`, `definition_hash`, and `idempotency_key` when those were set on the original run.
+
+## How replay works
+
+When you replay an exported workflow:
+
+1. A new workflow row is created with the exported state and step definitions
+2. The new workflow's name is `{original_name}_replay_{timestamp}`
+3. Historical workflow events and logs are re-inserted into the new environment
+4. Stored signals and workflow-wait dependency rows are replayed as historical state
+5. If the original workflow was still `running`, the current step is enqueued for processing
+6. If the original workflow was `waiting_for_signal`, `waiting_for_workflows`, `paused`, `failed`, or `completed`, that status is preserved on the replayed workflow
+
+The replayed workflow gets a new ID and operates independently. It does not affect the original.
+
+For `waiting_for_workflows` replays, the exported dependency rows are recreated with the same workflow IDs. That is useful for auditing and for environments where those dependency workflows also exist, but it does not automatically remap dependency IDs across environments.
+
+## Use cases
+
+### Reproduce production bugs
+
+Export a failed workflow from production and replay it locally:
+
+```bash
+# On production
+wp queuety workflow export 42 --output=/tmp/workflow-42.json
+
+# Copy the file to your local environment
+
+# On local
+wp queuety workflow replay /tmp/workflow-42.json
+```
+
+The replayed workflow has the exact same state and step definitions. Running workflows re-enqueue the current step so you can continue execution from the point where they left off, while paused or waiting workflows are recreated in that blocked state for inspection.
+
+### Migrate workflows between environments
+
+Move a workflow from staging to production (or vice versa) by exporting and replaying:
+
+```bash
+# On staging
+wp queuety workflow export 15 --output=workflow.json
+
+# On production
+wp queuety workflow replay workflow.json
+```
+
+### Auditing and archival
+
+Export completed workflows for long-term storage or compliance. The JSON file contains the full execution history, including inputs, outputs, before/after state, timing data, and error details.
+
+```php
+$data = Queuety::export_workflow( $workflow_id );
+// Store $data in your archive system, S3, etc.
+```

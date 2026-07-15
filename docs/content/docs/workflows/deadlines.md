@@ -1,0 +1,96 @@
+---
+title: "Deadlines"
+description: "Set a maximum completion time for workflows with automatic failure handling."
+path: "workflows/deadlines"
+order: 24
+section: "Workflows"
+meta_title: "Deadlines"
+meta_description: "Set a maximum completion time for workflows with automatic failure handling."
+---
+
+# Workflow Deadlines
+
+Workflows can be given a deadline. If the workflow is not completed within the specified duration, Queuety marks it as failed and optionally calls a handler. This acts as a dead man's switch for long-running workflows that should not run indefinitely.
+
+## Setting a deadline
+
+Use `must_complete_within()` on the workflow builder to set the maximum allowed duration. Use `on_deadline()` to register a handler that runs when the deadline is exceeded.
+
+```php
+use Queuety\Queuety;
+
+Queuety::workflow( 'data_import' )
+    ->then( FetchDataHandler::class )
+    ->then( TransformDataHandler::class )
+    ->then( LoadDataHandler::class )
+    ->must_complete_within( hours: 24 )
+    ->on_deadline( ImportTimeoutHandler::class )
+    ->dispatch( [ 'source' => $url ] );
+```
+
+The `must_complete_within()` method accepts named parameters that are summed:
+
+```php
+->must_complete_within( hours: 2, minutes: 30 )  // 2.5 hours
+->must_complete_within( days: 1 )                 // 24 hours
+->must_complete_within( seconds: 3600 )           // 1 hour
+->must_complete_within( days: 1, hours: 12 )      // 36 hours
+```
+
+## Deadline handler
+
+The `on_deadline()` handler class must implement a `handle( array $state ): void` method. It receives the public workflow state (all keys that do not start with `_`).
+
+```php
+class ImportTimeoutHandler {
+
+    public function handle( array $state ): void {
+        // Alert the team.
+        wp_mail(
+            'ops@example.com',
+            'Import workflow timed out',
+            'Workflow for source ' . ( $state['source'] ?? 'unknown' ) . ' exceeded its deadline.'
+        );
+
+        // Clean up partial work.
+        if ( isset( $state['temp_file'] ) ) {
+            unlink( $state['temp_file'] );
+        }
+    }
+}
+```
+
+The deadline handler is optional. If you only want the workflow to fail without running custom logic, use `must_complete_within()` without `on_deadline()`.
+
+## How deadline checking works
+
+The worker checks for expired deadlines every 60 seconds as part of its processing loop. When it finds a workflow whose `status` is still `running` and whose `deadline_at` is in the past, it calls the `on_deadline` handler if one is registered, marks the workflow as failed with the error message `Deadline exceeded`, and records a `workflow_deadline_exceeded` log event. The deadline itself is stored as a `deadline_at` timestamp on the workflow row and is calculated at dispatch time from the configured duration.
+
+## What happens on expiry
+
+When a workflow exceeds its deadline, its status changes to `failed`, the error message is set to `Deadline exceeded`, the deadline handler runs synchronously if one is registered, and a `workflow_deadline_exceeded` log entry is recorded. Running jobs are not interrupted in the middle of execution, but the workflow will not advance beyond the expired step boundary. If the deadline handler itself throws an exception, the exception is silently caught and the workflow still ends up failed.
+
+## WorkflowBuilder methods
+
+| Method | Description |
+|---|---|
+| `must_complete_within( int $seconds, int $minutes, int $hours, int $days )` | Set the maximum allowed duration. All parameters are summed. |
+| `on_deadline( string $handler_class )` | Register a handler called when the deadline is exceeded. |
+
+## Example: deadline with retry
+
+You can combine deadlines with `retry_workflow()`. If a workflow fails due to a deadline, you can retry it (which resets it to `running` and re-enqueues the failed step), but note that the original deadline timestamp is not extended.
+
+```php
+$status = Queuety::workflow_status( $workflow_id );
+
+if ( 'failed' === $status->status->value ) {
+    // Check if it was a deadline failure.
+    // You may want to dispatch a new workflow instead of retrying.
+    Queuety::retry_workflow( $workflow_id );
+}
+```
+
+## Deadline vs. sleep delays
+
+Deadlines apply to the entire workflow duration. Sleep delays (`->delay()`) pause the workflow for a fixed duration as part of its step sequence. A workflow with a 1-hour sleep delay and a 2-hour deadline will fail if the non-sleep steps take more than 1 hour total.

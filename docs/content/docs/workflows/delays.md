@@ -1,0 +1,120 @@
+---
+title: "Durable Delays"
+description: "Pause a workflow for a fixed duration using durable delay steps."
+path: "workflows/delays"
+order: 15
+section: "Workflows"
+meta_title: "Durable Delays"
+meta_description: "Pause a workflow for a fixed duration using durable delay steps."
+---
+
+# Durable Delays
+
+Workflows can pause for a fixed duration between steps using the `delay()` builder method. Delay steps are durable: the delay is stored in the database, so it survives worker restarts, deploys, and server reboots.
+
+## The `->delay()` method
+
+Add a delay step anywhere in the workflow chain:
+
+```php
+use Queuety\Queuety;
+
+Queuety::workflow( 'drip_campaign' )
+    ->then( SendWelcomeEmailHandler::class )
+    ->delay( days: 1 )
+    ->then( SendFollowUpEmailHandler::class )
+    ->delay( days: 3 )
+    ->then( SendFinalEmailHandler::class )
+    ->dispatch( [ 'user_id' => 42 ] );
+```
+
+The workflow will:
+
+1. Run `SendWelcomeEmailHandler`
+2. Wait 1 day
+3. Run `SendFollowUpEmailHandler`
+4. Wait 3 days
+5. Run `SendFinalEmailHandler`
+
+## Duration parameters
+
+The `delay()` method accepts any combination of named duration parameters:
+
+| Parameter | Type | Description |
+|---|---|---|
+| `$seconds` | `int` | Seconds to wait |
+| `$minutes` | `int` | Minutes to wait |
+| `$hours` | `int` | Hours to wait |
+| `$days` | `int` | Days to wait |
+
+All values are summed together. These are equivalent:
+
+```php
+->delay( seconds: 3600 )
+->delay( minutes: 60 )
+->delay( hours: 1 )
+```
+
+You can combine them:
+
+```php
+->delay( hours: 1, minutes: 30 ) // 90 minutes total
+```
+
+## How delay steps work
+
+When a workflow reaches a delay step, Queuety dispatches an internal `__queuety_delay` job with its `available_at` column set to the current time plus the delay duration. The job sits in the database and is not claimed by any worker until the delay has elapsed.
+
+This means:
+
+- **No polling.** Workers do not repeatedly check the delay. The job simply becomes available when the time comes.
+- **No memory usage.** Nothing is running during the wait. The delay exists only as a database row.
+- **Survives restarts.** If the worker restarts, the delay job is still in the queue with the correct `available_at` timestamp.
+
+When the delay job is claimed after the delay, the workflow advances to the next step automatically.
+
+## Example: delayed notifications
+
+Send a reminder 1 hour after a user signs up, but only if they have not completed onboarding:
+
+```php
+Queuety::workflow( 'onboarding_reminder' )
+    ->then( CreateAccountHandler::class )
+    ->delay( hours: 1 )
+    ->then( CheckOnboardingHandler::class )
+    ->then( SendReminderHandler::class )
+    ->dispatch( [ 'email' => 'user@example.com' ] );
+```
+
+The `CheckOnboardingHandler` step can inspect the state and use [conditional branching](/docs/workflows/conditional) to skip the reminder if onboarding is already complete.
+
+## Example: retry with backoff
+
+Insert deliberate delays between retry-like steps:
+
+```php
+Queuety::workflow( 'poll_external_api' )
+    ->then( CheckStatusHandler::class, 'check' )
+    ->delay( minutes: 5 )
+    ->then( CheckStatusHandler::class, 'recheck' )
+    ->delay( minutes: 15 )
+    ->then( CheckStatusHandler::class, 'final_check' )
+    ->then( ProcessResultHandler::class )
+    ->dispatch( [ 'external_id' => 'abc-123' ] );
+```
+
+## Multiple delays
+
+A workflow can contain any number of delay steps. Each delay is independent and tracked by a sequential name (`delay_0`, `delay_1`, etc.) in the workflow state.
+
+```php
+Queuety::workflow( 'multi_step_drip' )
+    ->then( StepA::class )
+    ->delay( hours: 2 )
+    ->then( StepB::class )
+    ->delay( days: 1 )
+    ->then( StepC::class )
+    ->delay( minutes: 30 )
+    ->then( StepD::class )
+    ->dispatch( $payload );
+```

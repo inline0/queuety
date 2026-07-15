@@ -1,0 +1,114 @@
+---
+title: "Guardrails"
+description: "Versioning, idempotent dispatch, and workflow budgets."
+path: "workflows/guardrails"
+order: 17
+section: "Workflows"
+meta_title: "Guardrails"
+meta_description: "Versioning, idempotent dispatch, and workflow budgets."
+---
+
+# Workflow guardrails
+
+Agent-style workflows are flexible, but they also make it easier to create duplicate runs or let a planner produce more work than intended. Queuety provides lightweight guardrails at the workflow level so you can keep that flexibility without giving up control.
+
+For the broader resource model around worker admission and per-job cost metadata, see [Resource Management](/docs/features/resource-management).
+
+## Version a workflow definition
+
+Use `version()` to attach an application-level version label to a workflow definition:
+
+```php
+Queuety::workflow( 'research_run' )
+    ->version( 'research.v2' )
+    ->then( PlanResearchStep::class )
+    ->then( DraftResearchSummaryStep::class )
+    ->dispatch();
+```
+
+The version is stored with the workflow state, exposed through `workflow_status()`, printed by `wp queuety workflow status`, and included in workflow exports.
+
+Queuety also stores a deterministic `definition_hash` for every workflow run. The hash is derived from the serialised workflow definition and is useful when you need to identify exactly which workflow shape an in-flight run is executing after a deploy.
+
+## Make dispatch idempotent
+
+Use `idempotency_key()` when callers may retry the same request:
+
+```php
+Queuety::workflow( 'research_run' )
+    ->idempotency_key( 'brief:42:research' )
+    ->then( PlanResearchStep::class )
+    ->dispatch( [ 'brief_id' => 42 ] );
+```
+
+If the same workflow is dispatched again with the same key, Queuety returns the original workflow ID instead of creating a duplicate run.
+
+This is especially useful for:
+
+- API endpoints that may be retried by clients or gateways
+- webhook consumers that can receive duplicate deliveries
+- planner steps that should only create one orchestration run per external entity
+
+Idempotency keys are stored in the `queuety_workflow_dispatch_keys` table.
+
+## Set workflow budgets
+
+Use workflow budgets to fail runs that exceed the envelope you planned for:
+
+```php
+Queuety::workflow( 'research_run' )
+    ->max_transitions( 20 )
+    ->max_for_each_items( 12 )
+    ->max_state_bytes( 32768 )
+    ->max_cost_units( 40 )
+    ->max_started_workflows( 8 )
+    ->then( PlanResearchStep::class )
+    ->for_each( 'tasks', ExecuteResearchTask::class, 'results' )
+    ->dispatch();
+```
+
+### `max_transitions()`
+
+Limits how many workflow steps may complete before the run fails. This is useful for protecting workflows that branch dynamically or can revisit the same area via `_next_step`.
+
+### `max_for_each_items()`
+
+Limits how many runtime-discovered items a single `for_each()` step may expand. This is useful for planner/executor systems where an agent might discover far more branch work than intended.
+
+### `max_state_bytes()`
+
+Limits the encoded size of the public workflow state. This helps keep long-running workflows from growing into large blobs that are slow to inspect, export, or retry.
+
+### `max_cost_units()`
+
+Limits the total cost units consumed by completed steps. Cost units come from the step or job metadata that Queuety resolves when it enqueues work. Regular user work defaults to `1`, orchestration placeholders such as delays and waits use `0`, and handlers can raise or lower the value through `config()` or job properties.
+
+This is useful when a workflow can revisit the same area or for each into work that is expensive in ways that are not captured by step count alone. A planner that keeps re-running an expensive model call may stay within `max_transitions()` but still exceed the cost envelope you intended.
+
+### `max_started_workflows()`
+
+Limits how many top-level workflows a run may start through `start_workflows()` or `start_agents()`. The limit is checked before the child workflows are dispatched, so the parent fails without partially creating a group that already exceeds the budget.
+
+When a budget is exceeded, Queuety fails the workflow immediately instead of retrying the step.
+
+## Observing guardrails
+
+Workflow status exposes:
+
+- `definition_version`
+- `definition_hash`
+- `idempotency_key`
+- `budget`
+
+The `budget` payload includes configured limits plus current usage, including the current public-state size in bytes.
+
+Example:
+
+```php
+$state = Queuety::workflow_status( $workflow_id );
+
+$state->definition_version; // 'research.v2'
+$state->definition_hash;    // '4c7a...'
+$state->idempotency_key;    // 'brief:42:research'
+$state->budget;             // [ 'max_transitions' => 20, ... ]
+```

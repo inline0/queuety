@@ -1,0 +1,64 @@
+---
+title: "State Pruning"
+description: "Automatic pruning of old workflow state to keep it bounded."
+path: "features/state-pruning"
+order: 42
+section: "Features"
+meta_title: "State Pruning"
+meta_description: "Automatic pruning of old workflow state to keep it bounded."
+---
+
+# State Pruning
+
+As a workflow progresses through many steps, the accumulated state can grow large. State pruning automatically removes old step outputs to keep the state JSON bounded while preserving the data that matters.
+
+## Enabling state pruning
+
+Call `prune_state_after()` on the workflow builder. The argument is the number of recent steps whose output should be kept:
+
+```php
+use Queuety\Queuety;
+
+Queuety::workflow( 'long_pipeline' )
+    ->then( StepA::class )
+    ->then( StepB::class )
+    ->then( StepC::class )
+    ->then( StepD::class )
+    ->then( StepE::class )
+    ->prune_state_after( 2 )
+    ->dispatch( [ 'input' => $data ] );
+```
+
+With `prune_state_after( 2 )`, after step D completes, the outputs from steps A and B are removed from the state. Steps C and D (the two most recent) are preserved.
+
+## How pruning works
+
+When state pruning is enabled, Queuety tracks which keys each step adds to the state in a reserved `_step_outputs` array. After advancing to a new step, any keys introduced by steps older than the threshold are removed.
+
+For example, with `prune_state_after( 2 )`:
+
+```
+After step 0 (StepA): state has keys from StepA + initial payload
+After step 1 (StepB): state has keys from StepA + StepB + initial payload
+After step 2 (StepC): state has keys from StepA + StepB + StepC + initial payload
+  -> prune: StepA output removed (only 2 most recent kept)
+After step 3 (StepD): state has keys from StepB + StepC + StepD + initial payload
+  -> prune: StepB output removed
+```
+
+## What is preserved
+
+Queuety never prunes reserved keys that start with `_`, such as `_steps`, `_queue`, `_priority`, `_max_attempts`, `_on_cancel`, `_prune_state_after`, and `_step_outputs`. Initial payload keys passed to `dispatch()` are also preserved because they are not tracked as step outputs in the first place. Beyond that, Queuety keeps the N most recent step outputs according to the threshold you configured.
+
+## When to use it
+
+State pruning is helpful for workflows with many steps where each step produces data that later steps do not actually need. Typical examples are long pipelines where each step only needs the previous one or two outputs, ETL workflows that generate bulky intermediate structures, and recursive or repeating workflows that would otherwise accumulate repetitive state. If your workflow has only a few steps, or if late steps still depend on early outputs, you probably do not need pruning at all.
+
+## Default behavior
+
+State pruning is disabled by default. The `prune_state_after()` method accepts an integer argument. Calling it without an argument defaults to 2:
+
+```php
+->prune_state_after()     // keeps the 2 most recent step outputs
+->prune_state_after( 5 )  // keeps the 5 most recent step outputs
+```

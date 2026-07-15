@@ -1,0 +1,153 @@
+---
+title: "Introduction"
+description: "Welcome to the Queuety documentation."
+path: "."
+order: 0
+section: "Documentation"
+meta_title: "Introduction"
+meta_description: "Welcome to the Queuety documentation."
+---
+
+# Introduction
+
+Queuety is a WordPress plugin that provides a fast job queue, durable workflow engine, and durable state machine runtime. Workers claim jobs directly from MySQL and process them inside a long-running WP-CLI process. The PHP runtime that loads WordPress and WP-CLI needs either `mysqli` or `pdo_mysql`.
+
+## Why Queuety?
+
+WordPress has no real background job system. `wp_cron` only fires on page visits. Action Scheduler boots the entire WordPress stack for every batch. An LLM API call that takes 60 seconds gets killed by PHP's 30-second timeout. There's no way to run multi-step processes that survive crashes and resume where they left off.
+
+Queuety solves this with three primitives:
+
+1. **Jobs** for fire-and-forget background work
+2. **Workflows** for durable multi-step processes with persistent state
+3. **State machines** for long-lived, event-driven lifecycle state
+
+## Quick example
+
+Dispatch a job using the modern API:
+
+```php
+use Queuety\Contracts\Job;
+use Queuety\Dispatchable;
+
+readonly class SendEmailJob implements Job {
+    use Dispatchable;
+
+    public function __construct(
+        public string $to,
+        public string $subject,
+        public string $body,
+    ) {}
+
+    public function handle(): void {
+        wp_mail( $this->to, $this->subject, $this->body );
+    }
+}
+
+SendEmailJob::dispatch( 'user@example.com', 'Welcome', 'Hello from Queuety!' );
+```
+
+Or use the classic handler name approach:
+
+```php
+use Queuety\Queuety;
+
+Queuety::dispatch( 'send_email', [ 'to' => 'user@example.com' ] );
+```
+
+Run a durable workflow:
+
+```php
+Queuety::workflow( 'generate_report' )
+    ->then( FetchDataHandler::class )
+    ->then( CallLLMHandler::class )
+    ->then( FormatOutputHandler::class )
+    ->dispatch( [ 'user_id' => 42 ] );
+```
+
+Model a long-lived session with a state machine:
+
+```php
+use Queuety\Enums\StateMachineStatus;
+
+Queuety::machine( 'agent_session' )
+    ->state( 'awaiting_user' )
+    ->on( 'user_message', 'planning' )
+    ->state( 'planning' )
+    ->action( PlanSessionAction::class )
+    ->on( 'planned', 'completed' )
+    ->state( 'completed', StateMachineStatus::Completed )
+    ->dispatch( [ 'thread_id' => 42 ] );
+```
+
+Start a worker:
+
+```bash
+wp queuety work
+```
+
+If you are building an agent-style system, start with [Agent Orchestration](/docs/workflows/agent-orchestration). It shows how planner/executor flows, human review gates, and cross-workflow waits fit together.
+
+If the system is event-driven and long-lived, start with [State Machines](/docs/state-machines) alongside workflows.
+
+If you want end-to-end integration examples, see [Examples](/docs/examples), which now includes Neuron-based patterns for provider switching, streaming, memory-backed review repeats, and dependent workflows.
+
+If you want workflows to start from WordPress domain events like `save_post`, see [Action Triggers](/docs/features/action-triggers).
+
+If you want to use the DB-backed runtime outside WordPress, see [Standalone Use](/docs/features/standalone-use).
+
+## Key differentiators
+
+- **Fast execution.** Workers use direct MySQL queue access and avoid the per-request cron pattern that slows down background work in WordPress.
+- **Durable workflows.** Multi-step processes with persistent state that survive PHP timeouts, crashes, and retries. Each step boundary is an atomic MySQL transaction.
+- **Explicit state machines.** Model chat sessions, approvals, and other long-lived lifecycles with named states, guarded transitions, queued state-entry actions, and durable event timelines.
+- **Modern dispatch API.** Self-contained readonly job classes with the `Dispatchable` trait, typed constructor properties as payload, and `$tries`/`$timeout`/`$backoff` declared on the class.
+- **Middleware pipeline.** Onion-style middleware for rate limiting, exception throttling, unique jobs, and custom logic. Declared per-job via a `middleware()` method.
+- **Streaming steps.** The `StreamingStep` interface yields chunks that are persisted to the database immediately. On retry, previously saved chunks are provided so the stream can resume where it left off. Ideal for LLM responses and large downloads.
+- **Pluggable cache layer.** `CacheFactory` auto-detects APCu or falls back to an in-memory cache. Custom backends implement `Contracts\Cache`. Used internally for rate-limiter lookups and queue state.
+- **Batching and chaining.** Dispatch groups of jobs with `then`/`catch`/`finally` callbacks and progress tracking, or chain jobs sequentially where each depends on the previous one completing.
+- **Durable delays and waits.** `delay()` adds process-restart-safe delays. `wait_for_signal()`, `wait_for_signals()`, `wait_for_approval()`, `wait_for_input()`, and `wait_for_workflow()` let workflows pause on external events or other workflows without keeping PHP alive.
+- **Dynamic for-each.** `for_each()` expands runtime-discovered branch work from workflow state and supports all-success, first-success, and quorum completion modes.
+- **Async workflow handoffs.** `start_workflows()` turns runtime-discovered items into independent top-level workflows that can be waited on later.
+- **WordPress action triggers.** `on_action()` maps core or plugin action hooks into durable workflow dispatches with gating and idempotency.
+- **Durable artifacts.** Store named workflow outputs outside the main state bag and carry them through status, CLI inspection, export, and replay.
+- **Workflow guardrails.** `version()`, a deterministic definition hash, idempotent dispatch keys, and workflow budgets make agent-style runs easier to inspect and harder to duplicate or let run away silently.
+- **Resource management.** Concurrency groups, cost units, workflow budgets, and worker admission help keep expensive agent-style work inside a defined envelope.
+- **Step compensation.** `compensate_with()` and `compensate_on_failure()` provide rollback hooks for completed steps when workflows are cancelled or fail.
+- **Heartbeats.** Long-running steps send heartbeats to prevent the stale-job recovery system from reclaiming active work.
+- **Workflow tracing.** Every step transition is recorded with input, output, before/after state, context, artifacts, chunks, errors, and time-travel debugging via `workflow_state_at()`.
+- **Parallel steps.** Run steps concurrently and wait for all to complete before advancing.
+- **Conditional branching.** Skip to named steps based on prior state using `_next_step`.
+- **Run Workflows.** Start child workflows that feed results back to the parent.
+- **Priority queues.** Four levels (Low, Normal, High, Urgent) via type-safe PHP enums.
+- **Multi-queue workers.** Process multiple queues with strict priority ordering in a single worker.
+- **Rate limiting.** Per-handler execution limits with sliding window.
+- **Recurring jobs.** Interval-based and cron-based scheduling with configurable overlap policies (Allow, Skip, Buffer).
+- **Workflow cancellation.** Cancel running workflows and trigger registered cleanup handlers.
+- **State pruning.** Automatically remove old step outputs to keep large workflow state manageable.
+- **Worker concurrency.** `--workers=N` forks multiple processes with automatic restart on crash.
+- **Full observability.** Database logging, per-handler metrics, and event webhooks.
+- **Testing utilities.** `QueueFake` records dispatched jobs and batches for assertions in unit tests.
+- **PHP attributes.** `#[QueuetyHandler('name')]` for zero-config handler registration.
+
+## How it works
+
+Workers run inside a long-lived WP-CLI process and claim jobs directly from MySQL. Queue rows, workflow state, logs, batches, signals, and streaming chunks all live in MySQL, so worker restarts do not lose orchestration state.
+
+Workflows break long-running work into steps. Each step persists its output to a shared state bag in the database. If PHP dies mid-step, the worker retries that step with all prior state intact. The step boundary is a single MySQL transaction: state update, job completion, and next step enqueue all happen atomically.
+
+```
+Workflow: generate_report (3 steps)
+
+Step 0: fetch_data     -> state: {user_data: {...}}
+Step 1: call_llm       -> PHP dies -> retry -> state: {user_data: {...}, llm_response: "..."}
+Step 2: format_output  -> state: {user_data: {...}, llm_response: "...", report_url: "/reports/42.pdf"}
+
+Workflow: completed
+```
+
+## Requirements
+
+- PHP 8.2 or later
+- WordPress 6.4 or later
+- MySQL 5.7+ or MariaDB 10.3+

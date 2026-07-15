@@ -1,0 +1,163 @@
+---
+title: "General"
+description: "Durable multi-step processes with persistent state."
+path: "workflows"
+order: 3
+section: "Workflows"
+meta_title: "General"
+meta_description: "Durable multi-step processes with persistent state."
+---
+
+# Workflows
+
+Workflows break long-running work into discrete steps. Each step persists its output to a shared state bag in the database. If PHP dies mid-step, the worker retries that step with all prior state intact.
+
+## What are workflows?
+
+A workflow is an ordered sequence of steps. Each step is a PHP class that receives the accumulated state from all previous steps and returns new data to merge into the state. The workflow advances one step at a time, with each transition wrapped in an atomic MySQL transaction.
+
+```php
+use Queuety\Queuety;
+
+$workflow_id = Queuety::workflow( 'generate_report' )
+    ->then( FetchDataHandler::class )
+    ->then( CallLLMHandler::class )
+    ->then( FormatOutputHandler::class )
+    ->dispatch( [ 'user_id' => 42 ] );
+```
+
+## State accumulation
+
+The initial payload you pass to `dispatch()` becomes the starting state. Each step's return value is merged into the state via `array_merge`:
+
+```
+dispatch(['user_id' => 42])
+
+Step 0: FetchDataHandler   -> returns ['user_name' => 'Alice']
+  state: {user_id: 42, user_name: 'Alice'}
+
+Step 1: CallLLMHandler     -> returns ['llm_response' => '...']
+  state: {user_id: 42, user_name: 'Alice', llm_response: '...'}
+
+Step 2: FormatOutputHandler -> returns ['report_url' => '/reports/42.pdf']
+  state: {user_id: 42, user_name: 'Alice', llm_response: '...', report_url: '/reports/42.pdf'}
+```
+
+Every step sees the full accumulated state. This makes it easy to pass data between steps without any external storage.
+
+## Resumability
+
+Workflows are durable because the state is persisted to the database after every step. If the worker crashes during step 1, the workflow restarts from step 1 with step 0's output already in the state.
+
+The step boundary is a single MySQL transaction that atomically:
+1. Updates the workflow state with the step's output
+2. Marks the current step's job as completed
+3. Enqueues the next step's job
+
+This guarantees that no state is ever lost, even in the face of crashes, timeouts, or PHP fatal errors.
+
+## Workflow lifecycle
+
+```
+dispatch() -> running -> step 0 -> step 1 -> ... -> step N -> completed
+                  |                   |
+                  |                   +-> failed -> retry -> running (from failed step)
+                  |
+                  +-> paused -> resumed -> running
+                  |
+                  +-> waiting_for_signal -> signal received -> running
+                  |
+                  +-> waiting_for_workflows -> dependency settles -> running
+                  |
+                  +-> cancelled (via cancel_workflow)
+```
+
+| Status | Description |
+|---|---|
+| `running` | Actively processing steps |
+| `completed` | All steps finished successfully |
+| `failed` | A step failed after exhausting retries |
+| `paused` | Manually paused. Current in-flight work may finish, but later steps are not enqueued until resumed |
+| `waiting_for_signal` | Waiting for an external signal via `Queuety::signal()` |
+| `waiting_for_workflows` | Waiting for one or more other workflows to complete via `wait_for_workflow()` or `wait_for_workflows()` |
+| `cancelled` | Explicitly cancelled via `Queuety::cancel_workflow()`. Pending jobs are buried and an optional cleanup handler runs. |
+
+## Managing workflows
+
+Check status:
+
+```php
+$state = Queuety::workflow_status( $workflow_id );
+echo $state->status->value;   // 'running'
+echo $state->current_step;    // 1
+echo $state->total_steps;     // 3
+print_r( $state->waiting_for ); // ['42'] while waiting on another workflow
+print_r( $state->wait_details ); // matched/remaining blockers, result key, correlation info
+```
+
+Pause and resume:
+
+```php
+Queuety::pause_workflow( $workflow_id );
+Queuety::resume_workflow( $workflow_id );
+```
+
+Retry a failed workflow from its failed step:
+
+```php
+Queuety::retry_workflow( $workflow_id );
+```
+
+Cancel a workflow and run cleanup handlers:
+
+```php
+Queuety::cancel_workflow( $workflow_id );
+```
+
+See [Cancellation](/docs/workflows/cancellation) for details on cleanup handlers and what happens when a workflow is cancelled.
+
+## Workflow options
+
+Set queue, priority, and retry behavior for all steps in a workflow:
+
+```php
+use Queuety\Enums\Priority;
+
+Queuety::workflow( 'important_pipeline' )
+    ->on_queue( 'pipelines' )
+    ->with_priority( Priority::High )
+    ->max_attempts( 5 )
+    ->on_cancel( PipelineCleanupHandler::class )
+    ->prune_state_after( 3 )
+    ->then( StepA::class )
+    ->then( StepB::class )
+    ->dispatch( $payload );
+```
+
+The `on_cancel()` method registers a cleanup handler that runs when the workflow is cancelled. See [Cancellation](/docs/workflows/cancellation).
+
+The `prune_state_after()` method enables automatic removal of old step outputs to keep the workflow state bounded. See [State Pruning](/docs/features/state-pruning).
+
+Use `compensate_with()` to attach a per-step compensation handler. Use `compensate_on_failure()` when you want completed step compensations to run automatically after a workflow failure, not just on explicit cancellation. See [Compensation](/docs/workflows/compensation).
+
+Use workflow guardrails when you need safer long-running orchestration: `version()` tags a definition with an application-level version, Queuety also stores a deterministic definition hash for each run, `idempotency_key()` makes dispatch durable across retries or duplicate requests, and `max_transitions()`, `max_for_each_items()`, and `max_state_bytes()` fail runaway runs before they spiral. See [Guardrails](/docs/workflows/guardrails).
+
+## Step types
+
+Queuety supports eleven types of steps within a workflow:
+
+- [Sequential chains](/docs/workflows/chains) using `->then()` for one-at-a-time execution
+- [Parallel groups](/docs/workflows/parallel) using `->parallel()` for concurrent execution
+- [Dynamic for-each](/docs/workflows/for-each) using `->for_each()` for runtime-discovered branch work and explicit completion semantics
+- [Async handoffs](/docs/workflows/async-handoffs) using `->start_workflows()` or `->start_agents()` to dispatch independent child workflows from runtime-discovered items
+- [Conditional branching](/docs/workflows/conditional) using named steps and `_next_step`
+- [Repeats](/docs/workflows/repeats) using `->repeat_until()` and `->repeat_while()` for durable back-edges to earlier named steps
+- [Run Workflows](/docs/workflows/run-workflows) using `->run_workflow()` for nested composition
+- [Durable delays](/docs/workflows/delays) using `->delay()` for time-based delays
+- [Signals](/docs/workflows/signals) using `->wait_for_signal()`, `->wait_for_signals()`, `->wait_for_approval()`, `->wait_for_input()`, and `->wait_for_decision()` for external event triggers
+- [Workflow dependencies](/docs/workflows/dependencies) using `->wait_for_workflow()`, `->wait_for_workflows()`, and `->wait_for_agents()` for cross-workflow coordination
+- [Streaming steps](/docs/workflows/streaming) using the `StreamingStep` interface for durable chunk-based output
+
+## Common patterns
+
+If you are building autonomous or semi-autonomous systems, start with [Agent Orchestration](/docs/workflows/agent-orchestration). It shows how `for_each()`, `start_agents()`, `wait_for_agents()`, `wait_for_workflow()`, and `wait_for_decision()` fit together in real planner/executor and human-review flows.

@@ -1,0 +1,241 @@
+---
+title: "Getting Started"
+description: "Install Queuety, configure it, and run your first job and workflow."
+path: "getting-started"
+order: 1
+section: "Documentation"
+meta_title: "Getting Started"
+meta_description: "Install Queuety, configure it, and run your first job and workflow."
+---
+
+# Getting Started
+
+## Installation
+
+Queuety requires either `mysqli` or `pdo_mysql` in the PHP runtime that loads WordPress and WP-CLI. It chooses the driver automatically, preferring `mysqli` for WordPress runtimes and keeping `pdo_mysql` available for standalone/direct runtime use.
+
+If you want the DB-backed runtime without the WordPress plugin layer, see [Standalone Use](/docs/features/standalone-use). That path uses the same connection and runtime tables, but it does not include the WordPress hook bridges or WP-CLI registration.
+
+### Via Composer for Composer-managed WordPress
+
+```bash
+composer require queuety/queuety
+```
+
+Then activate the plugin:
+
+```bash
+wp plugin activate queuety
+```
+
+### Via a packaged plugin zip
+
+```bash
+wp plugin install /path/to/queuety.zip --activate
+```
+
+### From source during development
+
+Place the repository in `wp-content/plugins/queuety`, then install PHP dependencies:
+
+```bash
+composer install
+wp plugin activate queuety
+```
+
+On activation, Queuety creates its database tables (`queuety_jobs`, `queuety_workflows`, `queuety_logs`, `queuety_schedules`, `queuety_queue_states`, `queuety_webhooks`, `queuety_locks`, `queuety_signals`, `queuety_workflow_dependencies`, `queuety_workflow_dispatch_keys`, `queuety_batches`, `queuety_chunks`, `queuety_workflow_events`) so workers can claim jobs directly from MySQL.
+
+By default, the plugin also schedules a one-shot worker through WordPress cron every minute for the `default` queue. That gives you a no-shell baseline for jobs and workflows that stay on `default`, as long as WordPress cron is firing. For custom queues, lower latency, or heavier workloads, move to dedicated `wp queuety work` processes.
+
+## Configuration
+
+All constants are optional. Define them in `wp-config.php` before the plugin loads, or before Queuety boots in an embedded theme-style install:
+
+| Constant | Default | Description |
+|---|---|---|
+| `QUEUETY_RETENTION_DAYS` | `7` | Auto-purge completed jobs after N days |
+| `QUEUETY_LOG_RETENTION_DAYS` | `0` | Auto-purge logs after N days (0 = keep forever) |
+| `QUEUETY_MAX_EXECUTION_TIME` | `300` | Max seconds per job before timeout |
+| `QUEUETY_WORKER_SLEEP` | `1` | Seconds to sleep when queue is empty |
+| `QUEUETY_WORKER_MAX_JOBS` | `1000` | Max jobs before worker restarts |
+| `QUEUETY_WORKER_MAX_MEMORY` | `128` | Max MB before worker restarts |
+| `QUEUETY_RETRY_BACKOFF` | `exponential` | Backoff strategy: `exponential`, `linear`, or `fixed` |
+| `QUEUETY_STALE_TIMEOUT` | `600` | Seconds before stuck jobs are recovered |
+| `QUEUETY_CACHE_TTL` | `5` | Default cache TTL in seconds |
+| `QUEUETY_DEBUG` | `false` | Enable verbose worker logging |
+| `QUEUETY_CLI_COMMAND` | `queuety` | Root WP-CLI command name |
+| `QUEUETY_TABLE_PREFIX` | `queuety_` | Shared base name for all Queuety tables after the WordPress DB prefix |
+| `QUEUETY_TABLE_JOBS` | `queuety_jobs` | Jobs table name |
+| `QUEUETY_TABLE_WORKFLOWS` | `queuety_workflows` | Workflows table name |
+| `QUEUETY_TABLE_LOGS` | `queuety_logs` | Logs table name |
+| `QUEUETY_TABLE_SCHEDULES` | `queuety_schedules` | Schedules table name |
+| `QUEUETY_TABLE_SIGNALS` | `queuety_signals` | Signals table name |
+| `QUEUETY_TABLE_WORKFLOW_DEPENDENCIES` | `queuety_workflow_dependencies` | Workflow dependency waits table name |
+| `QUEUETY_TABLE_WORKFLOW_DISPATCH_KEYS` | `queuety_workflow_dispatch_keys` | Durable workflow idempotency table name |
+| `QUEUETY_TABLE_CHUNKS` | `queuety_chunks` | Streaming chunks table name |
+| `QUEUETY_TABLE_QUEUE_STATES` | `queuety_queue_states` | Queue states table name |
+| `QUEUETY_TABLE_WEBHOOKS` | `queuety_webhooks` | Webhooks table name |
+
+`QUEUETY_TABLE_PREFIX` changes only the Queuety portion of the table names. The WordPress database prefix still wraps the result, so `$wpdb->prefix = 'wp_'` and `QUEUETY_TABLE_PREFIX = 'themequeue_'` produce tables like `wp_themequeue_jobs`. Explicit `QUEUETY_TABLE_*` constants still win for individual tables.
+
+Standalone connections can also set the Queuety table prefix per connection:
+
+```php
+$conn = new Connection(
+    host: '127.0.0.1:3306',
+    dbname: 'wordpress',
+    user: 'root',
+    password: 'secret',
+    prefix: 'wp_',
+    table_prefix: 'themequeue_',
+);
+```
+
+That keeps the WordPress database prefix intact and changes only the Queuety
+table segment.
+
+## Your first job
+
+Create a handler class that implements the `Handler` interface:
+
+```php
+use Queuety\Handler;
+
+class SendEmailHandler implements Handler {
+    public function handle( array $payload ): void {
+        wp_mail( $payload['to'], $payload['subject'], $payload['body'] );
+    }
+
+    public function config(): array {
+        return [
+            'queue'           => 'emails',
+            'max_attempts'    => 5,
+        ];
+    }
+}
+```
+
+Register it and dispatch:
+
+```php
+use Queuety\Queuety;
+
+Queuety::register( 'send_email', SendEmailHandler::class );
+
+Queuety::dispatch( 'send_email', [
+    'to'      => 'user@example.com',
+    'subject' => 'Welcome',
+    'body'    => 'Hello from Queuety!',
+] );
+```
+
+Or use the modern dispatchable job class:
+
+```php
+use Queuety\Contracts\Job;
+use Queuety\Dispatchable;
+
+readonly class SendEmailJob implements Job {
+    use Dispatchable;
+
+    public function __construct(
+        public string $to,
+        public string $subject,
+        public string $body,
+    ) {}
+
+    public function handle(): void {
+        wp_mail( $this->to, $this->subject, $this->body );
+    }
+}
+
+SendEmailJob::dispatch( 'user@example.com', 'Welcome', 'Hello from Queuety!' );
+```
+
+## Your first workflow
+
+Define step handlers that implement the `Step` interface:
+
+```php
+use Queuety\Step;
+
+class FetchDataHandler implements Step {
+    public function handle( array $state ): array {
+        $user = get_user_by( 'ID', $state['user_id'] );
+        return [ 'user_name' => $user->display_name ];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+
+class CallLLMHandler implements Step {
+    public function handle( array $state ): array {
+        $response = wp_remote_post( 'https://api.openai.com/v1/chat/completions', [
+            'body' => json_encode( [ 'prompt' => "Generate report for {$state['user_name']}" ] ),
+        ] );
+        return [ 'llm_response' => wp_remote_retrieve_body( $response ) ];
+    }
+
+    public function config(): array {
+        return [ 'max_attempts' => 5 ];
+    }
+}
+
+class FormatOutputHandler implements Step {
+    public function handle( array $state ): array {
+        $url = save_report( $state['user_name'], $state['llm_response'] );
+        return [ 'report_url' => $url ];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+```
+
+Dispatch the workflow:
+
+```php
+$workflow_id = Queuety::workflow( 'generate_report' )
+    ->then( FetchDataHandler::class )
+    ->then( CallLLMHandler::class )
+    ->then( FormatOutputHandler::class )
+    ->dispatch( [ 'user_id' => 42 ] );
+```
+
+## Start a worker
+
+```bash
+wp queuety work
+```
+
+The worker polls for pending jobs, executes them, advances workflows, and sleeps when the queue is empty. Press `Ctrl+C` to stop.
+
+If you do not run a dedicated worker, Queuety still has the default once-per-minute WordPress cron fallback described above. The dedicated worker is the higher-throughput, lower-latency option.
+
+For production, run multiple workers:
+
+```bash
+wp queuety work --workers=4
+```
+
+Process multiple queues with priority ordering:
+
+```bash
+wp queuety work --queue=high,default,low
+```
+
+## What's next
+
+- [Jobs](/docs/jobs) for the complete dispatch and handler guide
+- [Workflows](/docs/workflows) for chains, parallel steps, conditional branching, and run-workflows
+- [Middleware](/docs/features/middleware) for rate limiting, throttling, and custom pipeline logic
+- [Batching](/docs/features/batching) for dispatching groups of jobs with callbacks
+- [Streaming Steps](/docs/workflows/streaming) for persisting streamed data chunk by chunk
+- [Scheduling](/docs/features/scheduling) for recurring jobs
+- [Caching](/docs/features/caching) for the pluggable cache layer
+- [Testing](/docs/features/testing) for QueueFake and test assertions
+- [CLI Reference](/docs/cli) for all available commands
+- [PHP API](/docs/api) for programmatic access

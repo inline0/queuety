@@ -1,0 +1,514 @@
+---
+title: "Jobs"
+description: "Dispatching, handling, and managing background jobs."
+path: "jobs"
+order: 2
+section: "Documentation"
+meta_title: "Jobs"
+meta_description: "Dispatching, handling, and managing background jobs."
+---
+
+# Jobs
+
+Jobs are the core unit of work in Queuety. Dispatch a job with a handler name and payload, and a worker picks it up and executes it in the background.
+
+## Dispatching jobs
+
+```php
+use Queuety\Queuety;
+
+Queuety::dispatch( 'send_email', [ 'to' => 'user@example.com' ] );
+```
+
+`dispatch()` returns a `PendingJob` builder. You can chain options before it auto-dispatches:
+
+```php
+use Queuety\Enums\Priority;
+
+Queuety::dispatch( 'send_email', [ 'to' => 'user@example.com' ] )
+    ->on_queue( 'emails' )
+    ->with_priority( Priority::High )
+    ->delay( 300 )
+    ->max_attempts( 5 );
+```
+
+To get the job ID immediately, call `->id()`:
+
+```php
+$job_id = Queuety::dispatch( 'send_email', $payload )->id();
+```
+
+## Writing handlers
+
+A handler is any class that implements the `Queuety\Handler` interface:
+
+```php
+use Queuety\Handler;
+
+class SendEmailHandler implements Handler {
+    public function handle( array $payload ): void {
+        wp_mail( $payload['to'], $payload['subject'], $payload['body'] );
+    }
+
+    public function config(): array {
+        return [
+            'queue'           => 'emails',
+            'max_attempts'    => 5,
+            'backoff'         => 'exponential',
+        ];
+    }
+}
+```
+
+The `handle()` method receives the job payload and performs the work. The `config()` method returns optional defaults:
+
+| Key | Type | Description |
+|---|---|---|
+| `queue` | `string` | Default queue name |
+| `max_attempts` | `int` | Maximum retry attempts |
+| `backoff` | `string` | Retry backoff strategy: `exponential`, `linear`, or `fixed` |
+| `rate_limit` | `array` | Rate limit as `[max_executions, window_seconds]` |
+| `concurrency_group` | `string` | Shared worker admission group for expensive handlers |
+| `concurrency_limit` | `int` | Maximum concurrent processing jobs inside that group |
+| `cost_units` | `int` | Relative execution cost used by weighted queue or provider budgets, workflow budgets, and admission heuristics |
+
+These resource keys are part of Queuety's broader [Resource Management](/docs/features/resource-management) model, where job metadata, workflow budgets, and worker admission all work together.
+
+Register the handler:
+
+```php
+Queuety::register( 'send_email', SendEmailHandler::class );
+```
+
+Or use [PHP attributes](/docs/features/attributes) for auto-registration.
+
+## Priority
+
+Jobs have four priority levels. Higher priority jobs are claimed first by workers.
+
+```php
+use Queuety\Enums\Priority;
+
+Queuety::dispatch( 'handler', $payload )->with_priority( Priority::Urgent );
+```
+
+| Level | Value | Description |
+|---|---|---|
+| `Priority::Low` | `0` | Default. Background work that can wait. |
+| `Priority::Normal` | `1` | Standard priority. |
+| `Priority::High` | `2` | Processed before Low and Normal. |
+| `Priority::Urgent` | `3` | Processed first. Use sparingly. |
+
+## Delay
+
+Delay a job so it becomes available only after the specified number of seconds:
+
+```php
+Queuety::dispatch( 'send_reminder', $payload )->delay( 3600 ); // 1 hour
+```
+
+The job is inserted immediately but workers will not claim it until the delay has elapsed.
+
+## Unique jobs
+
+Prevent duplicate dispatches for the same handler and payload. If a pending or processing job already exists with the same handler and payload, the existing job ID is returned instead of creating a new one.
+
+```php
+Queuety::dispatch( 'sync_inventory', [ 'sku' => 'ABC-123' ] )->unique();
+```
+
+## Job dependencies
+
+A job can depend on another job. It will not be claimed by a worker until the dependency has completed.
+
+```php
+$first_id = Queuety::dispatch( 'import_data', $payload )->id();
+
+Queuety::dispatch( 'send_notification', [ 'import_id' => $first_id ] )
+    ->after( $first_id );
+```
+
+## Batch dispatch
+
+Dispatch multiple jobs in a single multi-row INSERT for maximum throughput:
+
+```php
+$job_ids = Queuety::batch( [
+    [ 'handler' => 'send_email', 'payload' => [ 'to' => 'a@example.com' ] ],
+    [ 'handler' => 'send_email', 'payload' => [ 'to' => 'b@example.com' ] ],
+    [ 'handler' => 'send_email', 'payload' => [ 'to' => 'c@example.com' ] ],
+] );
+```
+
+Each item can include optional keys: `queue`, `priority`, `delay`, `max_attempts`.
+
+## Retry and backoff
+
+When a job throws an exception, Queuety retries it up to `max_attempts` times. The delay between retries is determined by the backoff strategy:
+
+| Strategy | Delay formula | Example (attempt 2, 3, 4) |
+|---|---|---|
+| `exponential` | `2^attempt` seconds | 4s, 8s, 16s |
+| `linear` | `attempt * 5` seconds | 10s, 15s, 20s |
+| `fixed` | `5` seconds | 5s, 5s, 5s |
+
+Set the global default in `wp-config.php`:
+
+```php
+define( 'QUEUETY_RETRY_BACKOFF', 'linear' );
+```
+
+Or per handler in `config()`:
+
+```php
+public function config(): array {
+    return [ 'backoff' => 'exponential', 'max_attempts' => 5 ];
+}
+```
+
+Or per dispatch:
+
+```php
+Queuety::dispatch( 'handler', $payload )->max_attempts( 10 );
+```
+
+## Buried jobs
+
+After exhausting all retry attempts, a job is marked as **buried**. Buried jobs stay in the database for inspection but are not processed. You can retry them manually:
+
+```php
+// Retry a specific buried job
+Queuety::retry( $job_id );
+
+// Retry all buried jobs
+$count = Queuety::retry_buried();
+```
+
+Or via CLI:
+
+```bash
+wp queuety retry 42
+wp queuety retry-buried
+```
+
+## Timeout
+
+Jobs that exceed the max execution time are killed and retried. Configure the timeout globally:
+
+```php
+define( 'QUEUETY_MAX_EXECUTION_TIME', 300 ); // 5 minutes
+```
+
+Jobs that are stuck in `processing` status longer than `QUEUETY_STALE_TIMEOUT` seconds are automatically recovered:
+
+```php
+define( 'QUEUETY_STALE_TIMEOUT', 600 ); // 10 minutes
+```
+
+Recover stale jobs manually:
+
+```bash
+wp queuety recover
+```
+
+## Queues
+
+Jobs are dispatched to named queues. Workers process one queue at a time:
+
+```php
+Queuety::dispatch( 'handler', $payload )->on_queue( 'emails' );
+```
+
+```bash
+wp queuety work --queue=emails
+```
+
+The default queue is `default`. You can run separate worker processes for each queue to isolate workloads.
+
+## Rate limiting
+
+Limit how often a handler can execute within a time window:
+
+```php
+Queuety::dispatch( 'call_api', $payload )
+    ->rate_limit( 10, 60 ); // max 10 executions per 60 seconds
+```
+
+See [Rate Limiting](/docs/features/rate-limiting) for details.
+
+## Dispatchable job classes
+
+Queuety v0.6.0 introduces a class-based job API. Instead of separating handler name, payload, and handler class, you define a single class that encapsulates everything: the payload (as typed public properties), the execution logic, and optional middleware.
+
+### The `Contracts\Job` interface
+
+```php
+use Queuety\Contracts\Job;
+
+interface Job {
+    public function handle(): void;
+}
+```
+
+A `Job` class holds its payload as public properties and executes its own logic in `handle()`. There is no separate `config()` method or handler registration required.
+
+### The `Dispatchable` trait
+
+Add the `Dispatchable` trait to get a static `dispatch()` method on your job class:
+
+```php
+use Queuety\Contracts\Job;
+use Queuety\Dispatchable;
+
+class SendEmailJob implements Job {
+    use Dispatchable;
+
+    public function __construct(
+        public readonly string $to,
+        public readonly string $subject,
+        public readonly string $body,
+    ) {}
+
+    public function handle(): void {
+        wp_mail( $this->to, $this->subject, $this->body );
+    }
+}
+```
+
+Dispatch it by passing constructor arguments:
+
+```php
+SendEmailJob::dispatch( 'user@example.com', 'Welcome!', 'Hello there.' )
+    ->on_queue( 'emails' )
+    ->with_priority( Priority::High );
+```
+
+The `Dispatchable` trait calls `Queuety::dispatch()` internally, so all `PendingJob` options (queue, priority, delay, max_attempts, unique, after) work exactly the same.
+
+### How serialization works
+
+When you dispatch a `Job` instance, Queuety's `JobSerializer` extracts the fully qualified class name as the handler and all public properties as the payload. On the worker side, the serializer reconstructs the instance by matching payload keys to constructor parameter names. Backed enums are serialized to their underlying value and restored automatically.
+
+### Job properties
+
+Job classes can declare public properties to control retry and timeout behavior. The worker reads these via reflection and applies them automatically.
+
+```php
+use Queuety\Contracts\Job;
+use Queuety\Dispatchable;
+
+class ImportProductsJob implements Job {
+    use Dispatchable;
+
+    public int $tries = 5;
+    public int $timeout = 120;
+    public array $backoff = [ 10, 30, 60, 120 ];
+    public string $concurrency_group = 'imports';
+    public int $concurrency_limit = 2;
+    public int $cost_units = 4;
+
+    public function __construct(
+        public readonly int $supplier_id,
+    ) {}
+
+    public function handle(): void {
+        // Import products...
+    }
+}
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `$tries` | `int` | Maximum number of attempts before the job is buried. Overrides the dispatch-time `max_attempts` value. |
+| `$timeout` | `int` | Maximum execution time in seconds. Overrides the global `QUEUETY_MAX_EXECUTION_TIME` constant. Requires `pcntl`. |
+| `$backoff` | `array` | Array of delay values in seconds for each retry attempt. The last value is reused for subsequent attempts. |
+| `$concurrency_group` | `string` | Shared worker-admission group for expensive jobs. |
+| `$concurrency_limit` | `int` | Maximum concurrent `processing` jobs in that group. Ignored without `$concurrency_group`. |
+| `$cost_units` | `int` | Relative execution cost used by workflow budgets and worker admission. |
+
+The `$backoff` array provides escalating retry delays. For example, `[10, 30, 60, 120]` means the first retry waits 10 seconds, the second 30 seconds, the third 60 seconds, and any further retries wait 120 seconds.
+
+The resource-related properties are useful when job classes represent different cost profiles. A fast cache refresh and a large provider call can both be "one job", but they should not necessarily count the same way when a workflow budget or worker admission decision is trying to keep the process inside a safe envelope.
+
+For the full model, including workflow budgets and worker-side admission, see [Resource Management](/docs/features/resource-management).
+
+### Failed hook
+
+When a job is buried after exhausting all retry attempts, Queuety calls a `failed()` method on the job instance if one is defined. Use it for cleanup, alerting, or logging.
+
+```php
+use Queuety\Contracts\Job;
+use Queuety\Dispatchable;
+
+class ProcessPaymentJob implements Job {
+    use Dispatchable;
+
+    public int $tries = 3;
+
+    public function __construct(
+        public readonly int $order_id,
+    ) {}
+
+    public function handle(): void {
+        // Process the payment...
+    }
+
+    public function failed( \Throwable $exception ): void {
+        // Notify the team that payment processing failed permanently.
+        error_log( "Payment failed for order {$this->order_id}: {$exception->getMessage()}" );
+    }
+}
+```
+
+The `failed()` method receives the exception that caused the final failure. The job instance is deserialized with its original payload, so all public properties are available.
+
+### Conditional dispatch
+
+The `Dispatchable` trait provides `dispatch_if()` and `dispatch_unless()` for conditional dispatching. Both accept a boolean condition as the first argument followed by the job constructor arguments.
+
+```php
+// Only dispatch if the user has opted in to notifications.
+SendEmailJob::dispatch_if( $user->wants_notifications, $user->email, 'Update', $body );
+
+// Dispatch unless the feature flag is disabled.
+SyncInventoryJob::dispatch_unless( $maintenance_mode, $sku );
+```
+
+`dispatch_if()` dispatches when the condition is `true` and returns the `PendingJob`. It returns `null` when the condition is `false`.
+
+`dispatch_unless()` dispatches when the condition is `false` and returns the `PendingJob`. It returns `null` when the condition is `true`.
+
+Both methods support chaining `PendingJob` options when they dispatch:
+
+```php
+SendEmailJob::dispatch_if( $should_send, $to, $subject, $body )
+    ?->on_queue( 'emails' )
+    ?->with_priority( Priority::High );
+```
+
+### Synchronous dispatch
+
+Use `Queuety::dispatch_sync()` to execute a job immediately in the current process without adding it to the queue. This is useful for testing and for jobs that must run inline.
+
+```php
+use Queuety\Queuety;
+
+// With a Job instance
+Queuety::dispatch_sync( new SendEmailJob( to: 'user@example.com', subject: 'Hello', body: 'Hi!' ) );
+
+// With a handler name and payload
+Queuety::dispatch_sync( 'send_email', [ 'to' => 'user@example.com' ] );
+```
+
+The job's `handle()` method is called directly. No database row is created, no worker is involved, and middleware is not applied.
+
+### Job chaining
+
+Job chaining executes a sequence of jobs one after another. Each job in the chain depends on the previous job completing successfully. If any job fails, subsequent jobs in the chain remain pending.
+
+#### Using `Queuety::chain()`
+
+```php
+use Queuety\Queuety;
+
+$first_job_id = Queuety::chain( [
+    new FetchDataJob( $url ),
+    new ProcessDataJob(),
+    new NotifyCompleteJob(),
+] )
+    ->on_queue( 'pipeline' )
+    ->catch( ChainFailedHandler::class )
+    ->dispatch();
+```
+
+`Queuety::chain()` returns a `ChainBuilder` with fluent methods for setting the queue and a failure handler. The `dispatch()` method creates all jobs with sequential `depends_on` relationships and returns the ID of the first job.
+
+#### Using `with_chain()`
+
+The `Dispatchable` trait provides a `with_chain()` method as a shorthand for starting a chain from a specific job class:
+
+```php
+FetchDataJob::with_chain( [
+    new ProcessDataJob(),
+    new NotifyCompleteJob(),
+] )
+    ->on_queue( 'pipeline' )
+    ->dispatch();
+```
+
+#### Chain failure handling
+
+Register a failure handler class using `catch()`. The handler class must have a `handle()` method. It is called when any job in the chain is permanently buried. The worker supports `handle()`, `handle( Job $job )`, and `handle( Job $job, \Throwable $exception )`.
+
+```php
+class ChainFailedHandler {
+    public function handle(): void {
+        // Alert, clean up, etc.
+    }
+}
+```
+
+### Adding middleware
+
+Job classes can define a `middleware()` method to return middleware that wraps execution:
+
+```php
+use Queuety\Contracts\Job;
+use Queuety\Dispatchable;
+use Queuety\Middleware\RateLimited;
+use Queuety\Middleware\Timeout;
+
+class CallOpenAIJob implements Job {
+    use Dispatchable;
+
+    public function __construct(
+        public readonly string $prompt,
+    ) {}
+
+    public function handle(): void {
+        // Call the API...
+    }
+
+    public function middleware(): array {
+        return [
+            new RateLimited( max: 60, window: 60 ),
+            new Timeout( seconds: 120 ),
+        ];
+    }
+}
+```
+
+See [Middleware](/docs/features/middleware) for details on built-in middleware and writing custom middleware.
+
+### Comparison with handler-based jobs
+
+| | Handler-based (v0.1+) | Class-based (v0.6+) |
+|---|---|---|
+| Dispatch | `Queuety::dispatch( 'send_email', $payload )` | `SendEmailJob::dispatch( $to, $subject )` |
+| Handler | Separate class implementing `Handler` | Same class implements `Contracts\Job` |
+| Payload | Untyped `array $payload` | Typed public properties |
+| Registration | `Queuety::register()` or `#[QueuetyHandler]` | Not required (uses FQCN) |
+| Middleware | Not available | Optional `middleware()` method |
+| Config | `config()` method | Job properties + `PendingJob` chain |
+
+Both approaches are fully supported. Existing handler-based jobs continue to work without changes. You can mix both styles in the same project.
+
+## Job lifecycle
+
+```
+dispatch() -> pending -> processing -> completed
+                  |           |
+                  |           +-> failed -> retry -> pending
+                  |                           |
+                  |                           +-> buried (max attempts exceeded)
+                  |
+                  +-> delayed (available_at in the future)
+```
+
+| Status | Description |
+|---|---|
+| `pending` | Waiting to be claimed by a worker |
+| `processing` | Currently being executed |
+| `completed` | Successfully finished |
+| `failed` | Threw an exception, will be retried |
+| `buried` | All retry attempts exhausted |

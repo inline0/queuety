@@ -1,0 +1,47 @@
+---
+title: "Debug Mode"
+description: "Verbose worker logging for development and troubleshooting."
+path: "features/debug"
+order: 40
+section: "Features"
+meta_title: "Debug Mode"
+meta_description: "Verbose worker logging for development and troubleshooting."
+---
+
+# Debug Mode
+
+Enable debug mode for verbose worker output during development. When enabled, the worker logs additional information about every job claim, execution, and state transition.
+
+## Enabling debug mode
+
+Define the constant in `wp-config.php`:
+
+```php
+define( 'QUEUETY_DEBUG', true );
+```
+
+## What it does
+
+With debug mode enabled:
+
+- The worker logs every job claim, execution start, and completion to the database with `LogEvent::Debug` entries
+- Additional context is written to the log table, including handler resolution, state transitions, and timing details
+- Worker loop activity (polling, sleeping, schedule ticks) is logged
+
+## Checking debug status
+
+```php
+use Queuety\Config;
+
+if ( Config::debug() ) {
+    // Debug mode is active
+}
+```
+
+## When to use it
+
+- **During development.** Trace the full lifecycle of jobs and workflows to verify behavior.
+- **Troubleshooting failures.** Get detailed context around why a job failed or a workflow stalled.
+- **Performance investigation.** See timing details for each step in a pipeline.
+
+Disable debug mode in production to avoid filling the log table with high-volume debug entries. If you have `QUEUETY_LOG_RETENTION_DAYS` set, debug logs are purged automatically with other log entries.

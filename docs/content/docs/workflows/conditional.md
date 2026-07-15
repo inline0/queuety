@@ -1,0 +1,129 @@
+---
+title: "Conditional Branching"
+description: "Using named steps and _next_step to branch workflow execution."
+path: "workflows/conditional"
+order: 10
+section: "Workflows"
+meta_title: "Conditional Branching"
+meta_description: "Using named steps and _next_step to branch workflow execution."
+---
+
+# Conditional Branching
+
+Workflows can skip to a named step based on the output of a previous step. This is done by returning a special `_next_step` key in the step's return value.
+
+If you specifically want to jump back to an earlier step based on workflow state, see [Repeats](/docs/workflows/repeats). That keeps the back-edge explicit in the workflow definition instead of burying it inside a step class.
+
+## Named steps
+
+Give steps a name using the second argument to `->then()`:
+
+```php
+use Queuety\Queuety;
+
+Queuety::workflow( 'process_order' )
+    ->then( ValidateOrderHandler::class, 'validate' )
+    ->then( ChargePaymentHandler::class, 'charge' )
+    ->then( FulfillOrderHandler::class, 'fulfill' )
+    ->then( SendConfirmationHandler::class, 'confirm' )
+    ->then( HandleFailureHandler::class, 'failure' )
+    ->dispatch( [ 'order_id' => 123 ] );
+```
+
+Without an explicit name, steps are named by their index (`'0'`, `'1'`, `'2'`, etc.).
+
+## The `_next_step` key
+
+A step can return `_next_step` to jump to a named step, skipping everything in between:
+
+```php
+use Queuety\Step;
+
+class ValidateOrderHandler implements Step {
+    public function handle( array $state ): array {
+        $order = wc_get_order( $state['order_id'] );
+
+        if ( ! $order || $order->get_status() === 'cancelled' ) {
+            return [
+                'error'  => 'Order is invalid or cancelled',
+                '_next_step'  => 'failure',
+            ];
+        }
+
+        return [
+            'order_total' => $order->get_total(),
+            'customer_id' => $order->get_customer_id(),
+        ];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+```
+
+When `ValidateOrderHandler` returns `_next_step => 'failure'`, the workflow skips `charge`, `fulfill`, and `confirm`, jumping directly to the `failure` step. The `_next_step` key is consumed by the workflow engine and not persisted in the state.
+
+## Branching patterns
+
+### Skip on condition
+
+```php
+class CheckInventoryHandler implements Step {
+    public function handle( array $state ): array {
+        $in_stock = check_inventory( $state['sku'] );
+
+        if ( ! $in_stock ) {
+            return [
+                'reason' => 'Out of stock',
+                '_next_step'  => 'notify_backorder',
+            ];
+        }
+
+        return [ 'inventory_reserved' => true ];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+```
+
+### Early completion
+
+Jump to the final step to skip unnecessary processing:
+
+```php
+class CheckCacheHandler implements Step {
+    public function handle( array $state ): array {
+        $cached = get_transient( "report_{$state['user_id']}" );
+
+        if ( $cached ) {
+            return [
+                'report_url' => $cached,
+                '_next_step'      => 'done',
+            ];
+        }
+
+        return [ 'cache_miss' => true ];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+```
+
+## Complete example
+
+```php
+Queuety::workflow( 'content_pipeline' )
+    ->then( CheckCacheHandler::class, 'check_cache' )
+    ->then( FetchDataHandler::class, 'fetch' )
+    ->then( CallLLMHandler::class, 'generate' )
+    ->then( SaveResultHandler::class, 'save' )
+    ->then( ReturnCachedHandler::class, 'done' )
+    ->dispatch( [ 'user_id' => 42 ] );
+```
+
+If the cache check finds a hit, the workflow jumps from `check_cache` directly to `done`, skipping `fetch`, `generate`, and `save`.

@@ -1,0 +1,142 @@
+---
+title: "Repeats"
+description: "Repeat an earlier workflow step until or while a state condition matches."
+path: "workflows/repeats"
+order: 11
+section: "Workflows"
+meta_title: "Repeats"
+meta_description: "Repeat an earlier workflow step until or while a state condition matches."
+---
+
+# Repeats
+
+Queuety workflows are ordered step chains. Use a repeat control step to revisit an earlier named step instead of hand-writing `_next_step` logic.
+
+Choose the form that matches the workflow:
+
+- a public `state_key` when the condition is simple
+- a `condition_class` when the repeat needs richer logic
+- `max_iterations` when the repeat itself needs a hard stop
+
+Both methods target an earlier named step, so the repeat stays serializable, replayable, and guarded by the same workflow runtime as every other step.
+
+The repeat condition is evaluated from the persisted public workflow state after the preceding step completes, so every iteration stays durable across worker restarts.
+
+## `repeat_until()` with a state key
+
+```php
+Queuety::workflow( 'approval_revision_loop' )
+    ->max_transitions( 12 )
+    ->then( DraftBriefStep::class, 'draft' )
+    ->wait_for_decision( result_key: 'review' )
+    ->then( NormalizeReviewOutcomeStep::class, 'review_outcome' )
+    ->repeat_until( 'draft', 'review_approved', true, 'repeat_draft_until_approved' )
+    ->then( PublishBriefStep::class )
+    ->dispatch( [ 'brief_id' => 42 ] );
+```
+
+`NormalizeReviewOutcomeStep` can flatten the decision payload into a simple public key:
+
+```php
+class NormalizeReviewOutcomeStep implements \Queuety\Step {
+    public function handle( array $state ): array {
+        return [
+            'review_approved' => 'approved' === ( $state['review']['outcome'] ?? null ),
+        ];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+```
+
+If `review_approved` is still not `true`, the repeat step jumps back to `draft`. Once it becomes `true`, the workflow falls through to `PublishBriefStep`.
+
+## `repeat_until()` with a condition class
+
+```php
+use App\Workflows\ReviewApprovedCondition;
+
+Queuety::workflow( 'approval_revision_loop' )
+    ->then( DraftBriefStep::class, 'draft' )
+    ->wait_for_decision( result_key: 'review' )
+    ->repeat_until(
+        target_step: 'draft',
+        condition_class: ReviewApprovedCondition::class,
+        max_iterations: 5,
+        name: 'repeat_draft_until_approved',
+    )
+    ->then( PublishBriefStep::class )
+    ->dispatch( [ 'brief_id' => 42 ] );
+```
+
+```php
+namespace App\Workflows;
+
+use Queuety\Contracts\RepeatCondition;
+
+final class ReviewApprovedCondition implements RepeatCondition {
+    public function matches( array $state ): bool {
+        return 'approved' === ( $state['review']['outcome'] ?? null );
+    }
+}
+```
+
+Condition classes receive the public workflow state, so the predicate stays serializable and inspectable without relying on closures.
+
+## `repeat_while()`
+
+```php
+Queuety::workflow( 'poll_remote_status' )
+    ->max_transitions( 20 )
+    ->then( PollRemoteStatusStep::class, 'poll' )
+    ->delay( seconds: 30 )
+    ->repeat_while( 'poll', 'should_poll_again', true, 'repeat_poll' )
+    ->then( FinalizeImportStep::class )
+    ->dispatch( [ 'import_id' => 99 ] );
+```
+
+This pattern is useful when a step writes a simple boolean such as `should_poll_again`, `has_more_pages`, or `needs_revision`.
+
+## Why repeats are separate from `_next_step`
+
+You can still branch manually by returning `_next_step` from a normal step. The repeat helpers exist for the narrower case where:
+
+- the target is an earlier step
+- the condition comes from public workflow state
+- you want the repeat logic to stay visible in the workflow definition itself
+
+That makes repeats easier to inspect in exports, event logs, and docs than burying the back-edge inside arbitrary step code.
+
+## Guarding repeats
+
+Use `max_iterations` when one specific repeat needs a local hard stop:
+
+```php
+Queuety::workflow( 'poll_remote_status' )
+    ->then( PollRemoteStatusStep::class, 'poll' )
+    ->repeat_while( 'poll', 'should_poll_again', true, max_iterations: 8 )
+    ->dispatch();
+```
+
+Use `max_transitions()` when the entire workflow needs a broader dead-man switch:
+
+```php
+Queuety::workflow( 'safe_revision_loop' )
+    ->max_transitions( 10 )
+    ->then( DraftBriefStep::class, 'draft' )
+    ->wait_for_decision( result_key: 'review' )
+    ->then( NormalizeReviewOutcomeStep::class )
+    ->repeat_until( 'draft', 'review_approved', true )
+    ->dispatch();
+```
+
+If a repeat exceeds `max_iterations`, or the workflow exceeds `max_transitions()`, Queuety fails the run instead of letting it spin forever.
+
+## Related docs
+
+- [Conditional Branching](/docs/workflows/conditional)
+- [Signals](/docs/workflows/signals)
+- [Guardrails](/docs/workflows/guardrails)
+- [PHP API](/docs/api)

@@ -1,0 +1,111 @@
+---
+title: "Queue Management"
+description: "Pausing, resuming, and monitoring queues."
+path: "features/queue-management"
+order: 33
+section: "Features"
+meta_title: "Queue Management"
+meta_description: "Pausing, resuming, and monitoring queues."
+---
+
+# Queue Management
+
+Queuety supports multiple named queues. Workers process one queue at a time, and queues can be paused and resumed independently.
+
+## Named queues
+
+Dispatch jobs to specific queues:
+
+```php
+use Queuety\Queuety;
+
+Queuety::dispatch( 'send_email', $payload )->on_queue( 'emails' );
+Queuety::dispatch( 'process_image', $payload )->on_queue( 'media' );
+Queuety::dispatch( 'sync_data', $payload )->on_queue( 'sync' );
+```
+
+Run workers for each queue:
+
+```bash
+wp queuety work --queue=emails
+wp queuety work --queue=media
+wp queuety work --queue=sync
+```
+
+The default queue is `default`. If you don't specify a queue, jobs go there.
+
+## Pause and resume
+
+Pause a queue to stop workers from claiming new jobs. Jobs already being processed will finish, but no new jobs will be picked up.
+
+```php
+Queuety::pause( 'emails' );
+Queuety::resume( 'emails' );
+```
+
+Check if a queue is paused:
+
+```php
+if ( Queuety::is_paused( 'emails' ) ) {
+    // Queue is paused
+}
+```
+
+Via CLI:
+
+```bash
+wp queuety pause emails
+wp queuety resume emails
+```
+
+This is useful during deployments or maintenance windows when you want to temporarily stop processing without killing the worker.
+
+## Queue statistics
+
+Get job counts grouped by status:
+
+```php
+$stats = Queuety::stats(); // all queues
+$stats = Queuety::stats( 'emails' ); // specific queue
+
+// Returns: ['pending' => 12, 'processing' => 3, 'completed' => 150, 'failed' => 2, 'buried' => 1]
+```
+
+Via CLI:
+
+```bash
+wp queuety status
+wp queuety status --queue=emails
+```
+
+## Buried jobs
+
+List all buried jobs (failed after exhausting retries):
+
+```php
+$buried = Queuety::buried(); // all queues
+$buried = Queuety::buried( 'emails' ); // specific queue
+```
+
+Retry them:
+
+```php
+Queuety::retry( $job_id );       // retry a specific job
+Queuety::retry_buried();         // retry all buried jobs
+```
+
+## Purging completed jobs
+
+Remove old completed jobs to keep the database clean:
+
+```php
+$count = Queuety::purge();     // uses QUEUETY_RETENTION_DAYS (default: 7)
+$count = Queuety::purge( 30 ); // purge jobs older than 30 days
+```
+
+Via CLI:
+
+```bash
+wp queuety purge
+wp queuety purge --older-than=30
+```
