@@ -121,6 +121,24 @@ class Workflow {
 	}
 
 	/**
+	 * Narrow a mixed value to a for-each entry map keyed by int item index.
+	 *
+	 * @param mixed $value Value to narrow.
+	 * @return array<int, mixed>
+	 */
+	private function as_entry_map( mixed $value ): array {
+		if ( ! is_array( $value ) ) {
+			return array();
+		}
+
+		$out = array();
+		foreach ( $value as $key => $val ) {
+			$out[ (int) $key ] = $val;
+		}
+		return $out;
+	}
+
+	/**
 	 * Narrow a PDO fetch result to a typed row array.
 	 *
 	 * @param mixed $value Raw fetch result.
@@ -2868,15 +2886,15 @@ class Workflow {
 				$item        = $branch_meta['item'] ?? null;
 
 			if ( null !== $item_index ) {
-				$failures = $this->as_array( $runtime['failures'] ?? array() );
-				$results  = $this->as_array( $runtime['results'] ?? array() );
-				$failures[ (string) $this->to_int( $item_index ) ] = array(
+				$failures = $this->as_entry_map( $runtime['failures'] ?? array() );
+				$results  = $this->as_entry_map( $runtime['results'] ?? array() );
+				$failures[ $this->to_int( $item_index ) ] = array(
 					'index'         => $this->to_int( $item_index ),
 					'item'          => $item,
 					'error_message' => $error_message,
 					'job_id'        => $failed_job_id,
 				);
-				unset( $results[ (string) $this->to_int( $item_index ) ] );
+				unset( $results[ $this->to_int( $item_index ) ] );
 				$runtime['failures'] = $failures;
 				$runtime['results']  = $results;
 			}
@@ -3509,15 +3527,15 @@ class Workflow {
 				$runtime_items = $this->as_array( $runtime['items'] ?? array() );
 				$item         = $runtime_items[ $item_index ] ?? $branch_meta['item'] ?? null;
 
-				$runtime_results                          = $this->as_array( $runtime['results'] ?? array() );
-				$runtime_failures                         = $this->as_array( $runtime['failures'] ?? array() );
-				$runtime_results[ (string) $item_index ]  = array(
+				$runtime_results                = $this->as_entry_map( $runtime['results'] ?? array() );
+				$runtime_failures               = $this->as_entry_map( $runtime['failures'] ?? array() );
+				$runtime_results[ $item_index ] = array(
 					'index'  => $item_index,
 					'item'   => $item,
 					'output' => $step_output,
 					'job_id' => $completed_job_id,
 				);
-				unset( $runtime_failures[ (string) $item_index ] );
+				unset( $runtime_failures[ $item_index ] );
 				$runtime['results']  = $runtime_results;
 				$runtime['failures'] = $runtime_failures;
 
