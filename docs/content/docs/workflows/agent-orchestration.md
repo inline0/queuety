@@ -2,7 +2,7 @@
 title: "Agent Orchestration"
 description: "Build planner/executor, human-review, and cross-workflow agent systems with Queuety."
 path: "workflows/agent-orchestration"
-order: 8
+order: 80
 section: "Workflows"
 meta_title: "Agent Orchestration"
 meta_description: "Build planner/executor, human-review, and cross-workflow agent systems with Queuety."

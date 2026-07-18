@@ -2,7 +2,7 @@
 title: "Artifacts"
 description: "Persist durable workflow outputs outside the main workflow state bag."
 path: "features/artifacts"
-order: 31
+order: 310
 section: "Features"
 meta_title: "Artifacts"
 meta_description: "Persist durable workflow outputs outside the main workflow state bag."

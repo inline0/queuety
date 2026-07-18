@@ -2,7 +2,7 @@
 title: "Neuron Streaming Step"
 description: "Wrap a Neuron streaming agent in a durable Queuety StreamingStep."
 path: "examples/neuron-streaming-step"
-order: 50
+order: 500
 section: "Examples"
 meta_title: "Neuron Streaming Step"
 meta_description: "Wrap a Neuron streaming agent in a durable Queuety StreamingStep."

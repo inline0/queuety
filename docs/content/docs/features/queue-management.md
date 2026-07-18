@@ -2,7 +2,7 @@
 title: "Queue Management"
 description: "Pausing, resuming, and monitoring queues."
 path: "features/queue-management"
-order: 33
+order: 330
 section: "Features"
 meta_title: "Queue Management"
 meta_description: "Pausing, resuming, and monitoring queues."

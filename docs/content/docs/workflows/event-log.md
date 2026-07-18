@@ -2,7 +2,7 @@
 title: "Event Log"
 description: "Full workflow traces with input, output, state, context, artifacts, chunks, and errors."
 path: "workflows/event-log"
-order: 21
+order: 210
 section: "Workflows"
 meta_title: "Event Log"
 meta_description: "Full workflow traces with input, output, state, context, artifacts, chunks, and errors."

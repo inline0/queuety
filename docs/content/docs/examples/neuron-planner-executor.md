@@ -2,7 +2,7 @@
 title: "Neuron Planner / Executor"
 description: "Use Neuron agents inside Queuety planner/executor workflows with provider swapping."
 path: "examples/neuron-planner-executor"
-order: 48
+order: 480
 section: "Examples"
 meta_title: "Neuron Planner / Executor"
 meta_description: "Use Neuron agents inside Queuety planner/executor workflows with provider swapping."

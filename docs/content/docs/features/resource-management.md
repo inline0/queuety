@@ -2,7 +2,7 @@
 title: "Resource Management"
 description: "Concurrency groups, cost units, budgets, worker admission, and adaptive pools."
 path: "features/resource-management"
-order: 35
+order: 350
 section: "Features"
 meta_title: "Resource Management"
 meta_description: "Concurrency groups, cost units, budgets, worker admission, and adaptive pools."

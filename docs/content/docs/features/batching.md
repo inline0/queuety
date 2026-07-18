@@ -2,7 +2,7 @@
 title: "Batching"
 description: "Group jobs into a batch with progress tracking, callbacks, and cancellation."
 path: "features/batching"
-order: 30
+order: 300
 section: "Features"
 meta_title: "Batching"
 meta_description: "Group jobs into a batch with progress tracking, callbacks, and cancellation."

@@ -2,8 +2,8 @@
 title: "CLI"
 description: "Complete WP-CLI command reference for Queuety."
 path: "cli"
-order: 53
-section: "Documentation"
+order: 530
+section: "Reference"
 meta_title: "CLI"
 meta_description: "Complete WP-CLI command reference for Queuety."
 ---

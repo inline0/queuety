@@ -2,7 +2,7 @@
 title: "Heartbeats"
 description: "Activity heartbeats for long-running steps and streaming handlers."
 path: "features/heartbeats"
-order: 41
+order: 410
 section: "Features"
 meta_title: "Heartbeats"
 meta_description: "Activity heartbeats for long-running steps and streaming handlers."

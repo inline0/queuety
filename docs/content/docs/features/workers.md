@@ -2,7 +2,7 @@
 title: "Workers"
 description: "Worker lifecycle, concurrency, and production deployment."
 path: "features/workers"
-order: 34
+order: 340
 section: "Features"
 meta_title: "Workers"
 meta_description: "Worker lifecycle, concurrency, and production deployment."

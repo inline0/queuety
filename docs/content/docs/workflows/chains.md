@@ -2,7 +2,7 @@
 title: "Sequential Chains"
 description: "Building sequential step chains with the Step interface and state flow."
 path: "workflows/chains"
-order: 4
+order: 40
 section: "Workflows"
 meta_title: "Sequential Chains"
 meta_description: "Building sequential step chains with the Step interface and state flow."

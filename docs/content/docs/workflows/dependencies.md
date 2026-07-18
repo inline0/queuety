@@ -2,7 +2,7 @@
 title: "Workflow Dependencies"
 description: "Pause one workflow until other workflows complete."
 path: "workflows/dependencies"
-order: 9
+order: 90
 section: "Workflows"
 meta_title: "Workflow Dependencies"
 meta_description: "Pause one workflow until other workflows complete."

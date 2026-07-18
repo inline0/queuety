@@ -2,7 +2,7 @@
 title: "Caching"
 description: "In-process and shared cache layer for reducing database queries on hot paths."
 path: "features/caching"
-order: 43
+order: 430
 section: "Features"
 meta_title: "Caching"
 meta_description: "In-process and shared cache layer for reducing database queries on hot paths."

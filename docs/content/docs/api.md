@@ -2,8 +2,8 @@
 title: "API"
 description: "The Queuety\\Queuety class provides the complete PHP API for jobs, workflows, and state machines."
 path: "api"
-order: 54
-section: "Documentation"
+order: 540
+section: "Reference"
 meta_title: "API"
 meta_description: "The Queuety\\Queuety class provides the complete PHP API for jobs, workflows, and state machines."
 ---

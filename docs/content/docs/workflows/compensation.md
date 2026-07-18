@@ -2,7 +2,7 @@
 title: "Compensation"
 description: "Attach per-step rollback handlers and control when they run."
 path: "workflows/compensation"
-order: 18
+order: 180
 section: "Workflows"
 meta_title: "Compensation"
 meta_description: "Attach per-step rollback handlers and control when they run."

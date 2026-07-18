@@ -2,7 +2,7 @@
 title: "Neuron Memory + Review State Machine"
 description: "Keep Neuron chat memory across human review rounds with a Queuety state machine."
 path: "examples/neuron-memory-review"
-order: 51
+order: 510
 section: "Examples"
 meta_title: "Neuron Memory + Review State Machine"
 meta_description: "Keep Neuron chat memory across human review rounds with a Queuety state machine."

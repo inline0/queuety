@@ -2,7 +2,7 @@
 title: "Neuron Dependent Workflows"
 description: "Make one Neuron-powered workflow wait for another before it continues."
 path: "examples/neuron-dependent-workflows"
-order: 52
+order: 520
 section: "Examples"
 meta_title: "Neuron Dependent Workflows"
 meta_description: "Make one Neuron-powered workflow wait for another before it continues."

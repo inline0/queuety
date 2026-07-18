@@ -2,7 +2,7 @@
 title: "Neuron Session State Machine"
 description: "Govern a long-lived Neuron agent session with a Queuety state machine while workflows do the heavy work."
 path: "examples/neuron-session-state-machine"
-order: 49
+order: 490
 section: "Examples"
 meta_title: "Neuron Session State Machine"
 meta_description: "Govern a long-lived Neuron agent session with a Queuety state machine while workflows do the heavy work."

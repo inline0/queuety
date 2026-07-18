@@ -2,7 +2,7 @@
 title: "Standalone Use"
 description: "Use Queuety's DB-backed core outside WordPress."
 path: "features/standalone-use"
-order: 46
+order: 460
 section: "Features"
 meta_title: "Standalone Use"
 meta_description: "Use Queuety's DB-backed core outside WordPress."

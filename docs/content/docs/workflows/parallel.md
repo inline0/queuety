@@ -2,7 +2,7 @@
 title: "Parallel Steps"
 description: "Running multiple step handlers concurrently within a workflow."
 path: "workflows/parallel"
-order: 5
+order: 50
 section: "Workflows"
 meta_title: "Parallel Steps"
 meta_description: "Running multiple step handlers concurrently within a workflow."

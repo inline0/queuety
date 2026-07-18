@@ -2,7 +2,7 @@
 title: "Deadlines"
 description: "Set a maximum completion time for workflows with automatic failure handling."
 path: "workflows/deadlines"
-order: 24
+order: 240
 section: "Workflows"
 meta_title: "Deadlines"
 meta_description: "Set a maximum completion time for workflows with automatic failure handling."

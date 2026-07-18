@@ -2,7 +2,7 @@
 title: "State Pruning"
 description: "Automatic pruning of old workflow state to keep it bounded."
 path: "features/state-pruning"
-order: 42
+order: 420
 section: "Features"
 meta_title: "State Pruning"
 meta_description: "Automatic pruning of old workflow state to keep it bounded."

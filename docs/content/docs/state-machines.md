@@ -2,8 +2,8 @@
 title: "State Machines"
 description: "Model long-lived, event-driven lifecycle state with durable state machines."
 path: "state-machines"
-order: 26
-section: "Documentation"
+order: 260
+section: "State Machines"
 meta_title: "State Machines"
 meta_description: "Model long-lived, event-driven lifecycle state with durable state machines."
 ---

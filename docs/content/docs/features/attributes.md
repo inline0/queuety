@@ -2,7 +2,7 @@
 title: "PHP Attributes"
 description: "Auto-register handlers using PHP 8 attributes."
 path: "features/attributes"
-order: 39
+order: 390
 section: "Features"
 meta_title: "PHP Attributes"
 meta_description: "Auto-register handlers using PHP 8 attributes."

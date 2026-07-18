@@ -2,7 +2,7 @@
 title: "Cancellation"
 description: "Cancel workflows gracefully with optional cleanup handlers."
 path: "workflows/cancellation"
-order: 20
+order: 200
 section: "Workflows"
 meta_title: "Cancellation"
 meta_description: "Cancel workflows gracefully with optional cleanup handlers."

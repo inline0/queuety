@@ -2,7 +2,7 @@
 title: "Durable Delays"
 description: "Pause a workflow for a fixed duration using durable delay steps."
 path: "workflows/delays"
-order: 15
+order: 150
 section: "Workflows"
 meta_title: "Durable Delays"
 meta_description: "Pause a workflow for a fixed duration using durable delay steps."

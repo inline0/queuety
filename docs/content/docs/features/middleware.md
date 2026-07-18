@@ -2,7 +2,7 @@
 title: "Middleware"
 description: "Wrap job execution with reusable cross-cutting concerns like rate limiting, timeouts, and locking."
 path: "features/middleware"
-order: 29
+order: 290
 section: "Features"
 meta_title: "Middleware"
 meta_description: "Wrap job execution with reusable cross-cutting concerns like rate limiting, timeouts, and locking."

@@ -2,7 +2,7 @@
 title: "Dynamic For-Each"
 description: "Expand workflow work at runtime and aggregate it with explicit completion semantics."
 path: "workflows/for-each"
-order: 6
+order: 60
 section: "Workflows"
 meta_title: "Dynamic For-Each"
 meta_description: "Expand workflow work at runtime and aggregate it with explicit completion semantics."

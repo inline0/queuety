@@ -2,7 +2,7 @@
 title: "Workflow Templates"
 description: "Define reusable workflow templates and dispatch them by name."
 path: "workflows/templates"
-order: 13
+order: 130
 section: "Workflows"
 meta_title: "Workflow Templates"
 meta_description: "Define reusable workflow templates and dispatch them by name."

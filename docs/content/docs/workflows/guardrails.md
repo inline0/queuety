@@ -2,7 +2,7 @@
 title: "Guardrails"
 description: "Versioning, idempotent dispatch, and workflow budgets."
 path: "workflows/guardrails"
-order: 17
+order: 170
 section: "Workflows"
 meta_title: "Guardrails"
 meta_description: "Versioning, idempotent dispatch, and workflow budgets."

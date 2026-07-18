@@ -2,7 +2,7 @@
 title: "Metrics"
 description: "Per-handler throughput, latency, and error rate metrics."
 path: "features/metrics"
-order: 37
+order: 370
 section: "Features"
 meta_title: "Metrics"
 meta_description: "Per-handler throughput, latency, and error rate metrics."

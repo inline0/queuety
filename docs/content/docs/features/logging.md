@@ -2,7 +2,7 @@
 title: "Logging"
 description: "Database logging of job and workflow events."
 path: "features/logging"
-order: 36
+order: 360
 section: "Features"
 meta_title: "Logging"
 meta_description: "Database logging of job and workflow events."

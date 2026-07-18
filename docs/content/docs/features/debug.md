@@ -2,7 +2,7 @@
 title: "Debug Mode"
 description: "Verbose worker logging for development and troubleshooting."
 path: "features/debug"
-order: 40
+order: 400
 section: "Features"
 meta_title: "Debug Mode"
 meta_description: "Verbose worker logging for development and troubleshooting."

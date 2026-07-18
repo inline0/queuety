@@ -2,7 +2,7 @@
 title: "Scheduling"
 description: "Recurring jobs with interval and cron expressions."
 path: "features/scheduling"
-order: 27
+order: 270
 section: "Features"
 meta_title: "Scheduling"
 meta_description: "Recurring jobs with interval and cron expressions."

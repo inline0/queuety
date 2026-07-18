@@ -3,7 +3,7 @@ title: "Introduction"
 description: "Welcome to the Queuety documentation."
 path: "."
 order: 0
-section: "Documentation"
+section: "Getting Started"
 meta_title: "Introduction"
 meta_description: "Welcome to the Queuety documentation."
 ---

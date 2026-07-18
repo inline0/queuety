@@ -2,7 +2,7 @@
 title: "WP-Cron Replacement"
 description: "Replace WordPress built-in cron with Queuety's reliable scheduler."
 path: "features/wp-cron"
-order: 45
+order: 450
 section: "Features"
 meta_title: "WP-Cron Replacement"
 meta_description: "Replace WordPress built-in cron with Queuety's reliable scheduler."

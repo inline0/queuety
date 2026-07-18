@@ -2,7 +2,7 @@
 title: "Rate Limiting"
 description: "Per-handler execution rate limits with sliding windows."
 path: "features/rate-limiting"
-order: 28
+order: 280
 section: "Features"
 meta_title: "Rate Limiting"
 meta_description: "Per-handler execution rate limits with sliding windows."

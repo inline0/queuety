@@ -2,7 +2,7 @@
 title: "Workflow Signals"
 description: "Pause a workflow and wait for an external signal before continuing."
 path: "workflows/signals"
-order: 16
+order: 160
 section: "Workflows"
 meta_title: "Workflow Signals"
 meta_description: "Pause a workflow and wait for an external signal before continuing."

@@ -2,8 +2,8 @@
 title: "Jobs"
 description: "Dispatching, handling, and managing background jobs."
 path: "jobs"
-order: 2
-section: "Documentation"
+order: 20
+section: "Jobs"
 meta_title: "Jobs"
 meta_description: "Dispatching, handling, and managing background jobs."
 ---

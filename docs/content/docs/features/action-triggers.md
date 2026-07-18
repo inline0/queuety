@@ -2,7 +2,7 @@
 title: "Action Triggers"
 description: "Start durable workflows directly from WordPress action hooks."
 path: "features/action-triggers"
-order: 44
+order: 440
 section: "Features"
 meta_title: "Action Triggers"
 meta_description: "Start durable workflows directly from WordPress action hooks."

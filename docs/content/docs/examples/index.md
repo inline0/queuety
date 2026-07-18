@@ -2,7 +2,7 @@
 title: "Examples"
 description: "End-to-end examples that show how to use Queuety in real applications."
 path: "examples"
-order: 47
+order: 470
 section: "Examples"
 meta_title: "Examples"
 meta_description: "End-to-end examples that show how to use Queuety in real applications."

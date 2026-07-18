@@ -2,7 +2,7 @@
 title: "Streaming Steps"
 description: "Durable streaming with automatic chunk persistence and resumability."
 path: "workflows/streaming"
-order: 19
+order: 190
 section: "Workflows"
 meta_title: "Streaming Steps"
 meta_description: "Durable streaming with automatic chunk persistence and resumability."
