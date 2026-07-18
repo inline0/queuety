@@ -3,7 +3,6 @@ title: "Getting Started"
 description: "Install Queuety, configure it, and run your first job and workflow."
 path: "getting-started"
 order: 10
-section: "Getting Started"
 meta_title: "Getting Started"
 meta_description: "Install Queuety, configure it, and run your first job and workflow."
 ---
