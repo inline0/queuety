@@ -547,7 +547,7 @@ composer stan
 composer test:unit
 composer test:integration
 bash tests/e2e/run-all.sh
-npm --prefix docs run build
+node scripts/check-docs-content.mjs
 
 # Run wp-env E2E directly when you only want the WordPress runtime pass
 npm run test:e2e:wp-env

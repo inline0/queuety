@@ -43,12 +43,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: docs/package-lock.json
-      - run: npm ci
-        working-directory: docs
-      - run: npm run build
-        working-directory: docs
+      - run: node scripts/check-docs-content.mjs --root docs --expected-docs 55 --expected-nav 4
 
   test-unit:
     name: Unit Tests

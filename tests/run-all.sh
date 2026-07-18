@@ -37,7 +37,7 @@ run_check "Static Analysis" "composer stan"
 run_check "Unit Tests" "composer test:unit"
 run_check "Integration Tests" "composer test:integration"
 run_check "E2E Tests" "bash tests/e2e/run-all.sh"
-run_check "Docs" "npm --prefix docs run build"
+run_check "Docs" "node scripts/check-docs-content.mjs"
 
 echo "==========================================="
 if [[ $EXIT_CODE -eq 0 ]]; then
