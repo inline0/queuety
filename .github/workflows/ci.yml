@@ -141,3 +141,15 @@ jobs:
       - run: composer install --no-interaction
       - run: bash tests/e2e/install-node-deps.sh
       - run: bash tests/e2e/test-wp-env.sh
+
+  dependency-audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          tools: composer
+      - run: composer install --no-interaction
+      - run: composer audit --no-interaction
