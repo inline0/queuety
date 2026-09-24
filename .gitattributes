@@ -1,0 +1,20 @@
+# Composer installs this plugin from the tag's GitHub archive, which is built
+# with `git archive` and honours `export-ignore`. The plugin zip is built
+# separately by .github/workflows/dist.yml. Everything listed here is
+# development-only.
+
+/.github              export-ignore
+/.gitattributes       export-ignore
+/.gitignore           export-ignore
+/CLAUDE.md            export-ignore
+/.wp-env.json         export-ignore
+/PRD.md               export-ignore
+/docs                 export-ignore
+/package-lock.json    export-ignore
+/package.json         export-ignore
+/phpcs.xml            export-ignore
+/phpstan              export-ignore
+/phpstan.neon.dist    export-ignore
+/phpunit.xml.dist     export-ignore
+/scripts              export-ignore
+/tests                export-ignore
