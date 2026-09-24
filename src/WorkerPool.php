@@ -128,7 +128,15 @@ class WorkerPool {
 					break;
 				}
 
-				$this->handle_child_exit( $pid, is_int( $status ) ? $status : 0, $queue );
+				/**
+				 * The exit status pcntl_waitpid() writes back is always an int.
+				 *
+				 * PHPStan types that by-ref parameter differently across releases, so
+				 * an is_int() guard fails analysis on some versions and not others.
+				 *
+				 * @var int $status
+				 */
+				$this->handle_child_exit( $pid, $status, $queue );
 			}
 
 			// The scheduler must stay single-writer even when job execution is forked.
