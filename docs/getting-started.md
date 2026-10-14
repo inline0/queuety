@@ -11,9 +11,27 @@ meta_description: "Install Queuety, configure it, and run your first job and wor
 
 ## Installation
 
+### Requirements
+
+- PHP 8.2 or later and WordPress 6.4 or later
+- MySQL 8.0+ or MariaDB 10.6+. Workers claim jobs and due schedules with `SELECT ... FOR UPDATE SKIP LOCKED`, which older servers reject with a syntax error.
+- `mysqli` or `pdo_mysql` (see below)
+- WP-CLI on the server if you run dedicated workers with `wp queuety work`
+- The `pcntl` and `posix` PHP extensions if you run worker pools with `--workers` or `--min-workers`/`--max-workers`
+
 Queuety requires either `mysqli` or `pdo_mysql` in the PHP runtime that loads WordPress and WP-CLI. It chooses the driver automatically, preferring `mysqli` for WordPress runtimes and keeping `pdo_mysql` available for standalone/direct runtime use.
 
 If you want the DB-backed runtime without the WordPress plugin layer, see [Standalone Use](/docs/features/standalone-use). That path uses the same connection and runtime tables, but it does not include the WordPress hook bridges or WP-CLI registration.
+
+### From the release zip
+
+Every [GitHub release](https://github.com/inline0/queuety/releases) has a `queuety.zip` asset: the plugin with its Composer dependencies already installed. Install the latest one with WP-CLI:
+
+```bash
+wp plugin install https://github.com/inline0/queuety/releases/latest/download/queuety.zip --activate
+```
+
+Or download the zip and upload it under Plugins > Add New > Upload Plugin. This is the simplest path for a regular WordPress site.
 
 ### Via Composer for Composer-managed WordPress
 
@@ -27,11 +45,7 @@ Then activate the plugin:
 wp plugin activate queuety
 ```
 
-### Via a packaged plugin zip
-
-```bash
-wp plugin install /path/to/queuety.zip --activate
-```
+The package type is `wordpress-plugin`. Composer places it in your plugins directory only when the project requires `composer/installers` and maps that type to an installer path, as Bedrock does, and the project must load its own `vendor/autoload.php` (Bedrock does that too). Without `composer/installers`, Composer installs it into `vendor/queuety/queuety`, where WordPress does not find it, so use the release zip on a plain WordPress install.
 
 ### From source during development
 
@@ -42,9 +56,9 @@ composer install
 wp plugin activate queuety
 ```
 
-On activation, Queuety creates its database tables (`queuety_jobs`, `queuety_workflows`, `queuety_logs`, `queuety_schedules`, `queuety_queue_states`, `queuety_webhooks`, `queuety_locks`, `queuety_signals`, `queuety_workflow_dependencies`, `queuety_workflow_dispatch_keys`, `queuety_batches`, `queuety_chunks`, `queuety_workflow_events`) so workers can claim jobs directly from MySQL.
+On activation, Queuety creates its database tables (`queuety_jobs`, `queuety_workflows`, `queuety_logs`, `queuety_schedules`, `queuety_queue_states`, `queuety_webhooks`, `queuety_locks`, `queuety_signals`, `queuety_workflow_dependencies`, `queuety_workflow_dispatch_keys`, `queuety_batches`, `queuety_chunks`, `queuety_workflow_events`, `queuety_artifacts`, `queuety_state_machines`, `queuety_state_machine_events`) so workers can claim jobs directly from MySQL.
 
-By default, the plugin also schedules a one-shot worker through WordPress cron every minute for the `default` queue. That gives you a no-shell baseline for jobs and workflows that stay on `default`, as long as WordPress cron is firing. For custom queues, lower latency, or heavier workloads, move to dedicated `wp queuety work` processes.
+By default, the plugin also schedules a one-shot worker through WordPress cron every minute for the `default` queue. That gives you a no-shell baseline for jobs and workflows that stay on `default`, as long as WordPress cron is firing. Each run processes at most one job, and it does not fire recurring schedules, recover stale jobs or check workflow deadlines; those only run inside a long-running `wp queuety work` process ([#14](https://github.com/inline0/queuety/issues/14)). For custom queues, recurring schedules, lower latency, or heavier workloads, move to dedicated `wp queuety work` processes.
 
 ## Configuration
 
@@ -52,9 +66,9 @@ All constants are optional. Define them in `wp-config.php` before the plugin loa
 
 | Constant | Default | Description |
 |---|---|---|
-| `QUEUETY_RETENTION_DAYS` | `7` | Auto-purge completed jobs after N days |
-| `QUEUETY_LOG_RETENTION_DAYS` | `0` | Auto-purge logs after N days (0 = keep forever) |
-| `QUEUETY_MAX_EXECUTION_TIME` | `300` | Max seconds per job before timeout |
+| `QUEUETY_RETENTION_DAYS` | `7` | Default age in days for `wp queuety purge` and `Queuety::purge()`. Nothing purges automatically |
+| `QUEUETY_LOG_RETENTION_DAYS` | `0` | Read by `Config::log_retention_days()` but not used yet; logs are kept until you call `Queuety::purge_logs()` ([#15](https://github.com/inline0/queuety/issues/15)) |
+| `QUEUETY_MAX_EXECUTION_TIME` | `300` | Max seconds per job before timeout (not enforced yet, see [Jobs](/docs/jobs#timeout)) |
 | `QUEUETY_WORKER_SLEEP` | `1` | Seconds to sleep when queue is empty |
 | `QUEUETY_WORKER_MAX_JOBS` | `1000` | Max jobs before worker restarts |
 | `QUEUETY_WORKER_MAX_MEMORY` | `128` | Max MB before worker restarts |
@@ -74,6 +88,15 @@ All constants are optional. Define them in `wp-config.php` before the plugin loa
 | `QUEUETY_TABLE_CHUNKS` | `queuety_chunks` | Streaming chunks table name |
 | `QUEUETY_TABLE_QUEUE_STATES` | `queuety_queue_states` | Queue states table name |
 | `QUEUETY_TABLE_WEBHOOKS` | `queuety_webhooks` | Webhooks table name |
+| `QUEUETY_TABLE_LOCKS` | `queuety_locks` | Locks table name |
+| `QUEUETY_TABLE_BATCHES` | `queuety_batches` | Batches table name |
+| `QUEUETY_TABLE_WORKFLOW_EVENTS` | `queuety_workflow_events` | Workflow event log table name |
+| `QUEUETY_TABLE_ARTIFACTS` | `queuety_artifacts` | Workflow artifacts table name |
+| `QUEUETY_TABLE_STATE_MACHINES` | `queuety_state_machines` | State machines table name |
+| `QUEUETY_TABLE_STATE_MACHINE_EVENTS` | `queuety_state_machine_events` | State machine event log table name |
+| `QUEUETY_DB_DRIVER` | `auto` | MySQL driver: `auto`, `mysqli`, or `pdo`. `auto` prefers `mysqli` when WordPress is loaded, otherwise `pdo_mysql`, then `mysqli` |
+
+Resource admission and adaptive pool constants (`QUEUETY_RESOURCE_*`, `QUEUETY_WORKER_POOL_*`) are listed on the [Workers](/docs/features/workers) page.
 
 `QUEUETY_TABLE_PREFIX` changes only the Queuety portion of the table names. The WordPress database prefix still wraps the result, so `$wpdb->prefix = 'wp_'` and `QUEUETY_TABLE_PREFIX = 'themequeue_'` produce tables like `wp_themequeue_jobs`. Explicit `QUEUETY_TABLE_*` constants still win for individual tables.
 
@@ -210,9 +233,15 @@ $workflow_id = Queuety::workflow( 'generate_report' )
 wp queuety work
 ```
 
-The worker polls for pending jobs, executes them, advances workflows, and sleeps when the queue is empty. Press `Ctrl+C` to stop.
+The worker polls for pending jobs, executes them, advances workflows, and sleeps when the queue is empty. Press `Ctrl+C` to stop; this ends the process immediately, even in the middle of a job (see [Workers](/docs/features/workers#worker-lifecycle)).
 
-If you do not run a dedicated worker, Queuety still has the default once-per-minute WordPress cron fallback described above. The dedicated worker is the higher-throughput, lower-latency option.
+The `SendEmailHandler` above sends its jobs to the `emails` queue through `config()`, so a worker on `default` does not pick them up. Name every queue you use:
+
+```bash
+wp queuety work --queue=emails,default
+```
+
+If you do not run a dedicated worker, Queuety still has the default once-per-minute WordPress cron fallback described above, limited to the `default` queue and one job per run. The dedicated worker is the higher-throughput, lower-latency option.
 
 For production, run multiple workers:
 

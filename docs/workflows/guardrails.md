@@ -41,7 +41,7 @@ Queuety::workflow( 'research_run' )
     ->dispatch( [ 'brief_id' => 42 ] );
 ```
 
-If the same workflow is dispatched again with the same key, Queuety returns the original workflow ID instead of creating a duplicate run.
+If a workflow is dispatched again with a key that has already been used, Queuety returns the original workflow ID instead of creating a duplicate run. Keys are global across workflow names, so include the workflow name in the key when different workflows could share one.
 
 This is especially useful for:
 
@@ -81,7 +81,7 @@ Limits the encoded size of the public workflow state. This helps keep long-runni
 
 ### `max_cost_units()`
 
-Limits the total cost units consumed by completed steps. Cost units come from the step or job metadata that Queuety resolves when it enqueues work. Regular user work defaults to `1`, orchestration placeholders such as delays and waits use `0`, and handlers can raise or lower the value through `config()` or job properties.
+Limits the total cost units consumed by completed steps. Cost units come from the step or job metadata that Queuety resolves when it enqueues work. Regular user work defaults to `1`, orchestration placeholders such as delays and waits use `0`, and handlers can set a higher positive value through `config()` or job properties. Only a step definition's `cost_units` can set a value of `0`.
 
 This is useful when a workflow can revisit the same area or for each into work that is expensive in ways that are not captured by step count alone. A planner that keeps re-running an expensive model call may stay within `max_transitions()` but still exceed the cost envelope you intended.
 
@@ -89,7 +89,7 @@ This is useful when a workflow can revisit the same area or for each into work t
 
 Limits how many top-level workflows a run may start through `start_workflows()` or `start_agents()`. The limit is checked before the child workflows are dispatched, so the parent fails without partially creating a group that already exceeds the budget.
 
-When a budget is exceeded, Queuety fails the workflow immediately instead of retrying the step.
+When a budget is exceeded, Queuety fails the workflow immediately instead of retrying the step. One exception: when `Queuety::signal()` settles a wait and the resulting transition exceeds a budget, the exception is thrown to the caller of `signal()`, the signal insert is rolled back, and the workflow keeps waiting.
 
 ## Observing guardrails
 

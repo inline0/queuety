@@ -68,7 +68,7 @@ use Queuety\Queuety;
 
 final class DispatchResearchWorkflowAction implements StateAction
 {
-    public function handle( array $state, ?string $event = null, array $event_payload = [] ): array|string
+    public function handle( array $state, ?string $event = null, array $event_payload = [], array $payload = [] ): array|string
     {
         $message = trim( (string) ( $event_payload['message'] ?? '' ) );
 
@@ -142,13 +142,14 @@ use Queuety\Contracts\StateAction;
 
 final class RespondWithNeuronAction implements StateAction
 {
-    public function __construct( private readonly \PDO $pdo ) {}
-
-    public function handle( array $state, ?string $event = null, array $event_payload = [] ): array|string
+    public function handle( array $state, ?string $event = null, array $event_payload = [], array $payload = [] ): array|string
     {
+        // Queuety creates actions with `new RespondWithNeuronAction()`, so build dependencies here.
+        $pdo = new \PDO( $_ENV['NEURON_DB_DSN'], $_ENV['NEURON_DB_USER'], $_ENV['NEURON_DB_PASSWORD'] );
+
         $agent = new SupportAgent(
             threadId: $state['thread_id'],
-            pdo: $this->pdo,
+            pdo: $pdo,
         );
 
         $message = $agent->chat(

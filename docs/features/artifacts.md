@@ -78,7 +78,7 @@ $artifact = Queuety::workflow_artifact( $workflow_id, 'draft' );
 $artifacts = Queuety::workflow_artifacts( $workflow_id );
 ```
 
-Each artifact record includes its `key`, `kind`, `content`, `metadata`, `step_index`, `created_at`, and `updated_at` fields.
+Each artifact record includes its `key`, `kind`, `content`, `metadata`, `step_index`, `created_at`, and `updated_at` fields. `Queuety::workflow_artifacts()` leaves `content` out unless you pass `true` as its second argument.
 
 ## Workflow status integration
 

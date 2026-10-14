@@ -40,6 +40,12 @@ the same facade methods that the plugin uses for the core runtime:
 That means an external product can talk to the same orchestration state without
 booting WordPress first, as long as it uses the same database and table names.
 
+Worker pools are the one exception today: `Queuety::run_worker_pool()` and
+`Queuety::run_auto_scaling_worker_pool()` read the WordPress `DB_HOST`,
+`DB_NAME`, `DB_USER`, and `DB_PASSWORD` constants instead of the initialized
+connection, so a standalone process must define those constants before it
+starts a pool ([#5](https://github.com/inline0/queuety/issues/5)).
+
 ## What stays inside WordPress
 
 The WordPress-specific bridge layer still depends on WordPress being loaded.

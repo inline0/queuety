@@ -34,7 +34,7 @@ Without an explicit name, steps are named by their index (`'0'`, `'1'`, `'2'`, e
 
 ## The `_next_step` key
 
-A step can return `_next_step` to jump to a named step, skipping everything in between:
+A step can return `_next_step` to jump to a named step, skipping everything in between. Steps after a jump target still run in order: without a jump, the workflow simply continues with the next step in the list, so in the example above a successful `confirm` step falls through into `failure` unless it returns a `_next_step` that skips it or `HandleFailureHandler` checks for an `error` key first:
 
 ```php
 use Queuety\Step;
@@ -126,4 +126,4 @@ Queuety::workflow( 'content_pipeline' )
     ->dispatch( [ 'user_id' => 42 ] );
 ```
 
-If the cache check finds a hit, the workflow jumps from `check_cache` directly to `done`, skipping `fetch`, `generate`, and `save`.
+If the cache check finds a hit, the workflow jumps from `check_cache` directly to `done`, skipping `fetch`, `generate`, and `save`. On a miss the steps run in order and `save` falls through into `done` as well, so `ReturnCachedHandler` must cope with both paths.

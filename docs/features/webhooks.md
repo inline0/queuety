@@ -16,8 +16,8 @@ Queuety can send HTTP POST notifications to external URLs when specific events o
 
 | Event | Fired when |
 |---|---|
-| `job.completed` | A job finishes successfully |
-| `job.failed` | A job throws an exception |
+| `job.completed` | A plain handler job or `Contracts\Job` class finishes successfully (not fired for workflow steps or state-machine actions) |
+| `job.failed` | An attempt throws and a retry is scheduled |
 | `job.buried` | A job exhausts all retry attempts |
 | `workflow.failed` | A workflow step fails permanently |
 
@@ -88,7 +88,7 @@ For workflow failures:
 }
 ```
 
-Webhook delivery is fire-and-forget. Queuety uses a very short timeout and ignores delivery failures so workers are not blocked by slow or unavailable webhook endpoints.
+Webhook delivery is best-effort. The worker posts to each registered URL in turn with a one-second stream timeout and ignores delivery failures, so a slow endpoint costs the worker up to about a second per URL but never fails the job.
 
 ## Use cases
 

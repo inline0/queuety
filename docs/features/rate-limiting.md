@@ -10,7 +10,7 @@ meta_description: "Per-handler execution rate limits with sliding windows."
 
 # Rate Limiting
 
-Queuety supports per-handler rate limiting to prevent overloading external APIs or other constrained resources. When a handler exceeds its rate limit, jobs are delayed until the window resets.
+Queuety supports per-handler rate limiting to prevent overloading external APIs or other constrained resources. When a handler has reached its limit, workers leave its jobs pending and pick them up again once the window has room.
 
 ## Setting a rate limit
 
@@ -26,6 +26,8 @@ Queuety::dispatch( 'call_openai', $payload )
 The two arguments are:
 1. `$max` - Maximum number of executions allowed in the window
 2. `$window` - Window duration in seconds
+
+A dispatch-time limit is registered only in the PHP process that dispatches the job. A worker running in a separate process, such as `wp queuety work`, does not see it, so set limits that must hold across processes in the handler's `config()` as shown below ([#3](https://github.com/inline0/queuety/issues/3)).
 
 ## Handler-level rate limits
 
@@ -49,9 +51,9 @@ class CallOpenAIHandler implements Handler {
 
 ## How it works
 
-Rate limits are tracked per handler name. The worker checks the rate limiter before executing each job. If the handler has exceeded its limit within the current window, the job is released back to the queue with a delay until the window resets.
+Rate limits are tracked per handler name. After claiming a job, the worker registers the handler's limit (from its `config()`) and checks the rate limiter. If the handler has reached its limit, the worker puts the job straight back to `pending` without a delay and without spending an attempt, then sleeps for `QUEUETY_WORKER_SLEEP` seconds before polling again. A worker started with `--once` exits instead.
 
-The rate limiter uses the `queuety_logs` table to count recent executions within the sliding window. This means rate limits are enforced across all worker processes, not just within a single worker.
+Each worker keeps an in-memory counter and refreshes it every 5 seconds from the `queuety_logs` table, counting `completed` log entries for the handler within the last `$window` seconds. Because the count comes from the shared logs table (and from the shared cache, when one is configured), handler-level limits are enforced across all worker processes, not just within a single worker. Failed executions do not count towards the limit.
 
 ## Programmatic access
 
@@ -63,9 +65,14 @@ $limiter = Queuety::rate_limiter();
 // Register a rate limit
 $limiter->register( 'call_openai', 60, 60 );
 
-// Check if a handler is rate limited
-$allowed = $limiter->is_allowed( 'call_openai' );
+// Check whether a handler has reached its limit
+$limited = $limiter->is_limited( 'call_openai' ); // true while the limit is reached
+
+// Seconds until the current window resets
+$wait = $limiter->time_until_available( 'call_openai' );
 ```
+
+`register()` and `is_limited()` act on the limiter in the current PHP process. Registering a limit here does not change what a separately running worker enforces.
 
 ## Use cases
 

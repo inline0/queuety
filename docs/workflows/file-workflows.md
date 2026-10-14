@@ -10,10 +10,11 @@ meta_description: "Define complete workflows in a single PHP file with inline st
 
 ## Single-file workflows
 
-A workflow can be fully self-contained in one PHP file. Define the step classes and the builder together, then drop the file in a directory. Queuety loads and registers it automatically.
+A workflow can be fully self-contained in one PHP file. Define the step classes and the builder together, drop the file in a directory, and load that directory with `Queuety::load_workflows()` (shown below). Queuety does not scan any directory on its own.
 
 ```php
 // workflows/onboard-user.php
+use Queuety\Queuety;
 
 class CreateAccount implements \Queuety\Step {
     public function handle(array $state): array {
@@ -87,10 +88,11 @@ workflows/
 
 ## Using all workflow features
 
-File workflows support everything the builder supports. Delays, signals, parallel steps, conditional branching, run-workflows, cancellation handlers, and state pruning all work:
+File workflows support everything the builder supports except `idempotency_key()`, which is not stored in the template; pass it per dispatch instead with `Queuety::run_workflow( $name, $payload, [ 'idempotency_key' => '...' ] )`. Delays, signals, parallel steps, conditional branching, run-workflows, cancellation handlers, and state pruning all work:
 
 ```php
 // workflows/approval-flow.php
+use Queuety\Queuety;
 
 class SubmitRequest implements \Queuety\Step {
     public function handle(array $state): array {
@@ -140,4 +142,4 @@ For larger workflows with shared step classes, complex middleware, or steps reus
 
 Under the hood, file workflows use the exact same engine as the builder API. Each step is a separate job in the database. State flows via the `queuety_workflows` table. There is no replay, no determinism requirement, and no performance difference.
 
-The file is `require`d once at load time. The returned `WorkflowBuilder` is converted to a `WorkflowTemplate` and stored in the `WorkflowRegistry`. Dispatching and execution are identical to any other workflow.
+Each load call `require`s the file (not `require_once`), so load each file once per request; loading it twice redeclares its classes and fails. The returned `WorkflowBuilder` is converted to a `WorkflowTemplate` and stored in the `WorkflowRegistry`. Dispatching and execution are identical to any other workflow.

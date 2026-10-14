@@ -80,9 +80,11 @@ State-entry actions implement `Queuety\Contracts\StateAction`:
 namespace Queuety\Contracts;
 
 interface StateAction {
-    public function handle( array $state, ?string $event = null, array $event_payload = [] ): array|string;
+    public function handle( array $state, ?string $event = null, array $event_payload = [], array $payload = [] ): array|string;
 }
 ```
+
+`$payload` is the structured payload from the action definition, empty when the action was given as a plain class name. Queuety creates actions with `new $class()`, so an action class needs a constructor without required arguments.
 
 State actions may also define an optional `config()` method with `concurrency_group`, `concurrency_limit`, and `cost_units` when the queued entry action should participate in worker admission, weighted queue or provider budgets, and other resource policies.
 
@@ -92,7 +94,7 @@ Transition guards implement `Queuety\Contracts\StateGuard`:
 namespace Queuety\Contracts;
 
 interface StateGuard {
-    public function allows( array $state, array $event_payload, string $event ): bool;
+    public function allows( array $state, array $event_payload, string $event, array $payload = [] ): bool;
 }
 ```
 
@@ -107,6 +109,8 @@ $events   = Queuety::machine_timeline( $machine_id );
 $trace    = Queuety::machine_trace( $machine_id );
 $state    = Queuety::machine_state_at( $machine_id, $event_id );
 ```
+
+State machines have no WP-CLI commands: `wp queuety workflow ...` covers workflows only. Use these PHP APIs, for example through `wp eval`, to inspect machines from the command line.
 
 Those APIs expose the current state name, lifecycle status, public state, available events, definition metadata, the full transition timeline, and a normalized trace bundle for debugger UIs. Machine list rows include definition version, definition hash, and idempotency key so list screens can show the source/runtime version without loading each machine individually. The trace bundle includes grouped states, raw events, correlated action jobs, logs, artifact references, chunk references, handler input/output, state before/after, context, timings, and structured errors.
 

@@ -36,7 +36,8 @@ The attribute parameters:
 |---|---|---|---|
 | `name` | `string` | (required) | Handler name used for dispatch |
 | `queue` | `string` | `'default'` | Default queue for this handler |
-| `max_attempts` | `int` | `3` | Maximum retry attempts |
+| `max_attempts` | `int` | `3` | Maximum number of runs before the job is buried |
+| `needs_wordpress` | `bool` | `false` | Stored on the attribute; Queuety does not read it today |
 
 ## Auto-discovery
 
@@ -52,7 +53,7 @@ $count = Queuety::discover_handlers(
 // $count = number of handlers registered
 ```
 
-This scans every `.php` file in the directory, loads each class, checks for the `#[QueuetyHandler]` attribute, and registers matching classes in the handler registry.
+This scans every `.php` file in the directory and its subdirectories, derives each class name from the namespace prefix and file path, loads it through your autoloader, and registers classes that carry the `#[QueuetyHandler]` attribute and implement `Handler`, `Step`, or `Contracts\Job`.
 
 ## Auto-discovery via CLI
 

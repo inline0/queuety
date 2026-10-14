@@ -10,7 +10,9 @@ meta_description: "Replace WordPress built-in cron with Queuety's reliable sched
 
 # WP-Cron Replacement
 
-Queuety can replace the built-in WordPress cron system. When enabled, calls to `wp_schedule_event()` are intercepted and routed through Queuety's scheduler instead of the default WP-Cron mechanism. Events are processed by the Queuety worker, which provides reliable execution independent of site traffic.
+Queuety can replace the built-in WordPress cron system. When enabled, calls to `wp_schedule_event()` are intercepted and routed through Queuety's scheduler instead of the default WP-Cron mechanism. Events are meant to be processed by the Queuety worker, which provides execution independent of site traffic.
+
+> **Current limitation:** the bridge creates the Queuety schedules, but the worker has no handler for the `__queuety_cron_{hook}` jobs they produce, so the original WordPress callbacks never run. Each job fails, is retried with backoff, and is eventually buried ([#9](https://github.com/inline0/queuety/issues/9)). Do not enable the bridge on a site whose cron events must run until that is fixed.
 
 ## Enabling the replacement
 
@@ -40,7 +42,7 @@ Only **recurring** events (those with a `schedule` property like `hourly`, `twic
 
 When a plugin calls `wp_schedule_event()`, Queuety resolves the schedule name through `wp_get_schedules()`, creates a Queuety schedule with the handler name `__queuety_cron_{hook}`, and stores the original WordPress hook name and arguments in the schedule payload.
 
-Later, when the Queuety worker processes that scheduled job, it calls `do_action()` with the original hook name and arguments. The existing WordPress callbacks still run as normal; the difference is only that the timing and dispatch are now driven by Queuety instead of traffic-triggered WP-Cron.
+The intended behaviour is that the Queuety worker processing that scheduled job calls `do_action()` with the original hook name and arguments, so the existing WordPress callbacks run with Queuety driving the timing. `CronBridge::process_cron_event()` implements that call, but nothing invokes it yet (see the limitation above). Schedules are also only evaluated by a long-running `wp queuety work` process, about once a minute (see [Scheduling](/docs/features/scheduling)).
 
 ### Interval resolution
 
@@ -76,11 +78,14 @@ There are a few important constraints. An active Queuety worker is required, oth
 ## Example: full setup
 
 ```php
+use Queuety\Queuety;
+
 // In your plugin's main file.
 add_action( 'plugins_loaded', function () {
-    Queuety::init( $connection );
     Queuety::replace_wp_cron();
 } );
 ```
 
-After this, any plugin that calls `wp_schedule_event()` will have its events routed through Queuety automatically. The original hook callbacks continue to work without modification.
+There is no need to call `Queuety::init()` here: the active Queuety plugin builds its connection from the WordPress database credentials and initializes itself on `plugins_loaded`. `replace_wp_cron()` only installs the filters, so it does not depend on that having happened first.
+
+After this, recurring events that plugins register with `wp_schedule_event()` are stored as Queuety schedules. Until [#9](https://github.com/inline0/queuety/issues/9) is fixed, their callbacks do not run.

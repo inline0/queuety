@@ -22,7 +22,7 @@ Queuety's DB-backed runtime can be initialized outside WordPress.
 
 That standalone path is for the orchestration core:
 
-- jobs and workers
+- jobs and workers (worker pools also need the `DB_HOST`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` constants, see below)
 - workflows and signals
 - state machines and events
 - artifacts, logs, metrics, and schedules
@@ -203,7 +203,7 @@ Queuety::run_worker( 'critical,default', true );
 
 ### `Queuety::run_worker_pool( $workers, $queue = 'default' )`
 
-Run a fixed-size worker pool directly.
+Run a fixed-size worker pool directly. Requires the `pcntl` and `posix` extensions. The pool reads the WordPress `DB_HOST`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` constants for its child connections (only the table prefixes come from the initialized connection), so define them when you run a pool outside WordPress ([#5](https://github.com/inline0/queuety/issues/5)).
 
 ```php
 Queuety::run_worker_pool( 4, 'providers' );
@@ -211,7 +211,7 @@ Queuety::run_worker_pool( 4, 'providers' );
 
 ### `Queuety::run_auto_scaling_worker_pool( $min_workers, $max_workers, $queue = 'default' )`
 
-Run an adaptive worker pool directly.
+Run an adaptive worker pool directly. Same requirements as `run_worker_pool()`.
 
 ```php
 Queuety::run_auto_scaling_worker_pool( 2, 6, 'providers' );
@@ -348,24 +348,24 @@ $workflow_id = Queuety::workflow( 'generate_report' )
 
 | Method | Description |
 |---|---|
-| `then( string $class, ?string $name )` | Add a sequential step. Optional name for conditional branching. |
-| `parallel( array $classes )` | Add a parallel step group. |
+| `then( string $handler_class, ?string $name = null )` | Add a sequential step. Optional name for conditional branching. |
+| `parallel( array $handler_classes )` | Add a parallel step group. |
 | `for_each( string $items_key, string $handler_class, ?string $result_key = null, ForEachMode $mode = ForEachMode::All, ?int $quorum = null, ?string $reducer_class = null, ?string $name = null )` | Add a dynamic for-each step that expands one branch job per item in workflow state. |
 | `repeat_while( string $target_step, ?string $state_key = null, mixed $expected = true, ?string $name = null, ?string $condition_class = null, ?int $max_iterations = null )` | Jump back to an earlier named step while a public state key or `RepeatCondition` class matches. |
 | `repeat_until( string $target_step, ?string $state_key = null, mixed $expected = true, ?string $name = null, ?string $condition_class = null, ?int $max_iterations = null )` | Jump back to an earlier named step until a public state key or `RepeatCondition` class matches. |
-| `run_workflow( string $name, WorkflowBuilder $builder )` | Add a run-workflow step. |
-| `delay( int $seconds, int $minutes, int $hours, int $days )` | Add a durable delay step. All durations are summed. |
+| `run_workflow( string $workflow_name, WorkflowBuilder $sub_builder )` | Add a run-workflow step. |
+| `delay( int $seconds = 0, int $minutes = 0, int $hours = 0, int $days = 0 )` | Add a durable delay step. All durations are summed. |
 | `wait_for_signal( string $name, ?string $result_key = null, ?string $step_name = null, array $match_payload = [], ?string $correlation_key = null )` | Add a signal wait step. Optional `match_payload` and `correlation_key` let you ignore unrelated events. |
 | `wait_for_signals( array $signal_names, WaitMode $mode = WaitMode::All, ?string $result_key = null, ?string $name = null, array $match_payload = [], ?string $correlation_key = null )` | Wait for all or any of several signals, with optional payload matching and correlation. |
 | `wait_for_approval( string $signal_name = 'approval', ?string $result_key = 'approval', ?string $name = null, array $match_payload = [], ?string $correlation_key = null )` | Wait for a human approval signal. |
 | `wait_for_decision( string $approve_signal = 'approved', string $reject_signal = 'rejected', ?string $result_key = 'decision', ?string $name = null, array $match_payload = [], ?string $correlation_key = null )` | Wait for either approval or rejection and store a structured decision payload. |
 | `wait_for_input( string $signal_name = 'input', ?string $result_key = 'input', ?string $name = null, array $match_payload = [], ?string $correlation_key = null )` | Wait for a human input signal. |
-| `wait_for_workflow( int|string $workflow, ?string $result_key = null, ?string $name = null )` | Wait for one workflow ID, or a workflow ID stored in public state, to complete. |
-| `wait_for_workflows( array|string $workflows, WaitMode $mode = WaitMode::All, ?string $result_key = null, ?string $name = null, ?int $quorum = null )` | Wait for all, any, or a quorum of several workflows to complete. |
+| `wait_for_workflow( int\|string $workflow, ?string $result_key = null, ?string $name = null )` | Wait for one workflow ID, or a workflow ID stored in public state, to complete. |
+| `wait_for_workflows( array\|string $workflows, WaitMode $mode = WaitMode::All, ?string $result_key = null, ?string $name = null, ?int $quorum = null )` | Wait for all, any, or a quorum of several workflows to complete. |
 | `wait_for_workflow_group( string $group_key, WaitMode $mode = WaitMode::All, ?int $quorum = null, ?string $result_key = null, ?string $name = null )` | Wait on a previously started workflow group by internal group key. |
 | `start_workflows( string $items_key, WorkflowBuilder $workflow_builder, string $result_key = 'started_workflow_ids', string $payload_key = 'item', bool $inherit_state = true, ?string $name = null, ?string $group_key = null )` | Dispatch one top-level workflow per runtime item, optionally tagging the started set with a durable group key. |
 | `start_agents( string $items_key, WorkflowBuilder $workflow_builder, string $result_key = 'agent_workflow_ids', string $payload_key = 'agent_task', bool $inherit_state = true, ?string $name = null, ?string $group_key = null )` | Agent-oriented alias for `start_workflows()`. |
-| `wait_for_agents( array|string $workflows = 'agent_workflow_ids', WaitMode $mode = WaitMode::All, ?string $result_key = 'agent_results', ?string $name = null, ?int $quorum = null )` | Agent-oriented alias for `wait_for_workflows()`. |
+| `wait_for_agents( array\|string $workflows = 'agent_workflow_ids', WaitMode $mode = WaitMode::All, ?string $result_key = 'agent_results', ?string $name = null, ?int $quorum = null )` | Agent-oriented alias for `wait_for_workflows()`. |
 | `wait_for_agent_group( string $group_key = 'agents', WaitMode $mode = WaitMode::All, ?int $quorum = null, ?string $result_key = 'agent_results', ?string $name = null )` | Agent-oriented alias for `wait_for_workflow_group()`. |
 | `version( string $version )` | Tag the workflow definition with an application-level version for inspection and exports. |
 | `idempotency_key( string $key )` | Make workflow dispatch durable for a caller-supplied key. Dispatching again with the same key returns the original workflow ID. |
@@ -374,16 +374,16 @@ $workflow_id = Queuety::workflow( 'generate_report' )
 | `max_state_bytes( int $bytes )` | Fail the workflow if the public state grows beyond `$bytes`. |
 | `max_cost_units( int $max )` | Fail the workflow if completed steps consume more than `$max` cost units. |
 | `max_started_workflows( int $max )` | Fail the workflow before dispatching more than `$max` child workflows. |
-| `compensate_with( string $class )` | Attach a compensation handler to the most recently added step. |
+| `compensate_with( string $handler_class )` | Attach a compensation handler to the most recently added step. |
 | `compensate_on_failure()` | Run completed-step compensations automatically when the workflow fails. |
 | `on_queue( string $queue )` | Set the queue for all steps. |
 | `with_priority( Priority $priority )` | Set the priority for all steps. |
 | `max_attempts( int $max )` | Set max retry attempts per step. |
-| `on_cancel( string $class )` | Register a cleanup handler class for cancellation. See [Cancellation](/docs/workflows/cancellation). |
+| `on_cancel( string $handler_class )` | Register a cleanup handler class for cancellation. See [Cancellation](/docs/workflows/cancellation). |
 | `prune_state_after( int $steps = 2 )` | Enable automatic state pruning. Removes step outputs older than the threshold. See [State Pruning](/docs/features/state-pruning). |
-| `must_complete_within( int $seconds, int $minutes, int $hours, int $days )` | Set a deadline for the workflow. All durations are summed. See [Deadlines](/docs/workflows/deadlines). |
-| `on_deadline( string $class )` | Register a handler called when the workflow deadline is exceeded. See [Deadlines](/docs/workflows/deadlines). |
-| `dispatch( array $payload )` | Dispatch the workflow. Returns the workflow ID. |
+| `must_complete_within( int $seconds = 0, int $minutes = 0, int $hours = 0, int $days = 0 )` | Set a deadline for the workflow. All durations are summed. See [Deadlines](/docs/workflows/deadlines). |
+| `on_deadline( string $handler_class )` | Register a handler called when the workflow deadline is exceeded. See [Deadlines](/docs/workflows/deadlines). |
+| `dispatch( array $initial_payload = [] )` | Dispatch the workflow. Returns the workflow ID. |
 
 ### `Queuety::workflow_status( $workflow_id )`
 
@@ -395,7 +395,7 @@ echo $state->name;          // 'generate_report'
 echo $state->status->value; // 'running'
 echo $state->current_step;  // 1
 echo $state->total_steps;   // 3
-echo $state->state;         // accumulated state array
+print_r( $state->state );   // accumulated public state array
 echo $state->wait_type;     // 'signal' or 'workflow' while blocked
 echo $state->wait_mode;     // 'all', 'any', or 'quorum'
 echo $state->definition_version; // 'research.v2'
@@ -636,8 +636,8 @@ $machine_id = Queuety::machine( 'agent_session' )
 |---|---|
 | `initial( string $state_name )` | Set the initial state explicitly. |
 | `state( string $state_name, ?StateMachineStatus $terminal_status = null )` | Start configuring one state. |
-| `action( string $action_class )` | Register a queued entry action for the current state. |
-| `on( string $event, string $target, ?string $guard_class = null, ?string $name = null )` | Register one event transition from the current state. |
+| `action( string\|array $action_class )` | Register a queued entry action for the current state. Pass a class name, or a structured definition with `class`, `payload`, and `config`; the `payload` reaches `StateAction::handle()` as `$payload`. |
+| `on( string $event, string $target, string\|array\|null $guard_class = null, ?string $name = null )` | Register one event transition from the current state. The guard accepts the same structured form as `action()`. |
 | `on_queue( string $queue )` | Set the queue used for queued state actions. |
 | `with_priority( Priority $priority )` | Set the priority for queued state actions. |
 | `max_attempts( int $max_attempts )` | Set the retry limit for queued state actions. |
@@ -1012,7 +1012,7 @@ $events = Queuety::workflow_timeline( $workflow_id );
 $next   = Queuety::workflow_timeline( $workflow_id, 100, 100 );
 ```
 
-Each event row contains: `id`, `workflow_id`, `job_id`, `step_index`, `step_name`, `step_type`, `handler`, `event`, `queue`, `attempt`, `input`, `output`, `state_before`, `state_after`, `context`, `artifacts`, `chunks`, `error`, `duration_ms`, and `created_at`.
+Each event row contains: `id`, `workflow_id`, `job_id`, `parent_event_id`, `step_index`, `step_name`, `step_type`, `handler`, `event`, `queue`, `attempt`, `input`, `output`, `state_before`, `state_after`, `context`, `artifacts`, `chunks`, `error`, `error_message` (copied from `error.message`), `duration_ms`, and `created_at`.
 
 ### `Queuety::workflow_trace( $workflow_id )`
 
@@ -1186,11 +1186,11 @@ Interface for queued state-entry actions.
 namespace Queuety\Contracts;
 
 interface StateAction {
-    public function handle( array $state, ?string $event = null, array $event_payload = [] ): array|string;
+    public function handle( array $state, ?string $event = null, array $event_payload = [], array $payload = [] ): array|string;
 }
 ```
 
-Return public state updates. Include `_event` and optionally `_event_payload` when the action should transition immediately.
+`$payload` carries the structured `payload` from the action definition, if the machine was defined with one. Return public state updates. Include `_event` and optionally `_event_payload` when the action should transition immediately.
 
 State actions may also define an optional `config()` method. Queuety reads `concurrency_group`, `concurrency_limit`, and `cost_units` from it when the entry action is queued.
 
@@ -1202,7 +1202,7 @@ Interface for state-machine transition guards.
 namespace Queuety\Contracts;
 
 interface StateGuard {
-    public function allows( array $state, array $event_payload, string $event ): bool;
+    public function allows( array $state, array $event_payload, string $event, array $payload = [] ): bool;
 }
 ```
 
@@ -1488,8 +1488,9 @@ enum ForEachMode: string {
 
 ```php
 enum WaitMode: string {
-    case All = 'all';
-    case Any = 'any';
+    case All    = 'all';
+    case Any    = 'any';
+    case Quorum = 'quorum';
 }
 ```
 

@@ -108,4 +108,4 @@ Queuety::rewind_workflow( $workflow_id, to_step: 0 );
 | State | Current workflow state | Restored from event log `state_after` |
 | Requires | Workflow is in `failed` status | Event log snapshot at target step |
 | Status after | `running` | `running` |
-| Log event | `workflow_resumed` | `workflow_rewound` |
+| Log event | none | `workflow_rewound` |

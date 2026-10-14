@@ -25,7 +25,7 @@ Call `Heartbeat::beat()` from inside any job handler or streaming step:
 ```php
 use Queuety\Heartbeat;
 
-class LongRunningStep implements \Queuety\Contracts\Step {
+class LongRunningStep implements \Queuety\Step {
 
     public function handle( array $state ): array {
         $items = $state['items'];
@@ -79,7 +79,7 @@ The `Queuety\Heartbeat` class is entirely static. You do not instantiate it.
 
 ## Usage in streaming steps
 
-Streaming steps should send heartbeats inside the generator loop. Each chunk yield already triggers a DB write, but the chunk INSERT does not update `reserved_at`. Add a `Heartbeat::beat()` call alongside your yields:
+The worker already sends a heartbeat after every chunk it persists, with `heartbeat_data` set to `{"streaming_chunks": n}`, so a stream that yields regularly stays fresh on its own. Call `Heartbeat::beat()` yourself when there can be long gaps between yields, for example while waiting for the first token. Data you pass is overwritten by the worker's next per-chunk beat:
 
 ```php
 use Queuety\Contracts\StreamingStep;
@@ -108,7 +108,7 @@ class StreamAPIResponse implements StreamingStep {
 
 ## When to use heartbeats
 
-Use heartbeats when a single job or step runs for longer than `QUEUETY_STALE_TIMEOUT` seconds (default: 300). Common cases:
+Use heartbeats when a single job or step runs for longer than `QUEUETY_STALE_TIMEOUT` seconds (default: 600). Common cases:
 
 - LLM API calls with streaming responses
 - Large file downloads or uploads

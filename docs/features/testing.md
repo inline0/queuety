@@ -10,7 +10,7 @@ meta_description: "Fake the queue and assert job dispatch behavior in your test 
 
 # Testing
 
-Queuety provides a `QueueFake` class that replaces the real queue with an in-memory store. Dispatched jobs are recorded instead of being written to the database, and `create_batch()` records batch metadata in memory as well. That lets you assert dispatch behavior without running workers or requiring a database connection.
+Queuety provides a `QueueFake` class that replaces the real queue with an in-memory store. Dispatched jobs are recorded instead of being written to the database, and `create_batch()` records batch metadata in memory as well. That lets you assert dispatch behavior without running workers or writing to the database. Dispatching by handler name still resolves the handler through the registry, so call `Queuety::init()` first for string-handler dispatches; `Contracts\Job` instances, `chain()`, `create_batch()`, and `batch()` work without it.
 
 ## Setting up the fake
 
@@ -32,7 +32,7 @@ class SendEmailTest extends \PHPUnit\Framework\TestCase {
 
 `Queuety::fake()` creates a new `QueueFake` and wires it into the `Queuety` facade. `Queuety::dispatch()` and `Dispatchable::dispatch()` record pushed jobs. `Queuety::chain()` records each chained job as a normal push in dispatch order. `Queuety::create_batch()` records both the pushed jobs and the batch metadata used by `assert_batched()`. `Queuety::batch()` records the pushed jobs, but it does not create fake batch metadata.
 
-Call `Queuety::reset()` in `tearDown()` to clear the fake and restore normal behavior between tests.
+Call `Queuety::reset()` in `tearDown()` to clear the fake between tests. It clears all facade state, so call `Queuety::init()` again if a later test needs the real queue.
 
 ## Asserting jobs were pushed
 
@@ -51,7 +51,7 @@ public function test_welcome_email_is_sent(): void {
 }
 ```
 
-Pass an optional callback to filter by payload or other attributes. The callback receives the recorded job data array with keys `handler`, `payload`, `queue`, and `instance`.
+Pass an optional callback to filter by payload or other attributes. The callback receives the recorded job data array with keys `handler`, `payload`, `queue`, and `instance`. `instance` is `null` for jobs dispatched through the facade or the `Dispatchable` trait, so match on `handler` and `payload`.
 
 ```php
 $this->fake->assert_pushed( SendWelcomeEmailJob::class, function ( array $job ) {
@@ -111,7 +111,7 @@ Use `pushed()` to retrieve all recorded dispatches for a given class, and `batch
 
 ```php
 $emails = $this->fake->pushed( SendEmailJob::class );
-// [ ['handler' => '...', 'payload' => [...], 'queue' => 'default', 'instance' => ...], ... ]
+// [ ['handler' => '...', 'payload' => [...], 'queue' => 'default', 'instance' => null], ... ]
 
 $batches = $this->fake->batches();
 // [ ['jobs' => [...], 'options' => [...]], ... ]

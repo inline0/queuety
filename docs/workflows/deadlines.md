@@ -10,7 +10,7 @@ meta_description: "Set a maximum completion time for workflows with automatic fa
 
 # Workflow Deadlines
 
-Workflows can be given a deadline. If the workflow is not completed within the specified duration, Queuety marks it as failed and optionally calls a handler. This acts as a dead man's switch for long-running workflows that should not run indefinitely.
+Workflows can be given a deadline. If a running workflow has not completed within the specified duration, Queuety marks it as failed and optionally calls a handler. Workflows that are paused or waiting for a signal or for other workflows are not expired while they wait. Deadlines are checked about once a minute by a long-running `wp queuety work` process, not by `--once` workers or the WP-Cron fallback. This acts as a dead man's switch for long-running workflows that should not run indefinitely.
 
 ## Setting a deadline
 
@@ -74,12 +74,12 @@ When a workflow exceeds its deadline, its status changes to `failed`, the error 
 
 | Method | Description |
 |---|---|
-| `must_complete_within( int $seconds, int $minutes, int $hours, int $days )` | Set the maximum allowed duration. All parameters are summed. |
+| `must_complete_within( int $seconds = 0, int $minutes = 0, int $hours = 0, int $days = 0 )` | Set the maximum allowed duration. All parameters are summed. |
 | `on_deadline( string $handler_class )` | Register a handler called when the deadline is exceeded. |
 
 ## Example: deadline with retry
 
-You can combine deadlines with `retry_workflow()`. If a workflow fails due to a deadline, you can retry it (which resets it to `running` and re-enqueues the failed step), but note that the original deadline timestamp is not extended.
+Retrying a workflow that failed on its deadline is rarely useful. `retry_workflow()` resets it to `running` and re-enqueues the failed step, but it does not clear or extend the deadline, so the next deadline check, within about a minute, fails it again. Dispatch a new workflow instead.
 
 ```php
 $status = Queuety::workflow_status( $workflow_id );

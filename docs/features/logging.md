@@ -20,7 +20,7 @@ Every log entry has an event type from the `LogEvent` enum:
 |---|---|
 | `started` | Job execution started |
 | `completed` | Job completed successfully |
-| `failed` | Job threw an exception |
+| `failed` | An attempt threw and will be retried (the final attempt logs only `buried`) |
 | `buried` | Job exhausted all retry attempts |
 | `retried` | Job was scheduled for retry |
 | `workflow_started` | Workflow was dispatched |
@@ -28,6 +28,10 @@ Every log entry has an event type from the `LogEvent` enum:
 | `workflow_failed` | Workflow step failed permanently |
 | `workflow_paused` | Workflow was paused |
 | `workflow_resumed` | Workflow was resumed |
+| `workflow_cancelled` | Workflow was cancelled |
+| `workflow_rewound` | Workflow was rewound to an earlier step |
+| `workflow_forked` | Workflow was forked into a new workflow |
+| `workflow_deadline_exceeded` | Workflow missed its `must_complete_within()` deadline |
 | `debug` | Debug-level message (when `QUEUETY_DEBUG` is enabled) |
 
 ## Log fields
@@ -95,19 +99,9 @@ wp queuety log --limit=100 --format=json
 
 ## Log retention
 
-By default, logs are kept forever. To auto-purge old entries, set `QUEUETY_LOG_RETENTION_DAYS`:
+Logs are kept until you purge them. The `QUEUETY_LOG_RETENTION_DAYS` constant is read by `Config::log_retention_days()` but nothing uses it yet, so it does not purge anything ([#15](https://github.com/inline0/queuety/issues/15)). The `wp queuety log purge` subcommand cannot be reached either ([#11](https://github.com/inline0/queuety/issues/11)).
 
-```php
-define( 'QUEUETY_LOG_RETENTION_DAYS', 30 ); // purge logs older than 30 days
-```
-
-Purge manually via CLI:
-
-```bash
-wp queuety log purge --older-than=30
-```
-
-Or via PHP:
+Purge from PHP, for example from your own scheduled task or with `wp eval`:
 
 ```php
 $count = Queuety::logger()->purge( 30 );

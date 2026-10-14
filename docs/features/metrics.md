@@ -26,10 +26,10 @@ Each entry in the returned array contains:
 |---|---|
 | `handler` | Handler name |
 | `completed` | Number of successful executions |
-| `failed` | Number of failed executions |
+| `failed` | Number of failed attempts (`failed` and `buried` log events, so one job can count more than once) |
 | `avg_ms` | Average execution duration in milliseconds |
 | `p95_ms` | 95th percentile execution duration |
-| `error_rate` | Failure rate as a percentage |
+| `error_rate` | Failure ratio from 0 to 1: `failed / (completed + failed)`, rounded to four decimals |
 
 ## CLI
 
@@ -50,9 +50,9 @@ Example output:
 +------------------+-----------+--------+--------+--------+------------+
 | handler          | completed | failed | avg_ms | p95_ms | error_rate |
 +------------------+-----------+--------+--------+--------+------------+
-| send_email       | 142       | 3      | 45     | 120    | 2.07%      |
-| process_image    | 87        | 0      | 230    | 450    | 0.00%      |
-| call_openai      | 31        | 5      | 2100   | 4500   | 13.89%     |
+| send_email       | 142       | 3      | 45     | 120    | 0.0207     |
+| process_image    | 87        | 0      | 230    | 450    | 0          |
+| call_openai      | 31        | 5      | 2100   | 4500   | 0.1389     |
 +------------------+-----------+--------+--------+--------+------------+
 ```
 

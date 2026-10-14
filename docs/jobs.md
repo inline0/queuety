@@ -65,7 +65,7 @@ The `handle()` method receives the job payload and performs the work. The `confi
 | Key | Type | Description |
 |---|---|---|
 | `queue` | `string` | Default queue name |
-| `max_attempts` | `int` | Maximum retry attempts |
+| `max_attempts` | `int` | Maximum number of runs, counting the first one, before the job is buried |
 | `backoff` | `string` | Retry backoff strategy: `exponential`, `linear`, or `fixed` |
 | `rate_limit` | `array` | Rate limit as `[max_executions, window_seconds]` |
 | `concurrency_group` | `string` | Shared worker admission group for expensive handlers |
@@ -144,13 +144,13 @@ Each item can include optional keys: `queue`, `priority`, `delay`, `max_attempts
 
 ## Retry and backoff
 
-When a job throws an exception, Queuety retries it up to `max_attempts` times. The delay between retries is determined by the backoff strategy:
+When a job throws an exception, Queuety puts it back to `pending` with a delayed `available_at` until it has run `max_attempts` times in total (the first run counts, so `max_attempts( 3 )` means up to two retries). The delay before each retry is determined by the backoff strategy, where `attempt` is the number of the run that just failed:
 
-| Strategy | Delay formula | Example (attempt 2, 3, 4) |
+| Strategy | Delay formula | Example (after run 1, 2, 3) |
 |---|---|---|
-| `exponential` | `2^attempt` seconds | 4s, 8s, 16s |
-| `linear` | `attempt * 5` seconds | 10s, 15s, 20s |
-| `fixed` | `5` seconds | 5s, 5s, 5s |
+| `exponential` | `2^attempt * 30` seconds, capped at 3600 | 60s, 120s, 240s |
+| `linear` | `attempt * 60` seconds | 60s, 120s, 180s |
+| `fixed` | `60` seconds | 60s, 60s, 60s |
 
 Set the global default in `wp-config.php`:
 
@@ -174,7 +174,7 @@ Queuety::dispatch( 'handler', $payload )->max_attempts( 10 );
 
 ## Buried jobs
 
-After exhausting all retry attempts, a job is marked as **buried**. Buried jobs stay in the database for inspection but are not processed. You can retry them manually:
+After exhausting all retry attempts, a job is marked as **buried**. Buried jobs stay in the database for inspection but are not processed. You can retry them manually. A manual retry makes the job `pending` again without resetting its attempt count, so a retried buried job gets one more run and is buried again if that run fails:
 
 ```php
 // Retry a specific buried job
@@ -193,7 +193,7 @@ wp queuety retry-buried
 
 ## Timeout
 
-Jobs that exceed the max execution time are killed and retried. Configure the timeout globally:
+Queuety arms a `pcntl_alarm()` for the max execution time and is meant to fail the attempt with a `TimeoutException` when it is exceeded. That timeout is currently not enforced ([#10](https://github.com/inline0/queuety/issues/10)): the worker does not enable async signals, so a long-running handler runs to completion, and a handler blocked in `sleep()` is cut short when the alarm fires and then marked completed. Configure the timeout globally:
 
 ```php
 define( 'QUEUETY_MAX_EXECUTION_TIME', 300 ); // 5 minutes
@@ -213,7 +213,7 @@ wp queuety recover
 
 ## Queues
 
-Jobs are dispatched to named queues. Workers process one queue at a time:
+Jobs are dispatched to named queues. Each worker processes one queue, or an ordered list of queues (see [Workers](/docs/features/workers#multi-queue-priorities)):
 
 ```php
 Queuety::dispatch( 'handler', $payload )->on_queue( 'emails' );
@@ -320,7 +320,7 @@ class ImportProductsJob implements Job {
 | Property | Type | Description |
 |---|---|---|
 | `$tries` | `int` | Maximum number of attempts before the job is buried. Overrides the dispatch-time `max_attempts` value. |
-| `$timeout` | `int` | Maximum execution time in seconds. Overrides the global `QUEUETY_MAX_EXECUTION_TIME` constant. Requires `pcntl`. |
+| `$timeout` | `int` | Maximum execution time in seconds. Overrides the global `QUEUETY_MAX_EXECUTION_TIME` constant. Requires `pcntl`, and is not enforced yet (see [Timeout](/docs/jobs#timeout)). |
 | `$backoff` | `array` | Array of delay values in seconds for each retry attempt. The last value is reused for subsequent attempts. |
 | `$concurrency_group` | `string` | Shared worker-admission group for expensive jobs. |
 | `$concurrency_limit` | `int` | Maximum concurrent `processing` jobs in that group. Ignored without `$concurrency_group`. |
@@ -425,10 +425,11 @@ $first_job_id = Queuety::chain( [
 
 #### Using `with_chain()`
 
-The `Dispatchable` trait provides a `with_chain()` method as a shorthand for starting a chain from a specific job class:
+The `Dispatchable` trait provides a `with_chain()` method. It is currently equivalent to `Queuety::chain( $jobs )`: the class it is called on is not added to the chain ([#13](https://github.com/inline0/queuety/issues/13)), so list the first job in the array as well:
 
 ```php
 FetchDataJob::with_chain( [
+    new FetchDataJob(),
     new ProcessDataJob(),
     new NotifyCompleteJob(),
 ] )
@@ -498,9 +499,9 @@ Both approaches are fully supported. Existing handler-based jobs continue to wor
 ```
 dispatch() -> pending -> processing -> completed
                   |           |
-                  |           +-> failed -> retry -> pending
-                  |                           |
-                  |                           +-> buried (max attempts exceeded)
+                  |           +-> exception -> pending (retry after backoff)
+                  |                       |
+                  |                       +-> buried (max attempts reached)
                   |
                   +-> delayed (available_at in the future)
 ```
@@ -510,5 +511,5 @@ dispatch() -> pending -> processing -> completed
 | `pending` | Waiting to be claimed by a worker |
 | `processing` | Currently being executed |
 | `completed` | Successfully finished |
-| `failed` | Threw an exception, will be retried |
+| `failed` | Reserved; the worker does not set it today. A failed attempt that will be retried goes back to `pending` |
 | `buried` | All retry attempts exhausted |

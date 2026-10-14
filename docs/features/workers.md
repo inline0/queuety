@@ -27,8 +27,8 @@ This starts a single worker on the `default` queue. It runs in a loop: claim a j
 | Option | Description |
 |---|---|
 | `--queue=<queue>` | Queue(s) to process, comma-separated for priority ordering (default: `default`) |
-| `--once` | Process one batch and exit |
-| `--workers=<n>` | Fork N worker processes (requires `pcntl` extension) |
+| `--once` | Process at most one job and exit |
+| `--workers=<n>` | Fork N worker processes (requires the `pcntl` and `posix` extensions) |
 | `--min-workers=<n>` | Minimum worker count for an adaptive pool. Requires `--max-workers` |
 | `--max-workers=<n>` | Maximum worker count for an adaptive pool |
 
@@ -36,7 +36,7 @@ This starts a single worker on the `default` queue. It runs in a loop: claim a j
 # Process a specific queue
 wp queuety work --queue=emails
 
-# Process one batch and exit (useful for cron-based setups)
+# Process at most one job and exit
 wp queuety work --once
 
 # Run 4 concurrent workers
@@ -159,15 +159,16 @@ The worker-side admission profile is controlled with these constants:
 
 ## Worker lifecycle
 
-A worker stops gracefully when any of these conditions are met:
+A worker stops gracefully, after finishing its current job, when any of these conditions are met:
 
 | Condition | Configuration |
 |---|---|
 | Max jobs processed | `QUEUETY_WORKER_MAX_JOBS` (default: 1000) |
 | Max memory exceeded | `QUEUETY_WORKER_MAX_MEMORY` (default: 128 MB) |
-| Signal received | `SIGTERM` or `SIGINT` (Ctrl+C) |
 
 After stopping, the worker exits cleanly. In production, a process manager restarts it automatically.
+
+Signals are not handled gracefully yet ([#4](https://github.com/inline0/queuety/issues/4)). A single `wp queuety work` process installs no signal handler, so `SIGTERM` or `SIGINT` (Ctrl+C) ends it immediately, even in the middle of a job. That job stays `processing` until stale-job recovery resets it after `QUEUETY_STALE_TIMEOUT` seconds, so keep handlers safe to retry. A worker pool forwards `SIGTERM` to its children, but the children do not act on it, so the pool keeps running until they stop for one of the reasons above. When you need to stop a pool, give your process manager a stop timeout after which it sends `SIGKILL`.
 
 ## Multi-worker concurrency
 
@@ -178,7 +179,7 @@ wp queuety work --queue=default --workers=4
 ```
 
 Requirements:
-The `pcntl` PHP extension must be installed, and each child uses its own database connection, so your MySQL `max_connections` setting needs to accommodate the pool.
+The `pcntl` and `posix` PHP extensions must be installed (without `pcntl` the command fails with "pcntl extension is required for --workers=N."), and each child uses its own database connection, so your MySQL `max_connections` setting needs to accommodate the pool. Adaptive pools (`--min-workers`/`--max-workers`) have the same requirements.
 
 ## Adaptive worker pools
 
@@ -201,7 +202,7 @@ The parent-side scaling loop is controlled with:
 
 ## Stale job recovery
 
-If a worker crashes while processing a job, the job is left in `processing` status. Queuety automatically detects jobs that have been in `processing` longer than `QUEUETY_STALE_TIMEOUT` seconds and resets them to `pending`.
+If a worker crashes while processing a job, the job is left in `processing` status. A long-running worker checks about once a minute for jobs that have been in `processing` longer than `QUEUETY_STALE_TIMEOUT` seconds. A stale job with attempts left is retried after its backoff delay; one that has used all its attempts is buried, and its workflow is marked failed. `--once` workers and the WP-Cron fallback do not run this check.
 
 Recover stale jobs manually:
 

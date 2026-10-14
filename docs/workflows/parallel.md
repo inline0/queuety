@@ -85,4 +85,4 @@ Queuety::workflow( 'complex_pipeline' )
 
 ## Error handling
 
-If any handler in a parallel group fails, the workflow follows the normal retry logic for that handler. Other parallel handlers that have already completed are not re-run. Once the failed handler succeeds (or is buried), the workflow proceeds.
+If any handler in a parallel group fails, the workflow follows the normal retry logic for that handler. Other parallel handlers that have already completed are not re-run. Once the failed handler succeeds, the workflow proceeds. If it exhausts its retries and is buried, the workflow is marked failed and the remaining branch jobs are buried; use `retry_workflow()` to run the failed step again.

@@ -16,7 +16,7 @@ These waits pair especially well with [Async Handoffs](/docs/workflows/async-han
 
 For fuller planner/executor examples, see [Agent Orchestration](/docs/workflows/agent-orchestration).
 
-Queuety provides two builder methods:
+Queuety provides three builder methods:
 
 - `wait_for_workflow()` for one workflow
 - `wait_for_workflows()` for several workflows with `all`, `any`, or `quorum` semantics

@@ -24,9 +24,8 @@ define( 'QUEUETY_DEBUG', true );
 
 With debug mode enabled:
 
-- The worker logs every job claim, execution start, and completion to the database with `LogEvent::Debug` entries
-- Additional context is written to the log table, including handler resolution, state transitions, and timing details
-- Worker loop activity (polling, sleeping, schedule ticks) is logged
+- The worker writes `LogEvent::Debug` entries to the log table for claim attempts, empty queues, resource-admission deferrals, scheduler ticks, rate-limit checks and unclaims, job-class deserialization, and handler resolution
+- Each debug entry carries the handler `_worker`, the queue, and a `message` in its context; job start, completion, and failure are already logged as regular events
 
 ## Checking debug status
 
@@ -42,6 +41,6 @@ if ( Config::debug() ) {
 
 - **During development.** Trace the full lifecycle of jobs and workflows to verify behavior.
 - **Troubleshooting failures.** Get detailed context around why a job failed or a workflow stalled.
-- **Performance investigation.** See timing details for each step in a pipeline.
+- **Performance investigation.** Combine the debug trail with the `duration_ms` of regular `completed` events and the [metrics](/docs/features/metrics) API.
 
-Disable debug mode in production to avoid filling the log table with high-volume debug entries. If you have `QUEUETY_LOG_RETENTION_DAYS` set, debug logs are purged automatically with other log entries.
+Disable debug mode in production to avoid filling the log table with high-volume debug entries. Debug entries stay until you purge logs with `Queuety::purge_logs()`; nothing purges them automatically.

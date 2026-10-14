@@ -10,7 +10,7 @@ meta_description: "Wrap job execution with reusable cross-cutting concerns like 
 
 # Middleware
 
-Middleware wraps job execution in an onion-style pipeline. Each middleware can run logic before and after the job, short-circuit execution, or catch exceptions. Queuety ships four built-in middleware and supports custom middleware through the `Contracts\Middleware` interface.
+Middleware wraps job execution in an onion-style pipeline. Each middleware can run logic before and after the job, short-circuit execution, or catch exceptions. Queuety ships five built-in middleware and supports custom middleware through the `Contracts\Middleware` interface.
 
 Middleware is available for [dispatchable job classes](/docs/jobs#dispatchable-job-classes) (classes implementing `Contracts\Job` with the `Dispatchable` trait).
 
@@ -137,13 +137,13 @@ public function middleware(): array {
 | `$max_attempts` | `int` | `10` | Maximum exceptions allowed within the decay window |
 | `$decay_minutes` | `int` | `10` | Window duration in minutes |
 
-Exception counts are tracked per handler class in Queuety's locks table and shared across all worker processes. When the threshold is reached, the middleware throws a `RuntimeException` and the job is retried after a backoff delay.
+Exception counts are tracked per handler class in Queuety's locks table and shared across all worker processes. When the threshold is reached, the middleware throws a `RuntimeException` without calling the job, and the worker treats that like any other failure: the attempt counts towards `max_attempts`, the job is retried with the normal backoff, and it is buried once its attempts run out.
 
-Example: if an external API is down, the first 10 failures are processed normally (each incrementing the exception counter). The 11th and subsequent attempts within 10 minutes are throttled, preserving retry attempts until the API recovers.
+Example: if an external API is down, the first 10 failures are processed normally (each incrementing the exception counter). Further attempts fail fast without calling the API until 10 minutes pass without a new exception; the window restarts with every recorded exception.
 
 ### `RateLimited`
 
-Enforces a maximum number of executions within a sliding time window. If the limit is exceeded, a `RateLimitExceededException` is thrown and the job is retried after the window resets.
+Enforces a maximum number of executions within a time window. If the limit is exceeded inside the middleware, a `RateLimitExceededException` is thrown; the worker handles it as an ordinary failed attempt, retried with the normal backoff and counted towards `max_attempts`. Once the middleware has registered the limit with the worker's rate limiter, later jobs for the handler are also put back to `pending` before they run while the limit is reached (see [Rate Limiting](/docs/features/rate-limiting)).
 
 ```php
 use Queuety\Middleware\RateLimited;
@@ -164,7 +164,7 @@ The rate limiter uses Queuety's internal `RateLimiter` instance, so limits are e
 
 ### `Timeout`
 
-Enforces a per-job execution timeout using `pcntl_alarm`. If the job exceeds the timeout, a `TimeoutException` is thrown and the job is retried.
+Arms a per-job execution timeout with `pcntl_alarm` and is meant to throw a `TimeoutException` when the job runs too long. The timeout is not enforced today ([#10](https://github.com/inline0/queuety/issues/10)): Queuety does not enable async signals, so the alarm handler does not run while the job is executing. The middleware also resets the alarm when it returns, which cancels the worker's own job timeout alarm.
 
 ```php
 use Queuety\Middleware\Timeout;

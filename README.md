@@ -21,7 +21,7 @@
 
 Queuety is a WordPress plugin that provides a fast job queue, durable workflow engine, and durable state machine runtime. Workers claim jobs directly from MySQL and process them inside a long-running WP-CLI process.
 
-**The problem:** WordPress has no real background job system. `wp_cron` only fires on page visits. Action Scheduler boots the entire WordPress stack for every batch. An LLM API call that takes 60 seconds gets killed by PHP's 30-second timeout. There's no way to run multi-step processes that survive crashes and resume where they left off.
+**The problem:** WordPress has no real background job system. `wp_cron` only fires on page visits. Action Scheduler's default runner rides on WP-Cron and loopback HTTP requests, each working through batches for at most 30 seconds. An LLM API call that takes 60 seconds gets killed by PHP's 30-second timeout. There's no way to run multi-step processes that survive crashes and resume where they left off.
 
 **Queuety solves this** with three primitives:
 
@@ -34,8 +34,18 @@ Queuety is a WordPress plugin that provides a fast job queue, durable workflow e
 **Prerequisites:**
 - PHP 8.2+
 - WordPress 6.4+
-- MySQL 5.7+ or MariaDB 10.3+
+- MySQL 8.0+ or MariaDB 10.6+ (jobs are claimed with `SELECT ... FOR UPDATE SKIP LOCKED`)
 - `mysqli` or `pdo_mysql` enabled for the PHP runtime that loads WordPress and WP-CLI
+- WP-CLI for dedicated workers (`wp queuety work`); without it, only the built-in once-a-minute WP-Cron fallback runs jobs
+- The `pcntl` and `posix` extensions for worker pools (`--workers`, `--min-workers`, `--max-workers`)
+
+Every [GitHub release](https://github.com/inline0/queuety/releases) ships a ready-to-install plugin zip, `queuety.zip`, with its Composer dependencies included:
+
+```bash
+wp plugin install https://github.com/inline0/queuety/releases/latest/download/queuety.zip --activate
+```
+
+Or upload the same zip under Plugins > Add New > Upload Plugin.
 
 For Composer-managed WordPress installs (for example Bedrock):
 
@@ -44,11 +54,7 @@ composer require queuety/queuety
 wp plugin activate queuety
 ```
 
-For a packaged plugin zip:
-
-```bash
-wp plugin install /path/to/queuety.zip --activate
-```
+The package has the `wordpress-plugin` type, so it lands in your plugins directory only when the project uses `composer/installers` with an installer path for that type, as Bedrock does, and loads the project's `vendor/autoload.php`. In a plain WordPress install, `composer require` puts it in `vendor/queuety/queuety`, where WordPress does not see it; use the release zip there.
 
 For local development from this repository:
 
@@ -59,7 +65,7 @@ wp plugin activate queuety
 
 Queuety chooses a MySQL driver automatically. WordPress runtimes use `mysqli` by default, while standalone runtimes can still use `pdo_mysql` when it is available or force a driver with `QUEUETY_DB_DRIVER`.
 
-Out of the box, the plugin schedules a one-shot worker through WordPress cron every minute for the `default` queue. That gives you a basic no-shell fallback for jobs and workflows that stay on `default`, as long as WordPress cron is firing. For custom queues, lower latency, or production reliability, run dedicated `wp queuety work` processes.
+Out of the box, the plugin schedules a one-shot worker through WordPress cron every minute for the `default` queue. That gives you a basic no-shell fallback for jobs and workflows that stay on `default`, as long as WordPress cron is firing. Each run handles at most one job and does not fire recurring schedules, recover stale jobs or check deadlines ([#14](https://github.com/inline0/queuety/issues/14)). For custom queues, recurring schedules, lower latency, or production reliability, run dedicated `wp queuety work` processes.
 
 Dispatch a job using the modern dispatch API:
 
@@ -327,10 +333,10 @@ wp queuety work --queue=providers --min-workers=2 --max-workers=6
 - **`failed()` hook** -- called on the job instance when all retries are exhausted
 - **Conditional dispatch** -- `dispatch_if()` and `dispatch_unless()` on the `Dispatchable` trait
 - **Synchronous dispatch** -- `dispatch_sync()` runs a job immediately without the queue
-- **Timeout enforcement** -- kill jobs that exceed max execution time
+- **Timeout settings** -- `QUEUETY_MAX_EXECUTION_TIME`, `$timeout` and the `Timeout` middleware (not enforced yet, see [#10](https://github.com/inline0/queuety/issues/10))
 - **Worker concurrency** -- `--workers=N` forks multiple processes with automatic restart on crash
 - **Permanent logging** -- queryable database log of every job and workflow execution
-- **Metrics API** -- throughput, latency percentiles, and error rates per handler
+- **Metrics API** -- completed and failed counts, average and p95 duration, and error rates per handler
 - **Webhooks** -- HTTP notifications on job/workflow events
 - **Testing utilities** -- `QueueFake` for asserting dispatched jobs and `create_batch()` batches in tests
 - **PHP attributes** -- `#[QueuetyHandler('name')]` for auto-registration
@@ -380,7 +386,7 @@ Modern dispatchable job class:
 use Queuety\Contracts\Job;
 use Queuety\Dispatchable;
 
-readonly class SendEmailJob implements Job {
+class SendEmailJob implements Job {
     use Dispatchable;
 
     public int $tries = 5;
@@ -388,9 +394,9 @@ readonly class SendEmailJob implements Job {
     public array $backoff = [10, 30, 60];
 
     public function __construct(
-        public string $to,
-        public string $subject,
-        public string $body,
+        public readonly string $to,
+        public readonly string $subject,
+        public readonly string $body,
     ) {}
 
     public function handle(): void {
@@ -447,7 +453,7 @@ class StreamLLMHandler implements StreamingStep {
 
 | Command | Description |
 |---------|-------------|
-| `wp queuety work [--queue=<q>] [--once] [--workers=<n>]` | Start one worker or a fixed worker pool |
+| `wp queuety work [--queue=<q>] [--once] [--workers=<n>]` | Start one worker or a fixed worker pool (`--once` handles at most one job) |
 | `wp queuety work [--queue=<q>] [--min-workers=<n>] --max-workers=<n>` | Start an adaptive worker pool |
 | `wp queuety work --queue=high,default,low` | Process multiple queues with priority ordering |
 | `wp queuety flush` | Process all pending jobs and exit |
@@ -464,7 +470,7 @@ class StreamLLMHandler implements StreamingStep {
 | `wp queuety pause <queue>` | Pause a queue |
 | `wp queuety resume <queue>` | Resume a queue |
 | `wp queuety metrics` | Show per-handler metrics |
-| `wp queuety discover <dir> --namespace=<ns>` | Auto-discover handlers |
+| `wp queuety discover <dir> <namespace> [--register]` | Auto-discover handlers |
 | `wp queuety workflow status <id>` | Show workflow progress |
 | `wp queuety workflow retry <id>` | Retry from failed step |
 | `wp queuety workflow pause <id>` | Pause a workflow |
@@ -477,11 +483,12 @@ class StreamLLMHandler implements StreamingStep {
 | `wp queuety schedule add <handler> [--every=<i>] [--cron=<c>]` | Add a recurring schedule |
 | `wp queuety schedule remove <handler>` | Remove a schedule |
 | `wp queuety schedule run` | Manually trigger scheduler tick |
-| `wp queuety log [--workflow=<id>] [--job=<id>]` | Query log entries |
-| `wp queuety log purge --older-than=<days>` | Prune old logs |
+| `wp queuety log [--workflow=<id>] [--job=<id>]` | Query log entries (prune old logs with `Queuety::purge_logs( $days )`; the `log purge` subcommand is unreachable, see [#11](https://github.com/inline0/queuety/issues/11)) |
 | `wp queuety webhook add <event> <url>` | Register a webhook |
 | `wp queuety webhook list` | List webhooks |
 | `wp queuety webhook remove <id>` | Remove a webhook |
+
+State machines have no WP-CLI commands; inspect them through the PHP API (`Queuety::machine_status()`, `Queuety::list_machines()`, `Queuety::machine_timeline()`).
 
 ## Configuration
 
@@ -489,9 +496,9 @@ All constants are optional. Define them in `wp-config.php` or before Queuety boo
 
 | Constant | Default | Description |
 |----------|---------|-------------|
-| `QUEUETY_RETENTION_DAYS` | `7` | Auto-purge completed jobs after N days |
-| `QUEUETY_LOG_RETENTION_DAYS` | `0` | Auto-purge logs after N days (0 = forever) |
-| `QUEUETY_MAX_EXECUTION_TIME` | `300` | Max seconds per job before timeout |
+| `QUEUETY_RETENTION_DAYS` | `7` | Default age in days for `wp queuety purge`; nothing purges automatically |
+| `QUEUETY_LOG_RETENTION_DAYS` | `0` | Not used yet ([#15](https://github.com/inline0/queuety/issues/15)); logs are kept until `Queuety::purge_logs()` |
+| `QUEUETY_MAX_EXECUTION_TIME` | `300` | Max seconds per job before timeout (not enforced yet, see [#10](https://github.com/inline0/queuety/issues/10)) |
 | `QUEUETY_WORKER_SLEEP` | `1` | Seconds to sleep when queue is empty |
 | `QUEUETY_WORKER_MAX_JOBS` | `1000` | Max jobs before worker restarts |
 | `QUEUETY_WORKER_MAX_MEMORY` | `128` | Max MB before worker restarts |
@@ -511,6 +518,12 @@ All constants are optional. Define them in `wp-config.php` or before Queuety boo
 | `QUEUETY_TABLE_CHUNKS` | `queuety_chunks` | Streaming chunks table name |
 | `QUEUETY_TABLE_QUEUE_STATES` | `queuety_queue_states` | Queue states table name |
 | `QUEUETY_TABLE_WEBHOOKS` | `queuety_webhooks` | Webhooks table name |
+| `QUEUETY_TABLE_LOCKS` | `queuety_locks` | Locks table name |
+| `QUEUETY_TABLE_BATCHES` | `queuety_batches` | Batches table name |
+| `QUEUETY_TABLE_WORKFLOW_EVENTS` | `queuety_workflow_events` | Workflow event log table name |
+| `QUEUETY_TABLE_ARTIFACTS` | `queuety_artifacts` | Workflow artifacts table name |
+| `QUEUETY_TABLE_STATE_MACHINES` | `queuety_state_machines` | State machines table name |
+| `QUEUETY_TABLE_STATE_MACHINE_EVENTS` | `queuety_state_machine_events` | State machine event log table name |
 | `QUEUETY_DB_DRIVER` | `auto` | MySQL driver: `auto`, `mysqli`, or `pdo` |
 
 `QUEUETY_TABLE_PREFIX` changes the shared Queuety portion of the table names while leaving the WordPress database prefix in place. For example, with `$wpdb->prefix = 'wp_'` and `QUEUETY_TABLE_PREFIX = 'themequeue_'`, the jobs table becomes `wp_themequeue_jobs`. Explicit `QUEUETY_TABLE_*` constants still override individual tables.
@@ -543,7 +556,7 @@ bash tests/run-all.sh
 
 # Run individual categories when needed
 composer cs
-composer stan
+composer analyse
 composer test:unit
 composer test:integration
 bash tests/e2e/run-all.sh

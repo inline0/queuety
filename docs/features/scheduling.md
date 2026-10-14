@@ -10,7 +10,7 @@ meta_description: "Recurring jobs with interval and cron expressions."
 
 # Scheduling
 
-Queuety has built-in support for recurring jobs. Instead of relying on `wp_cron`, schedules are stored in the database and evaluated by the worker process on each tick.
+Queuety has built-in support for recurring jobs. Instead of relying on `wp_cron`, schedules are stored in the database and evaluated by a long-running `wp queuety work` process (or the parent of a worker pool) about once a minute. `wp queuety work --once`, `wp queuety flush`, and the plugin's built-in WP-Cron fallback do not evaluate schedules ([#14](https://github.com/inline0/queuety/issues/14)); without a long-running worker, run `wp queuety schedule run` yourself.
 
 ## Interval scheduling
 
@@ -83,7 +83,7 @@ The `OverlapPolicy` enum has three cases:
 |---|---|---|
 | `OverlapPolicy::Allow` | `allow` | Always dispatch a new job, even if the previous run is still active. This is the default. |
 | `OverlapPolicy::Skip` | `skip` | Skip the current tick if the handler has any pending or processing jobs. The `next_run` is updated normally so the schedule stays on cadence. |
-| `OverlapPolicy::Buffer` | `buffer` | Do not dispatch now, but push `next_run` forward so the job is retried on the next tick. This effectively buffers one pending execution until the current run finishes. |
+| `OverlapPolicy::Buffer` | `buffer` | Like Skip, the tick is not dispatched and `next_run` advances to the next regular occurrence. Unlike Skip, `last_run` is not updated. |
 
 ### Allow (default)
 
@@ -107,7 +107,7 @@ Queuety::schedule( 'rebuild_search_index' )
 
 ### Buffer
 
-Similar to Skip, but the next run is rescheduled to the very next tick instead of the next regular interval. Use this when you want to guarantee the job runs as soon as the current instance finishes, without stacking up multiple runs.
+Behaves like Skip today: when the handler still has a pending or processing job, the tick is not dispatched and `next_run` moves to the next regular occurrence. The only difference is that Buffer leaves `last_run` unchanged, while Skip records the skipped tick as the last run.
 
 ```php
 Queuety::schedule( 'sync_inventory' )
@@ -119,7 +119,7 @@ Queuety::schedule( 'sync_inventory' )
 
 When a schedule is created, Queuety stores it in the `queuety_schedules` table with the expression, handler, payload, and the next calculated run time.
 
-On each worker tick, the scheduler checks for schedules whose `next_run` has passed. For each due schedule, it dispatches a new job and updates `next_run` to the next occurrence.
+On each scheduler tick (about once a minute in a long-running worker, or when you run `wp queuety schedule run`), the scheduler checks for schedules whose `next_run` has passed. For each due schedule, it dispatches a new job and updates `next_run` to the next occurrence.
 
 ## Managing schedules via CLI
 

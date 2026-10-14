@@ -80,10 +80,11 @@ use Queuety\Contracts\StateAction;
 
 final class DraftBriefAction implements StateAction
 {
-    public function __construct(private readonly \PDO $pdo) {}
-
-    public function handle(array $state, ?string $event = null, array $event_payload = []): array|string
+    public function handle(array $state, ?string $event = null, array $event_payload = [], array $payload = []): array|string
     {
+        // Queuety creates actions with `new DraftBriefAction()`, so build dependencies here.
+        $pdo = new \PDO($_ENV['NEURON_DB_DSN'], $_ENV['NEURON_DB_USER'], $_ENV['NEURON_DB_PASSWORD']);
+
         $threadId = $state['neuron_thread_id'] ?? sprintf(
             'brief:%d:editor',
             $state['brief_id'],
@@ -98,7 +99,7 @@ final class DraftBriefAction implements StateAction
             );
         }
 
-        $agent = new EditorAgent($threadId, $this->pdo);
+        $agent = new EditorAgent($threadId, $pdo);
         $message = $agent->chat(
             new UserMessage($prompt)
         )->getMessage();
@@ -132,6 +133,7 @@ $machine_id = Queuety::machine('brief_review_session')
         'brief_id' => 42,
     ]);
 
+// Later, once the draft action has finished and the machine waits in `awaiting_review`:
 Queuety::machine_event(
     $machine_id,
     'reject',

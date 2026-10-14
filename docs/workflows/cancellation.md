@@ -62,9 +62,9 @@ This method:
 1. Locks the workflow row
 2. Sets the workflow status to `cancelled`
 3. Buries all pending and processing jobs for the workflow with the message "Workflow cancelled"
-4. Runs completed-step compensations in reverse order (if any were registered via `compensate_with()`)
-5. Runs the `on_cancel` cleanup handler (if registered)
-6. Logs a `workflow_cancelled` event
+4. Logs a `workflow_cancelled` event and commits
+5. Runs completed-step compensations in reverse order (if any were registered via `compensate_with()`)
+6. Runs the `on_cancel` cleanup handler (if registered)
 
 A `RuntimeException` is thrown if the workflow is already `completed` or `cancelled`.
 
@@ -90,7 +90,7 @@ When a workflow is cancelled:
 - **Step compensations** run in reverse completion order if you attached them with `compensate_with()`
 - **Cleanup handler** runs after the workflow row has been marked `cancelled`
 - **Pending jobs** for the workflow are buried immediately
-- **Processing jobs** for the workflow are buried (they will fail when the worker tries to advance the workflow)
+- **Processing jobs** for the workflow are buried; when the in-flight handler finishes, its output is discarded and the workflow does not advance
 - **Completed jobs** from prior steps are left as-is
 - **A log entry** with event `workflow_cancelled` is recorded
 

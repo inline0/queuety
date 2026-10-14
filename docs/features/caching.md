@@ -23,7 +23,7 @@ All cache backends implement `Queuety\Contracts\Cache`:
 | `delete( string $key )` | `void` | Remove a value. |
 | `has( string $key )` | `bool` | Check if a key exists and is not expired. |
 | `add( string $key, mixed $value, int $ttl = 0 )` | `bool` | Set a value only if the key does not already exist (atomic). Returns `true` if the value was set. |
-| `flush()` | `void` | Remove all items from the cache. |
+| `flush()` | `void` | Remove all items from the cache. `ApcuCache::flush()` calls `apcu_clear_cache()`, which clears every APCu entry on the server, not only Queuety's. |
 
 ## Built-in backends
 
@@ -58,7 +58,7 @@ The cache layer is used internally by several subsystems:
 
 ## TTL configuration
 
-The default cache TTL is 5 seconds. Override it with the `QUEUETY_CACHE_TTL` constant in your `wp-config.php`:
+The default cache TTL is 5 seconds. It applies to the queue pause state and rate-limit counters; workflow status and state reads are cached for a fixed 2 seconds that the constant does not change. Override the default with the `QUEUETY_CACHE_TTL` constant in your `wp-config.php`:
 
 ```php
 define( 'QUEUETY_CACHE_TTL', 10 ); // 10 seconds

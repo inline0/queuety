@@ -13,7 +13,7 @@ Queuety is a WordPress plugin that provides a fast job queue, durable workflow e
 
 ## Why Queuety?
 
-WordPress has no real background job system. `wp_cron` only fires on page visits. Action Scheduler boots the entire WordPress stack for every batch. An LLM API call that takes 60 seconds gets killed by PHP's 30-second timeout. There's no way to run multi-step processes that survive crashes and resume where they left off.
+WordPress has no real background job system. `wp_cron` only fires on page visits. Action Scheduler's default runner rides on WP-Cron and loopback HTTP requests, each working through batches for at most 30 seconds. An LLM API call that takes 60 seconds gets killed by PHP's 30-second timeout. There's no way to run multi-step processes that survive crashes and resume where they left off.
 
 Queuety solves this with three primitives:
 
@@ -100,7 +100,7 @@ If you want to use the DB-backed runtime outside WordPress, see [Standalone Use]
 - **Fast execution.** Workers use direct MySQL queue access and avoid the per-request cron pattern that slows down background work in WordPress.
 - **Durable workflows.** Multi-step processes with persistent state that survive PHP timeouts, crashes, and retries. Each step boundary is an atomic MySQL transaction.
 - **Explicit state machines.** Model chat sessions, approvals, and other long-lived lifecycles with named states, guarded transitions, queued state-entry actions, and durable event timelines.
-- **Modern dispatch API.** Self-contained readonly job classes with the `Dispatchable` trait, typed constructor properties as payload, and `$tries`/`$timeout`/`$backoff` declared on the class.
+- **Modern dispatch API.** Self-contained job classes with the `Dispatchable` trait, typed constructor properties as payload, and `$tries`/`$timeout`/`$backoff` declared on the class. A `readonly` class cannot give these properties defaults, so declare them on a regular class with readonly promoted constructor properties.
 - **Middleware pipeline.** Onion-style middleware for rate limiting, exception throttling, unique jobs, and custom logic. Declared per-job via a `middleware()` method.
 - **Streaming steps.** The `StreamingStep` interface yields chunks that are persisted to the database immediately. On retry, previously saved chunks are provided so the stream can resume where it left off. Ideal for LLM responses and large downloads.
 - **Pluggable cache layer.** `CacheFactory` auto-detects APCu or falls back to an in-memory cache. Custom backends implement `Contracts\Cache`. Used internally for rate-limiter lookups and queue state.
@@ -149,4 +149,9 @@ Workflow: completed
 
 - PHP 8.2 or later
 - WordPress 6.4 or later
-- MySQL 5.7+ or MariaDB 10.3+
+- MySQL 8.0+ or MariaDB 10.6+, because workers claim jobs with `SELECT ... FOR UPDATE SKIP LOCKED`
+- `mysqli` or `pdo_mysql` in the PHP runtime that loads WordPress and WP-CLI
+- WP-CLI to run dedicated workers with `wp queuety work`
+- The `pcntl` and `posix` PHP extensions for worker pools (`--workers`, `--min-workers`, `--max-workers`)
+
+See [Getting Started](/docs/getting-started) for installation.

@@ -19,6 +19,8 @@ For agent harnesses and other virtual-bash integrations, treat this page as the 
 - `Queuety::cli_command_map()` exposes the serializable command catalog
 - `Queuety::resolve_cli_command( $path, $args, $assoc_args )` turns parsed `wp queuety ...` input into a normalized execution plan that prefers direct PHP callables
 
+State machines have no commands in this tree; inspect them through the PHP API described in [State Machines](/docs/state-machines).
+
 ## Job commands
 
 ### `wp queuety work`
@@ -33,8 +35,8 @@ wp queuety work [--queue=<queue>] [--min-workers=<n>] --max-workers=<n>
 | Option | Description |
 |---|---|
 | `--queue=<queue>` | Queue(s) to process, comma-separated for priority ordering (default: `default`) |
-| `--once` | Process one batch and exit |
-| `--workers=<n>` | Fork N worker processes (requires `pcntl` extension) |
+| `--once` | Process at most one job and exit (also exits at once when nothing is claimable) |
+| `--workers=<n>` | Fork N worker processes (requires the `pcntl` and `posix` extensions, as do `--min-workers` and `--max-workers`) |
 | `--min-workers=<n>` | Minimum worker count for an adaptive pool. Requires `--max-workers` |
 | `--max-workers=<n>` | Maximum worker count for an adaptive pool |
 
@@ -274,14 +276,15 @@ wp queuety workflow status <id>
 List workflows.
 
 ```bash
-wp queuety workflow list [--status=<status>] [--limit=<limit>] [--format=<format>]
+wp queuety workflow list [--status=<status>] [--format=<format>]
 ```
 
 | Option | Description |
 |---|---|
 | `--status=<status>` | Filter by status: `running`, `completed`, `failed`, `paused`, `waiting_for_signal`, `waiting_for_workflows`, `cancelled` |
-| `--limit=<limit>` | Maximum workflows to return (default: `50`) |
 | `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml` |
+
+The command returns at most 50 workflows. It reads a `--limit` value, but WP-CLI currently rejects the flag because the command does not declare it ([#12](https://github.com/inline0/queuety/issues/12)); use `Queuety::list_workflows()` for a different limit.
 
 The default table includes `StepName` and `WaitMode` so blocked workflows are easier to scan.
 
@@ -309,7 +312,7 @@ wp queuety workflow approve <id> [--data=<json>] [--signal=<name>]
 |---|---|
 | `<id>` | Workflow ID (required) |
 | `--data=<json>` | Optional JSON object payload |
-| `--signal=<name>` | Override the approval signal name (default: `approval`) |
+| `--signal=<name>` | Override the approval signal name (default: `approval`, which matches `wait_for_approval()`; a `wait_for_decision()` step listens for `approved` by default, so pass `--signal=approved` there) |
 
 ### `wp queuety workflow reject`
 
@@ -392,7 +395,7 @@ wp queuety workflow resume <id>
 
 ### `wp queuety workflow cancel`
 
-Cancel a running or paused workflow. Runs any registered cleanup handler, sets the status to `cancelled`, and buries pending jobs.
+Cancel a workflow that is not already `completed` or `cancelled`. In one transaction Queuety sets the status to `cancelled`, buries the workflow's pending and processing jobs and logs `workflow_cancelled`; it then runs compensations and any registered cleanup handler.
 
 ```bash
 wp queuety workflow cancel <id>
@@ -448,7 +451,7 @@ See [Workflow Event Log](/docs/workflows/event-log) for details on what gets rec
 
 ### `wp queuety workflow rewind`
 
-Rewind a workflow to a previous step and re-run from there. The state is restored from the event log `state_after` for the given step.
+Rewind a workflow to a previous step and continue from the step after it. The state is restored from the event log `state_after` for the given step, and the next step (`<step> + 1`) is enqueued; the given step itself is not run again.
 
 ```bash
 wp queuety workflow rewind <id> <step>
@@ -603,8 +606,10 @@ wp queuety log [--job=<id>] [--workflow=<id>] [--handler=<name>] [--event=<event
 | `--limit=<n>` | Max entries to show (default: `50`) |
 | `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml` |
 
+Filters do not combine: Queuety applies the first one present, in the order `--job`, `--workflow`, `--handler`, `--event`, `--since`. `--job` and `--workflow` return all entries, oldest first, and ignore `--limit`. `--handler` and `--event` return the newest entries first. Without a filter the command reads the last 24 hours; that query and `--since` list entries oldest first, so `--limit` keeps the oldest entries in the window.
+
 ```bash
-# Recent logs (last 24 hours)
+# Logs from the last 24 hours (oldest first)
 wp queuety log
 
 # Logs for a job
@@ -617,17 +622,13 @@ wp queuety log --event=failed --limit=100
 wp queuety log --since="2025-03-01 00:00:00"
 ```
 
-### `wp queuety log purge`
+### Purging logs
 
-Purge old log entries.
+`LogCommand` defines a `purge` subcommand (`wp queuety log purge --older-than=<days>`), but WP-CLI registers `wp queuety log` as a single command, so the subcommand cannot be reached and fails with "Too many positional arguments: purge" ([#11](https://github.com/inline0/queuety/issues/11)). Purge old log entries from PHP instead:
 
 ```bash
-wp queuety log purge --older-than=<days>
+wp eval 'echo Queuety\Queuety::purge_logs( 30 );'
 ```
-
-| Option | Description |
-|---|---|
-| `--older-than=<days>` | Delete entries older than N days (required) |
 
 ## Webhook commands
 

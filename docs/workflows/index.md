@@ -28,7 +28,7 @@ $workflow_id = Queuety::workflow( 'generate_report' )
 
 ## State accumulation
 
-The initial payload you pass to `dispatch()` becomes the starting state. Each step's return value is merged into the state via `array_merge`:
+The initial payload you pass to `dispatch()` becomes the starting state. Each step's returned keys are merged into the state. Keys starting with `_` are reserved for control values such as `_next_step` and are not merged into the public state:
 
 ```
 dispatch(['user_id' => 42])

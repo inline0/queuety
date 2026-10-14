@@ -10,7 +10,7 @@ meta_description: "Pausing, resuming, and monitoring queues."
 
 # Queue Management
 
-Queuety supports multiple named queues. Workers process one queue at a time, and queues can be paused and resumed independently.
+Queuety supports multiple named queues. Each worker processes one queue or an ordered list of queues (see [Workers](/docs/features/workers#multi-queue-priorities)), and queues can be paused and resumed independently.
 
 ## Named queues
 

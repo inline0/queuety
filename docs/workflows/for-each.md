@@ -58,11 +58,13 @@ final class IndexPageStep implements ForEachHandler {
     public function config(): array {
         return [
             'max_attempts' => 3,
-            'backoff' => [5, 30, 120],
+            'backoff' => 'exponential',
         ];
     }
 }
 ```
+
+In `config()`, `backoff` takes a strategy name: `exponential`, `linear`, or `fixed`. A list of per-attempt delays there is currently dropped and turns into immediate retries ([#16](https://github.com/inline0/queuety/issues/16)); put per-attempt delays in the step definition's `backoff` instead.
 
 `$state` contains the full workflow state, `$item` is the individual for-each item, and `$index` is its zero-based position.
 
@@ -89,11 +91,12 @@ By default Queuety stores a structured aggregate under `result_key`:
 - `total`
 - `succeeded`
 - `failed`
+- `settled`
 - `winner`
 - `results`
 - `failures`
 
-If you want a custom summary, pass a reducer class implementing `Contracts\ForEachReducer`:
+If you want a custom summary, pass a reducer class implementing `Contracts\ForEachReducer`. The aggregate is still stored under `result_key`, and the keys the reducer returns are merged into the workflow state next to it:
 
 ```php
 use Queuety\Contracts\ForEachReducer;

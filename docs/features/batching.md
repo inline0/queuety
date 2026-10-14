@@ -138,7 +138,7 @@ Cancel a batch through the `BatchManager`. Cancelling a batch sets `cancelled_at
 Queuety::batch_manager()->cancel( $batch_id );
 ```
 
-Jobs already in progress will continue to run, but pending jobs in a cancelled batch are effectively abandoned.
+Cancelling marks the batch as cancelled and finished and fires its `finally` callback. It does not touch the jobs: pending jobs in a cancelled batch still run, but their results no longer update the batch counters or trigger `then`, `catch`, or `finally`. Delete the jobs yourself if they must not run.
 
 ## Finding batches
 

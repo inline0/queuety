@@ -53,6 +53,8 @@ class NormalizeReviewOutcomeStep implements \Queuety\Step {
 
 If `review_approved` is still not `true`, the repeat step jumps back to `draft`. Once it becomes `true`, the workflow falls through to `PublishBriefStep`.
 
+Signals are stored, not consumed. On the second pass through `wait_for_decision()`, the earlier `rejected` signal still matches and the wait settles immediately, so the loop would spin until `max_transitions()` stops it. Give every round its own key: have `DraftBriefStep` return an incrementing `review_round`, pass `correlation_key: 'review_round'` to `wait_for_decision()`, and have the reviewer send the same `review_round` in the signal payload. Only a signal whose `review_round` equals the current state value then settles the wait.
+
 ## `repeat_until()` with a condition class
 
 ```php

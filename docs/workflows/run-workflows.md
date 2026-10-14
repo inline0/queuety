@@ -96,7 +96,7 @@ class SendWelcomeEmailHandler implements Step {
 
 ## Run-workflow options
 
-The run-workflow builder supports the same options as a regular workflow:
+The run-workflow builder's `on_queue()`, `with_priority()`, and `max_attempts()` apply to the child workflow. Other workflow-level options on the child builder, such as `on_cancel()`, `prune_state_after()`, `must_complete_within()`, `version()`, `idempotency_key()`, the `max_*()` budgets, and `compensate_on_failure()`, are not carried over:
 
 ```php
 $sub = Queuety::workflow( 'heavy_processing' )
