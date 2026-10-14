@@ -8,6 +8,7 @@
 namespace Queuety\Middleware;
 
 use Queuety\Contracts\Middleware;
+use Queuety\AlarmGuard;
 use Queuety\Exceptions\TimeoutException;
 
 /**
@@ -36,22 +37,12 @@ class Timeout implements Middleware {
 	public function handle( object $job, \Closure $next ): void {
 		$pcntl_available = function_exists( 'pcntl_alarm' ) && function_exists( 'pcntl_signal' );
 
-		if ( $pcntl_available ) {
-			$seconds        = $this->seconds;
-			$alarm_callback = static function () use ( $seconds ): void {
-				throw new TimeoutException( $seconds );
-			};
-			pcntl_signal( SIGALRM, $alarm_callback );
-			pcntl_alarm( $this->seconds );
-		}
+		$alarm = $pcntl_available ? new AlarmGuard( $this->seconds ) : null;
 
 		try {
 			$next( $job );
 		} finally {
-			if ( $pcntl_available ) {
-				pcntl_alarm( 0 );
-				pcntl_signal( SIGALRM, SIG_DFL );
-			}
+			$alarm?->close();
 		}
 	}
 }

@@ -43,4 +43,4 @@ if ( Config::debug() ) {
 - **Troubleshooting failures.** Get detailed context around why a job failed or a workflow stalled.
 - **Performance investigation.** Combine the debug trail with the `duration_ms` of regular `completed` events and the [metrics](/docs/features/metrics) API.
 
-Disable debug mode in production to avoid filling the log table with high-volume debug entries. Debug entries stay until you purge logs with `Queuety::purge_logs()`; nothing purges them automatically.
+Disable debug mode in production to avoid filling the log table with high-volume debug entries. Debug entries follow `QUEUETY_LOG_RETENTION_DAYS`; with the default zero they stay until you purge logs manually.

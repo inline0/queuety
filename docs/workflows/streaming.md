@@ -32,7 +32,7 @@ interface StreamingStep {
 |---|---|
 | `stream( $state, $existing_chunks )` | Generator that yields string chunks. Each yield triggers an immediate DB write. |
 | `on_complete( $chunks, $state )` | Called after the stream finishes. Receives all chunks (previous + new) and returns data to merge into workflow state. |
-| `config()` | Optional configuration. Supports `max_attempts` and `backoff` keys; `backoff` takes a strategy name (`exponential`, `linear`, `fixed`), since a list of delays is currently dropped ([#16](https://github.com/inline0/queuety/issues/16)). |
+| `config()` | Optional configuration. Supports `max_attempts` and `backoff`; use a strategy name or a list of per-attempt delays. |
 
 ## How chunks are persisted
 

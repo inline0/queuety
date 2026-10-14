@@ -15,9 +15,15 @@ use Queuety\Queuety;
 class LogCommand extends \WP_CLI_Command {
 
 	/**
-	 * Query log entries.
+	 * Query log entries or purge old entries.
 	 *
 	 * ## OPTIONS
+	 *
+	 * [<action>]
+	 * : Use purge to delete old log entries. Omit to query logs.
+	 *
+	 * [--older-than=<days>]
+	 * : Retention age in days, required with purge.
 	 *
 	 * [--job=<id>]
 	 * : Filter by job ID.
@@ -44,6 +50,15 @@ class LogCommand extends \WP_CLI_Command {
 	 * @param array<string, string> $assoc_args Associative arguments.
 	 */
 	public function __invoke( $args, $assoc_args ): void {
+		if ( isset( $args[0] ) ) {
+			if ( 'purge' === $args[0] ) {
+				$this->purge( $args, $assoc_args );
+			} else {
+				\WP_CLI::error( 'Unknown log action: ' . $args[0] );
+			}
+			return;
+		}
+
 		$format = $assoc_args['format'] ?? 'table';
 		$rows   = Queuety::query_logs(
 			array(

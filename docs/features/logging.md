@@ -99,7 +99,7 @@ wp queuety log --limit=100 --format=json
 
 ## Log retention
 
-Logs are kept until you purge them. The `QUEUETY_LOG_RETENTION_DAYS` constant is read by `Config::log_retention_days()` but nothing uses it yet, so it does not purge anything ([#15](https://github.com/inline0/queuety/issues/15)). The `wp queuety log purge` subcommand cannot be reached either ([#11](https://github.com/inline0/queuety/issues/11)).
+Worker maintenance purges completed jobs and old logs after their configured retention periods. `QUEUETY_LOG_RETENTION_DAYS = 0` keeps logs indefinitely; setting either retention period to zero disables that automatic purge. Completed jobs required by unfinished dependency chains are retained.
 
 Purge from PHP, for example from your own scheduled task or with `wp eval`:
 

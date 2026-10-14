@@ -498,6 +498,19 @@ class WorkflowReplayer {
 				$max_attempts,
 				0,
 			);
+		} elseif ( 'repeat' === $type || 'start_workflows' === $type ) {
+			self::dispatch_replay_job(
+				$queue,
+				$step_def,
+				'repeat' === $type ? '__queuety_repeat' : '__queuety_start_workflows',
+				array( 'step_index' => $step_index ),
+				$workflow_id,
+				$step_index,
+				$queue_name,
+				$priority,
+				$max_attempts,
+				0,
+			);
 		} elseif ( 'for_each' === $type ) {
 			self::dispatch_replay_job(
 				$queue,

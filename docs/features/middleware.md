@@ -164,7 +164,7 @@ The rate limiter uses Queuety's internal `RateLimiter` instance, so limits are e
 
 ### `Timeout`
 
-Arms a per-job execution timeout with `pcntl_alarm` and is meant to throw a `TimeoutException` when the job runs too long. The timeout is not enforced today ([#10](https://github.com/inline0/queuety/issues/10)): Queuety does not enable async signals, so the alarm handler does not run while the job is executing. The middleware also resets the alarm when it returns, which cancels the worker's own job timeout alarm.
+Queuety enforces execution timeouts with asynchronous SIGALRM dispatch when pcntl is available. A timeout fails the attempt with `TimeoutException`, following the normal retry or burial policy. Nested timeout middleware keeps an earlier worker deadline active and restores the previous signal state.
 
 ```php
 use Queuety\Middleware\Timeout;

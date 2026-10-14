@@ -112,8 +112,18 @@ class DispatchableTest extends TestCase {
 		$chain = DispatchableTestJob::with_chain( array(
 			new DispatchableTestJob( 'step1' ),
 			new DispatchableTestJob( 'step2' ),
-		) );
+		), 'first' );
 		$this->assertInstanceOf( ChainBuilder::class, $chain );
+		$first_id = $chain->dispatch();
+		$job      = Queuety::queue()->claim();
+		$this->assertNotNull( $job );
+		$this->assertSame( $first_id, $job->id );
+		$this->assertSame( 'first', $job->payload['label'] );
+		Queuety::queue()->complete( $job->id );
+		$next = Queuety::queue()->claim();
+		$this->assertNotNull( $next );
+		$this->assertSame( 'step1', $next->payload['label'] );
+		$this->assertSame( $first_id, $next->depends_on );
 	}
 
 	// -- dispatch() returns PendingJob ---------------------------------------

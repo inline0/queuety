@@ -187,12 +187,18 @@ class Queuety {
 	 */
 	private static ?FakeBatchManager $fake_batch_manager = null;
 
+	/** Whether the runtime has an explicit queue connection. */
+	public static function is_initialized(): bool {
+		return null !== self::$conn;
+	}
+
 	/**
 	 * Initialize Queuety with a database connection.
 	 *
-	 * @param Connection $conn Database connection.
+	 * @param Connection           $conn Database connection.
+	 * @param HandlerRegistry|null $registry Optional handler mappings to preserve during worker reconnects.
 	 */
-	public static function init( Connection $conn ): void {
+	public static function init( Connection $conn, ?HandlerRegistry $registry = null ): void {
 		self::$conn = $conn;
 
 		if ( null === self::$cache ) {
@@ -206,11 +212,13 @@ class Queuety {
 		self::$state_machine_event_log = new StateMachineEventLog( $conn );
 		self::$workflow                = new Workflow( $conn, self::queue_(), self::logger_(), self::$cache, self::workflow_event_log_(), self::artifact_store_() );
 		self::$state_machine           = new StateMachine( $conn, self::queue_(), self::state_machine_event_log_() );
-		self::$registry                = new HandlerRegistry();
+		self::$registry                = $registry ?? new HandlerRegistry();
 		self::$rate_limiter            = new RateLimiter( $conn, self::$cache );
 		self::$resource_manager        = new ResourceManager( $conn, self::$cache );
 		self::$scheduler               = new Scheduler( $conn, self::queue_() );
-		self::$workflow_registry       = new WorkflowRegistry();
+		self::$workflow_registry       = null !== $registry && null !== self::$workflow_registry
+			? self::$workflow_registry
+			: new WorkflowRegistry();
 		self::$metrics                 = new Metrics( $conn );
 		self::$webhook_notifier        = new WebhookNotifier( $conn );
 		self::$batch_manager           = new BatchManager( $conn );
@@ -363,15 +371,17 @@ class Queuety {
 	public static function run_worker_pool( int $workers, string $queue = 'default' ): void {
 		self::ensure_initialized();
 
-		$pool = new WorkerPool(
+		$options = self::conn_()->worker_options();
+		$pool    = new WorkerPool(
 			$workers,
-			DB_HOST,
-			DB_NAME,
-			DB_USER,
-			DB_PASSWORD,
-			self::conn_()->prefix(),
+			$options['host'],
+			$options['dbname'],
+			$options['user'],
+			$options['password'],
+			$options['prefix'],
 			null,
-			self::conn_()->table_prefix(),
+			$options['table_prefix'],
+			$options['driver'],
 		);
 		$pool->run( $queue );
 	}
@@ -387,15 +397,17 @@ class Queuety {
 	public static function run_auto_scaling_worker_pool( int $min_workers, int $max_workers, string $queue = 'default' ): void {
 		self::ensure_initialized();
 
-		$pool = new WorkerPool(
+		$options = self::conn_()->worker_options();
+		$pool    = new WorkerPool(
 			$min_workers,
-			DB_HOST,
-			DB_NAME,
-			DB_USER,
-			DB_PASSWORD,
-			self::conn_()->prefix(),
+			$options['host'],
+			$options['dbname'],
+			$options['user'],
+			$options['password'],
+			$options['prefix'],
 			$max_workers,
-			self::conn_()->table_prefix(),
+			$options['table_prefix'],
+			$options['driver'],
 		);
 		$pool->run( $queue );
 	}

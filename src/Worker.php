@@ -27,6 +27,12 @@ class Worker {
 	 */
 	private bool $should_stop = false;
 
+	/** Last successful maintenance pass.
+	 *
+	 * @var int
+	 */
+	private int $last_maintenance_at = 0;
+
 	/**
 	 * Constructor.
 	 *
@@ -167,96 +173,92 @@ class Worker {
 	 * @param string|array<int, string> $queue_name Queue name(s) to process. Supports comma-separated
 	 *                                              strings (e.g. "critical,default,low") or arrays.
 	 * @param bool                      $once       If true, process one batch and exit.
+	 * @param bool                      $run_maintenance Run upkeep in this process; pool children delegate to the parent.
 	 */
-	public function run( string|array $queue_name = 'default', bool $once = false ): void {
+	public function run( string|array $queue_name = 'default', bool $once = false, bool $run_maintenance = true ): void {
 		$queues               = $this->parse_queue_names( $queue_name );
 		$jobs_processed       = 0;
-		$stale_check_delay    = time();
-		$schedule_check_delay = time();
-		$deadline_check_delay = time();
-		$primary_queue        = $queues[0];
 		$run_started_at       = hrtime( true );
 
-		while ( ! $this->should_stop ) {
-			$job = $this->claim_from_queues( $queues, log_paused: true );
-
-			if ( null === $job ) {
-				if ( $once ) {
-					break;
-				}
-				sleep( Config::worker_sleep() );
-
-				if ( time() - $stale_check_delay >= 60 ) {
-					$this->recover_stale();
-					$stale_check_delay = time();
-				}
-
-				if ( null !== $this->scheduler && time() - $schedule_check_delay >= 60 ) {
-					$this->debug_log( 'Running scheduler tick.', $primary_queue );
-					$this->scheduler->tick();
-					$schedule_check_delay = time();
-				}
-
-				if ( time() - $deadline_check_delay >= 60 ) {
-					$this->workflow->check_deadlines();
-					$deadline_check_delay = time();
-				}
-
-				continue;
+		$previous_handlers = array();
+		$previous_async    = null;
+		if ( function_exists( 'pcntl_signal' ) && function_exists( 'pcntl_async_signals' ) ) {
+			$previous_async = pcntl_async_signals( true );
+			foreach ( array( SIGTERM, SIGINT ) as $signal ) {
+				$previous_handlers[ $signal ] = pcntl_signal_get_handler( $signal );
+				pcntl_signal(
+					$signal,
+					function (): void {
+						$this->stop();
+					}
+				);
 			}
+		}
 
-			if ( null !== $this->rate_limiter ) {
-				$this->register_job_rate_limit( $job );
+		try {
+			if ( $run_maintenance ) {
+				$this->maintenance( true );
+			}
+			while ( ! $this->should_stop ) {
+				if ( $run_maintenance ) {
+					$this->maintenance();
+				}
+				$job = $this->claim_from_queues( $queues, log_paused: true );
 
-				$this->debug_log( "Checking rate limit for handler: {$job->handler}", $job->queue );
+				if ( null === $job ) {
+					if ( $once ) {
+						break;
+					}
+					sleep( Config::worker_sleep() );
 
-				if ( $this->rate_limiter->is_limited( $job->handler ) ) {
-					$this->debug_log( "Handler {$job->handler} is rate-limited, unclaiming job #{$job->id}.", $job->queue );
-					$this->queue->unclaim( $job->id );
+					continue;
+				}
+
+				if ( null !== $this->rate_limiter ) {
+					$this->register_job_rate_limit( $job );
+
+					$this->debug_log( "Checking rate limit for handler: {$job->handler}", $job->queue );
+
+					if ( $this->rate_limiter->is_limited( $job->handler ) ) {
+						$this->debug_log( "Handler {$job->handler} is rate-limited, unclaiming job #{$job->id}.", $job->queue );
+						$this->queue->unclaim( $job->id );
+						if ( $once ) {
+							break;
+						}
+						sleep( Config::worker_sleep() );
+						continue;
+					}
+				}
+
+				if ( ! $this->admit_claimed_job( $job, $once, $run_started_at ) ) {
 					if ( $once ) {
 						break;
 					}
 					sleep( Config::worker_sleep() );
 					continue;
 				}
-			}
 
-			if ( ! $this->admit_claimed_job( $job, $once, $run_started_at ) ) {
+				$this->process_job( $job );
+				++$jobs_processed;
+
 				if ( $once ) {
 					break;
 				}
-				sleep( Config::worker_sleep() );
-				continue;
-			}
 
-			$this->process_job( $job );
-			++$jobs_processed;
-
-			if ( $once ) {
-				break;
+				$memory_mb = memory_get_usage( true ) / 1024 / 1024;
+				if ( $memory_mb >= Config::worker_max_memory() ) {
+					break;
+				}
+				if ( $jobs_processed >= Config::worker_max_jobs() ) {
+					break;
+				}
 			}
-
-			$memory_mb = memory_get_usage( true ) / 1024 / 1024;
-			if ( $memory_mb >= Config::worker_max_memory() ) {
-				break;
+		} finally {
+			foreach ( $previous_handlers as $signal => $handler ) {
+				pcntl_signal( $signal, $handler );
 			}
-			if ( $jobs_processed >= Config::worker_max_jobs() ) {
-				break;
-			}
-
-			if ( time() - $stale_check_delay >= 60 ) {
-				$this->recover_stale();
-				$stale_check_delay = time();
-			}
-
-			if ( null !== $this->scheduler && time() - $schedule_check_delay >= 60 ) {
-				$this->scheduler->tick();
-				$schedule_check_delay = time();
-			}
-
-			if ( time() - $deadline_check_delay >= 60 ) {
-				$this->workflow->check_deadlines();
-				$deadline_check_delay = time();
+			if ( null !== $previous_async ) {
+				pcntl_async_signals( $previous_async );
 			}
 		}
 	}
@@ -270,16 +272,22 @@ class Worker {
 	 *
 	 * @param string|array<int, string> $queue_name Queue name(s) to flush. Supports comma-separated
 	 *                                              strings (e.g. "critical,default,low") or arrays.
+	 * @param int|null                  $time_budget_seconds Stop claiming jobs when this budget is spent; the active job finishes.
 	 * @return int Total jobs processed.
 	 */
-	public function flush( string|array $queue_name = 'default' ): int {
+	public function flush( string|array $queue_name = 'default', ?int $time_budget_seconds = null ): int {
 		$queues         = $this->parse_queue_names( $queue_name );
 		$count          = 0;
 		$last_skipped   = null;
 		$skip_streak    = 0;
 		$run_started_at = hrtime( true );
 
+		$this->maintenance( true );
 		while ( true ) {
+			if ( null !== $time_budget_seconds && ( hrtime( true ) - $run_started_at ) / 1_000_000_000 >= $time_budget_seconds ) {
+				break;
+			}
+			$this->maintenance();
 			$job = $this->claim_from_queues( $queues );
 			if ( null === $job ) {
 				break;
@@ -325,6 +333,27 @@ class Worker {
 			++$count;
 		}
 		return $count;
+	}
+
+	/**
+	 * Run scheduled jobs, recovery, deadlines and configured retention cleanup.
+	 *
+	 * @param bool $force Run even when the last pass was less than a minute ago.
+	 */
+	public function maintenance( bool $force = false ): void {
+		if ( ! $force && time() - $this->last_maintenance_at < 60 ) {
+			return;
+		}
+		$this->recover_stale();
+		$this->scheduler?->tick();
+		$this->workflow->check_deadlines();
+		if ( Config::retention_days() > 0 ) {
+			$this->queue->purge_completed( Config::retention_days() );
+		}
+		if ( Config::log_retention_days() > 0 ) {
+			$this->logger->purge( Config::log_retention_days() );
+		}
+		$this->last_maintenance_at = time();
 	}
 
 	/**
@@ -414,13 +443,7 @@ class Worker {
 			);
 		}
 
-		if ( $pcntl_available ) {
-			$alarm_callback = static function () use ( $timeout_seconds ): void {
-				throw new TimeoutException( $timeout_seconds );
-			};
-			pcntl_signal( SIGALRM, $alarm_callback );
-			pcntl_alarm( $timeout_seconds );
-		}
+		$alarm = $pcntl_available ? new AlarmGuard( $timeout_seconds ) : null;
 
 		Heartbeat::init( $job->id, $this->conn );
 		ExecutionContext::enter( $job->id, $job->workflow_id, $job->step_index, $job->payload );
@@ -723,7 +746,9 @@ class Worker {
 			} else {
 
 				$this->debug_log( "Resolving handler: {$job->handler}", $job->queue );
-				$handler = $this->registry->resolve( $job->handler );
+				$handler = str_starts_with( $job->handler, '__queuety_cron_' )
+					? new CronEventHandler()
+					: $this->registry->resolve( $job->handler );
 
 				if ( null !== $this->rate_limiter && $handler instanceof Handler ) {
 					$config = $handler->config();
@@ -983,10 +1008,7 @@ class Worker {
 			ExecutionContext::clear();
 			Heartbeat::clear();
 
-			if ( $pcntl_available ) {
-				pcntl_alarm( 0 );
-				pcntl_signal( SIGALRM, SIG_DFL );
-			}
+			$alarm?->close();
 		}
 	}
 

@@ -67,9 +67,10 @@ trait Dispatchable {
 	 * executing sequentially.
 	 *
 	 * @param array $jobs Array of Contracts\Job instances to chain after this job.
-	 * @return PendingJob The pending job for the first job in the chain.
+	 * @param mixed ...$args Constructor arguments for this job.
+	 * @return ChainBuilder The chain beginning with this job.
 	 */
-	public static function with_chain( array $jobs ): ChainBuilder {
-		return Queuety::chain( $jobs );
+	public static function with_chain( array $jobs, mixed ...$args ): ChainBuilder {
+		return Queuety::chain( array_merge( array( new static( ...$args ) ), $jobs ) );
 	}
 }

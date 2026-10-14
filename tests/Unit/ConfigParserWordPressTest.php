@@ -1,6 +1,6 @@
 <?php
 /**
- * Bootstrap file tests.
+ * WordPress configuration parser tests.
  *
  * @package Queuety
  */
@@ -11,9 +11,9 @@ use Queuety\ConfigParser;
 use Queuety\Tests\QueuetyTestCase;
 
 /**
- * Tests for the bootstrap.php file and ConfigParser.
+ * Tests for ConfigParser with WordPress configuration files.
  */
-class BootstrapTest extends QueuetyTestCase {
+class ConfigParserWordPressTest extends QueuetyTestCase {
 
 	// -- ConfigParser extracts credentials correctly -------------------------
 
@@ -121,31 +121,6 @@ PHP;
 		ConfigParser::from_wp_config( '/nonexistent/path/wp-config.php' );
 	}
 
-	// -- Bootstrap finds wp-config.php at various depths ---------------------
-
-	public function test_bootstrap_finds_wp_config_one_level_up(): void {
-		$this->assert_wp_config_found_at_depth( 1 );
-	}
-
-	public function test_bootstrap_finds_wp_config_two_levels_up(): void {
-		$this->assert_wp_config_found_at_depth( 2 );
-	}
-
-	public function test_bootstrap_finds_wp_config_three_levels_up(): void {
-		$this->assert_wp_config_found_at_depth( 3 );
-	}
-
-	// -- Bootstrap fails when no wp-config.php exists ------------------------
-
-	public function test_bootstrap_fails_when_no_wp_config(): void {
-		// Create a deep directory structure with no wp-config.php anywhere.
-		$deep_dir = $this->tmp_dir . '/a/b/c/d/e/f/g/h/i/j/k';
-		mkdir( $deep_dir, 0755, true );
-
-		$found = $this->simulate_wp_config_search( $deep_dir );
-		$this->assertNull( $found );
-	}
-
 	// -- Helpers -------------------------------------------------------------
 
 	/**
@@ -173,60 +148,4 @@ PHP;
 		return $path;
 	}
 
-	/**
-	 * Assert that wp-config.php is found at the given depth from a plugin dir.
-	 */
-	private function assert_wp_config_found_at_depth( int $depth ): void {
-		// Build directory: base/wp-content/plugins/queuety (depth=1)
-		// or base/sub/wp-content/plugins/queuety (depth=2), etc.
-		$base = $this->tmp_dir . '/depth_' . $depth;
-
-		$plugin_parts = array();
-		for ( $i = 1; $i < $depth; $i++ ) {
-			$plugin_parts[] = 'level_' . $i;
-		}
-		$plugin_parts[] = 'wp-content';
-		$plugin_parts[] = 'plugins';
-		$plugin_parts[] = 'queuety';
-
-		$plugin_dir = $base . '/' . implode( '/', $plugin_parts );
-		mkdir( $plugin_dir, 0755, true );
-
-		// Place wp-config.php at the base level.
-		$wp_config_content = <<<'PHP'
-<?php
-define( 'DB_HOST', 'localhost' );
-define( 'DB_NAME', 'testdb' );
-define( 'DB_USER', 'root' );
-define( 'DB_PASSWORD', '' );
-$table_prefix = 'wp_';
-PHP;
-		file_put_contents( $base . '/wp-config.php', $wp_config_content );
-
-		// Simulate the bootstrap search.
-		$found = $this->simulate_wp_config_search( $plugin_dir );
-
-		$this->assertNotNull( $found, "wp-config.php should be found at depth {$depth}." );
-		$this->assertSame( $base . '/wp-config.php', $found );
-	}
-
-	/**
-	 * Simulate the bootstrap.php wp-config.php search logic.
-	 *
-	 * Mirrors the search in bootstrap.php: walk up from dirname($start_dir).
-	 */
-	private function simulate_wp_config_search( string $start_dir ): ?string {
-		$search_dir = dirname( $start_dir );
-		for ( $i = 0; $i < 10; $i++ ) {
-			if ( file_exists( $search_dir . '/wp-config.php' ) ) {
-				return $search_dir . '/wp-config.php';
-			}
-			$parent = dirname( $search_dir );
-			if ( $parent === $search_dir ) {
-				break;
-			}
-			$search_dir = $parent;
-		}
-		return null;
-	}
 }

@@ -110,7 +110,7 @@ php -r "
     \$logger = new Logger(\$conn);
     \$workflow_mgr = new Workflow(\$conn, \$queue_ops, \$logger);
     \$registry = new HandlerRegistry();
-    \$worker = new Worker(\$conn, \$queue_ops, \$logger, \$workflow_mgr, \$registry, new Config());
+    \$worker = Queuety::worker();
 
     // Test 1: Full 3-step workflow.
     echo \"Test 1: Full 3-step workflow lifecycle\n\";
@@ -129,21 +129,21 @@ php -r "
     assert(\$status->total_steps === 3, 'Should have 3 steps');
 
     // Process step 0.
-    \$worker->flush('default');
+    \$worker->run('default', true);
 
     \$status = Queuety::workflow_status(\$wf_id);
     assert(\$status->current_step === 1, 'Should advance to step 1');
     assert(\$status->state['step1_result'] === 'hello from step 1', 'State should have step 1 data');
 
     // Process step 1.
-    \$worker->flush('default');
+    \$worker->run('default', true);
 
     \$status = Queuety::workflow_status(\$wf_id);
     assert(\$status->current_step === 2, 'Should advance to step 2');
     assert(\$status->state['step2_result'] === 'processed by step 2', 'State should have step 2 data');
 
     // Process step 2.
-    \$worker->flush('default');
+    \$worker->run('default', true);
 
     \$status = Queuety::workflow_status(\$wf_id);
     assert(\$status->status === WorkflowStatus::Completed, 'Workflow should be completed');
@@ -167,7 +167,7 @@ php -r "
     \$queue_ops = new Queue(\$conn);
     \$logger = new Logger(\$conn);
     \$workflow_mgr = new Workflow(\$conn, \$queue_ops, \$logger);
-    \$worker = new Worker(\$conn, \$queue_ops, \$logger, \$workflow_mgr, \$registry, new Config());
+    \$worker = Queuety::worker();
 
     \$wf_id2 = Queuety::workflow('pausable')
         ->then(Step1::class)
@@ -182,7 +182,7 @@ php -r "
     assert(\$status->status === WorkflowStatus::Paused, 'Should be paused');
 
     // Process step 0 while paused. The workflow advances, but step 1 is not enqueued yet.
-    \$worker->flush('default');
+    \$worker->run('default', true);
     \$status = Queuety::workflow_status(\$wf_id2);
     assert(\$status->status === WorkflowStatus::Paused, 'Should remain paused');
     assert(\$status->current_step === 1, 'Should have advanced to step 1 position');
@@ -194,8 +194,8 @@ php -r "
     assert(\$status->status === WorkflowStatus::Running, 'Should be running again');
 
     // Process remaining steps.
-    \$worker->flush('default');
-    \$worker->flush('default');
+    \$worker->run('default', true);
+    \$worker->run('default', true);
     \$status = Queuety::workflow_status(\$wf_id2);
     assert(\$status->status === WorkflowStatus::Completed, 'Should complete after resume');
     echo \"PASS: pause and resume\n\";
@@ -210,7 +210,7 @@ php -r "
     \$queue_ops = new Queue(\$conn);
     \$logger = new Logger(\$conn);
     \$workflow_mgr = new Workflow(\$conn, \$queue_ops, \$logger);
-    \$worker = new Worker(\$conn, \$queue_ops, \$logger, \$workflow_mgr, \$registry, new Config());
+    \$worker = Queuety::worker();
 
     \$wf_id3 = Queuety::workflow('failing')
         ->then(Step1::class)
@@ -220,10 +220,10 @@ php -r "
         ->dispatch([]);
 
     // Process step 0.
-    \$worker->flush('default');
+    \$worker->run('default', true);
 
     // Process step 1 (fails, max_attempts=1 so it buries immediately).
-    \$worker->flush('default');
+    \$worker->run('default', true);
 
     \$status = Queuety::workflow_status(\$wf_id3);
     assert(\$status->status === WorkflowStatus::Failed, 'Workflow should be failed');
@@ -240,13 +240,13 @@ php -r "
     \$queue_ops = new Queue(\$conn);
     \$logger = new Logger(\$conn);
     \$workflow_mgr = new Workflow(\$conn, \$queue_ops, \$logger);
-    \$worker = new Worker(\$conn, \$queue_ops, \$logger, \$workflow_mgr, \$registry, new Config());
+    \$worker = Queuety::worker();
 
     \$wf_id4 = Queuety::workflow('artifact_flow')
         ->then(ArtifactStep::class)
         ->dispatch(array('topic' => 'reviews'));
 
-    \$worker->flush('default');
+    \$worker->run('default', true);
 
     \$status = Queuety::workflow_status(\$wf_id4);
     assert(\$status->status === WorkflowStatus::Completed, 'Artifact workflow should complete');

@@ -65,7 +65,7 @@ wp plugin activate queuety
 
 Queuety chooses a MySQL driver automatically. WordPress runtimes use `mysqli` by default, while standalone runtimes can still use `pdo_mysql` when it is available or force a driver with `QUEUETY_DB_DRIVER`.
 
-Out of the box, the plugin schedules a one-shot worker through WordPress cron every minute for the `default` queue. That gives you a basic no-shell fallback for jobs and workflows that stay on `default`, as long as WordPress cron is firing. Each run handles at most one job and does not fire recurring schedules, recover stale jobs or check deadlines ([#14](https://github.com/inline0/queuety/issues/14)). For custom queues, recurring schedules, lower latency, or production reliability, run dedicated `wp queuety work` processes.
+The plugin runs a worker through WordPress cron every minute for the `default` queue. Each invocation performs maintenance and processes jobs for a 20-second budget, checked between jobs, so the active job finishes. This supports recurring schedules, recovery and deadlines without a shell while WordPress cron is firing. Use dedicated `wp queuety work` processes for custom queues, lower latency or heavier workloads.
 
 Dispatch a job using the modern dispatch API:
 
@@ -333,7 +333,7 @@ wp queuety work --queue=providers --min-workers=2 --max-workers=6
 - **`failed()` hook** -- called on the job instance when all retries are exhausted
 - **Conditional dispatch** -- `dispatch_if()` and `dispatch_unless()` on the `Dispatchable` trait
 - **Synchronous dispatch** -- `dispatch_sync()` runs a job immediately without the queue
-- **Timeout settings** -- `QUEUETY_MAX_EXECUTION_TIME`, `$timeout` and the `Timeout` middleware (not enforced yet, see [#10](https://github.com/inline0/queuety/issues/10))
+- **Timeouts** -- `QUEUETY_MAX_EXECUTION_TIME`, `$timeout` and the `Timeout` middleware enforce job limits when pcntl is available
 - **Worker concurrency** -- `--workers=N` forks multiple processes with automatic restart on crash
 - **Permanent logging** -- queryable database log of every job and workflow execution
 - **Metrics API** -- completed and failed counts, average and p95 duration, and error rates per handler
@@ -483,7 +483,7 @@ class StreamLLMHandler implements StreamingStep {
 | `wp queuety schedule add <handler> [--every=<i>] [--cron=<c>]` | Add a recurring schedule |
 | `wp queuety schedule remove <handler>` | Remove a schedule |
 | `wp queuety schedule run` | Manually trigger scheduler tick |
-| `wp queuety log [--workflow=<id>] [--job=<id>]` | Query log entries (prune old logs with `Queuety::purge_logs( $days )`; the `log purge` subcommand is unreachable, see [#11](https://github.com/inline0/queuety/issues/11)) |
+| `wp queuety log [--workflow=<id>] [--job=<id>]` | Query log entries; use `wp queuety log purge --older-than=<days>` to purge |
 | `wp queuety webhook add <event> <url>` | Register a webhook |
 | `wp queuety webhook list` | List webhooks |
 | `wp queuety webhook remove <id>` | Remove a webhook |
@@ -496,9 +496,9 @@ All constants are optional. Define them in `wp-config.php` or before Queuety boo
 
 | Constant | Default | Description |
 |----------|---------|-------------|
-| `QUEUETY_RETENTION_DAYS` | `7` | Default age in days for `wp queuety purge`; nothing purges automatically |
-| `QUEUETY_LOG_RETENTION_DAYS` | `0` | Not used yet ([#15](https://github.com/inline0/queuety/issues/15)); logs are kept until `Queuety::purge_logs()` |
-| `QUEUETY_MAX_EXECUTION_TIME` | `300` | Max seconds per job before timeout (not enforced yet, see [#10](https://github.com/inline0/queuety/issues/10)) |
+| `QUEUETY_RETENTION_DAYS` | `7` | Automatic completed-job retention in days (0 disables automatic purge) |
+| `QUEUETY_LOG_RETENTION_DAYS` | `0` | Automatic log retention in days (0 = keep forever) |
+| `QUEUETY_MAX_EXECUTION_TIME` | `300` | Execution timeout in seconds when pcntl is available |
 | `QUEUETY_WORKER_SLEEP` | `1` | Seconds to sleep when queue is empty |
 | `QUEUETY_WORKER_MAX_JOBS` | `1000` | Max jobs before worker restarts |
 | `QUEUETY_WORKER_MAX_MEMORY` | `128` | Max MB before worker restarts |

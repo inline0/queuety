@@ -54,12 +54,35 @@ class Connection {
 	 * Get the PDO instance, creating it on first access.
 	 *
 	 * @return PDO
+	 * @throws \RuntimeException When the server version is unsupported or cannot be identified.
 	 */
 	public function pdo(): PDO {
 		if ( null === $this->pdo ) {
-			$this->pdo = $this->create_pdo();
+			$pdo = $this->create_pdo();
+			$statement = $pdo->query( 'SELECT VERSION()' );
+			$version = false === $statement ? false : $statement->fetchColumn();
+			if ( ! is_string( $version ) ) {
+				throw new \RuntimeException( 'Queuety could not determine the database server version.' );
+			}
+			self::assert_server_version( $version );
+			$this->pdo = $pdo;
 		}
 		return $this->pdo;
+	}
+
+	/**
+	 * Check the server requirements for SKIP LOCKED claims.
+	 *
+	 * @param string $version Database server version string.
+	 * @throws \RuntimeException When the server cannot support concurrent claims.
+	 */
+	public static function assert_server_version( string $version ): void {
+		$is_mariadb = false !== stripos( $version, 'mariadb' );
+		$number = $is_mariadb ? preg_replace( '/^5\.5\.5-/', '', $version ) : $version;
+		$minimum = $is_mariadb ? '10.6.0' : '8.0.0';
+		if ( null === $number || ! preg_match( '/^(\d+\.\d+\.\d+)/', $number, $matches ) || version_compare( $matches[1], $minimum, '<' ) ) {
+			throw new \RuntimeException( 'Queuety requires MySQL 8.0+ or MariaDB 10.6+ for SKIP LOCKED claims. Server version: ' . $version );
+		}
 	}
 
 	/**
@@ -69,6 +92,35 @@ class Connection {
 	 */
 	public function driver(): string {
 		return $this->resolve_driver();
+	}
+
+	/**
+	 * Connection settings for fresh worker processes.
+	 *
+	 * @return array{host: string, dbname: string, user: string, password: string, prefix: string, table_prefix: string|null, driver: string}
+	 */
+	public function worker_options(): array {
+		return array(
+			'host'         => $this->host,
+			'dbname'       => $this->dbname,
+			'user'         => $this->user,
+			'password'     => $this->password,
+			'prefix'       => $this->prefix,
+			'table_prefix' => $this->table_prefix,
+			'driver'       => $this->driver(),
+		);
+	}
+
+	/**
+	 * Close the queue transport before a fork so children inherit no live handle.
+	 *
+	 * @throws \RuntimeException When an active transaction would be lost.
+	 */
+	public function disconnect(): void {
+		if ( null !== $this->pdo && $this->pdo->inTransaction() ) {
+			throw new \RuntimeException( 'Cannot disconnect the queue connection during an active transaction.' );
+		}
+		$this->pdo = null;
 	}
 
 	/**

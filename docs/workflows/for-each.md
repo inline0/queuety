@@ -64,7 +64,7 @@ final class IndexPageStep implements ForEachHandler {
 }
 ```
 
-In `config()`, `backoff` takes a strategy name: `exponential`, `linear`, or `fixed`. A list of per-attempt delays there is currently dropped and turns into immediate retries ([#16](https://github.com/inline0/queuety/issues/16)); put per-attempt delays in the step definition's `backoff` instead.
+Handler `config()` accepts a strategy name (`exponential`, `linear`, `fixed`) or an ordered list of non-negative per-attempt delays, such as `[5, 30, 120]`. Step definitions can also supply their own backoff.
 
 `$state` contains the full workflow state, `$item` is the individual for-each item, and `$index` is its zero-based position.
 

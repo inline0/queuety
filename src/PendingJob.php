@@ -316,9 +316,16 @@ class PendingJob {
 	 * Perform the actual job dispatch.
 	 */
 	private function do_dispatch(): void {
+		$payload = $this->payload;
+		if ( null !== $this->rate_limit_config ) {
+			$runtime               = StepDispatchOptions::runtime_from_payload( $payload );
+			$runtime['rate_limit'] = $this->rate_limit_config;
+			$payload[ StepDispatchOptions::RUNTIME_PAYLOAD_KEY ] = $runtime;
+		}
+
 		$this->job_id     = $this->queue_ops->dispatch(
 			handler: $this->handler,
-			payload: $this->payload,
+			payload: $payload,
 			queue: $this->queue,
 			priority: $this->priority,
 			delay: $this->delay,

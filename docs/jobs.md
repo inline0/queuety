@@ -193,7 +193,7 @@ wp queuety retry-buried
 
 ## Timeout
 
-Queuety arms a `pcntl_alarm()` for the max execution time and is meant to fail the attempt with a `TimeoutException` when it is exceeded. That timeout is currently not enforced ([#10](https://github.com/inline0/queuety/issues/10)): the worker does not enable async signals, so a long-running handler runs to completion, and a handler blocked in `sleep()` is cut short when the alarm fires and then marked completed. Configure the timeout globally:
+Queuety enforces execution timeouts with asynchronous SIGALRM dispatch when pcntl is available. A timeout fails the attempt with `TimeoutException`, following the normal retry or burial policy. Nested timeout middleware keeps an earlier worker deadline active and restores the previous signal state.
 
 ```php
 define( 'QUEUETY_MAX_EXECUTION_TIME', 300 ); // 5 minutes
@@ -320,7 +320,7 @@ class ImportProductsJob implements Job {
 | Property | Type | Description |
 |---|---|---|
 | `$tries` | `int` | Maximum number of attempts before the job is buried. Overrides the dispatch-time `max_attempts` value. |
-| `$timeout` | `int` | Maximum execution time in seconds. Overrides the global `QUEUETY_MAX_EXECUTION_TIME` constant. Requires `pcntl`, and is not enforced yet (see [Timeout](/docs/jobs#timeout)). |
+| `$timeout` | `int` | Maximum execution time in seconds. Overrides the global `QUEUETY_MAX_EXECUTION_TIME` constant. Requires `pcntl` (see [Timeout](/docs/jobs#timeout)). |
 | `$backoff` | `array` | Array of delay values in seconds for each retry attempt. The last value is reused for subsequent attempts. |
 | `$concurrency_group` | `string` | Shared worker-admission group for expensive jobs. |
 | `$concurrency_limit` | `int` | Maximum concurrent `processing` jobs in that group. Ignored without `$concurrency_group`. |
@@ -425,11 +425,10 @@ $first_job_id = Queuety::chain( [
 
 #### Using `with_chain()`
 
-The `Dispatchable` trait provides a `with_chain()` method. It is currently equivalent to `Queuety::chain( $jobs )`: the class it is called on is not added to the chain ([#13](https://github.com/inline0/queuety/issues/13)), so list the first job in the array as well:
+`Dispatchable::with_chain( $jobs, ...$args )` constructs the calling job class and places it first in the chain. The optional arguments are passed to its constructor; the array contains only the subsequent jobs.
 
 ```php
 FetchDataJob::with_chain( [
-    new FetchDataJob(),
     new ProcessDataJob(),
     new NotifyCompleteJob(),
 ] )

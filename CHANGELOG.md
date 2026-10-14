@@ -2,6 +2,29 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.22.1] - 2026-10-14
+
+### Fixed
+
+- dispatch-level rate limits persist with jobs and survive fresh worker processes
+- single workers and worker pools finish active jobs before shutting down on SIGTERM or SIGINT
+- standalone worker pools inherit initialized connection settings, driver overrides, handler mappings, and workflow templates while reopening database connections after fork
+- unsupported MySQL and MariaDB versions fail before schema installation or concurrent claims, and missing Composer autoloaders produce the correct installation notice
+- bridged WordPress cron schedules execute the original hook callbacks with their arguments
+- worker and middleware timeouts enable asynchronous signal dispatch, preserve earlier nested deadlines, and restore the caller's signal state
+- `wp queuety log purge --older-than` and `wp queuety workflow list --limit` accept their documented arguments
+- `Dispatchable::with_chain()` prepends the calling job and accepts its constructor arguments
+- worker startup, one-shot runs, flushes, and pool maintenance process due schedules, stale jobs, workflow deadlines, and configured job and log retention
+- completed-job retention preserves dependencies required by unfinished chains
+- handler retry delay lists retain their configured order and control actual retry availability
+- workflow replay resumes repeat and child-workflow controller steps
+
+### Changed
+
+- WordPress cron fallback drains the default queue within a budget of 20 seconds, checked between jobs
+- removed the unused standalone bootstrap; standalone applications initialize Queuety through their Composer autoloader
+- Composer test scripts disable the process timeout so the complete database suite can finish
+
 ## [0.22.0] - 2026-05-19
 
 ### Changed

@@ -203,7 +203,7 @@ Queuety::run_worker( 'critical,default', true );
 
 ### `Queuety::run_worker_pool( $workers, $queue = 'default' )`
 
-Run a fixed-size worker pool directly. Requires the `pcntl` and `posix` extensions. The pool reads the WordPress `DB_HOST`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` constants for its child connections (only the table prefixes come from the initialized connection), so define them when you run a pool outside WordPress ([#5](https://github.com/inline0/queuety/issues/5)).
+Fixed and adaptive pools use the initialized connection credentials, table prefixes and selected driver. Each child reconnects independently while preserving registered handlers and workflow templates; standalone processes do not need WordPress DB constants.
 
 ```php
 Queuety::run_worker_pool( 4, 'providers' );
@@ -1352,7 +1352,7 @@ SendEmailJob::dispatch( 'user@example.com', 'Subject', 'Body' );
 | `dispatch( ...$args )` | `PendingJob` | Create an instance and dispatch it |
 | `dispatch_if( bool $condition, ...$args )` | `PendingJob\|null` | Dispatch only if `$condition` is true |
 | `dispatch_unless( bool $condition, ...$args )` | `PendingJob\|null` | Dispatch only if `$condition` is false |
-| `with_chain( array $jobs )` | `ChainBuilder` | Start a chain from this job class |
+| `with_chain( array $jobs, ...$args )` | `ChainBuilder` | Start a chain from this job class |
 
 ```php
 // Conditional dispatch

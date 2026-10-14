@@ -168,7 +168,7 @@ A worker stops gracefully, after finishing its current job, when any of these co
 
 After stopping, the worker exits cleanly. In production, a process manager restarts it automatically.
 
-Signals are not handled gracefully yet ([#4](https://github.com/inline0/queuety/issues/4)). A single `wp queuety work` process installs no signal handler, so `SIGTERM` or `SIGINT` (Ctrl+C) ends it immediately, even in the middle of a job. That job stays `processing` until stale-job recovery resets it after `QUEUETY_STALE_TIMEOUT` seconds, so keep handlers safe to retry. A worker pool forwards `SIGTERM` to its children, but the children do not act on it, so the pool keeps running until they stop for one of the reasons above. When you need to stop a pool, give your process manager a stop timeout after which it sends `SIGKILL`.
+Workers handle SIGTERM and SIGINT by finishing the active job and stopping before the next claim. Pools forward shutdown to their children and wait for them to finish. Signal handlers and asynchronous dispatch settings are restored when a single worker returns.
 
 ## Multi-worker concurrency
 

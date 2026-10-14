@@ -28,7 +28,7 @@ class HandlerMetadata {
 	 * @return array{
 	 *     queue: string|null,
 	 *     max_attempts: int|null,
-	 *     backoff: string|array<string, mixed>|null,
+	 *     backoff: string|array<string, mixed>|array<int, int>|null,
 	 *     rate_limit: array{int, int}|null,
 	 *     concurrency_group: string|null,
 	 *     concurrency_limit: int|null,
@@ -117,6 +117,9 @@ class HandlerMetadata {
 		$backoff = $config['backoff'] ?? null;
 		if ( is_string( $backoff ) ) {
 			$defaults['backoff'] = $backoff;
+		} elseif ( is_array( $backoff ) && array_is_list( $backoff ) ) {
+			$delays = array_values( array_filter( $backoff, static fn( mixed $delay ): bool => is_int( $delay ) && $delay >= 0 ) );
+			$defaults['backoff'] = empty( $delays ) ? null : $delays;
 		} elseif ( is_array( $backoff ) ) {
 			$backoff_config = array();
 			foreach ( $backoff as $backoff_key => $backoff_value ) {

@@ -1,6 +1,6 @@
 # Queuety
 
-WordPress plugin: job queue and durable workflow engine. Workers run from a minimal PHP bootstrap without booting WordPress. PHP 8.2+.
+WordPress plugin: job queue and durable workflow engine. WP-CLI and cron workers run inside WordPress; standalone workers initialize the runtime through Composer. PHP 8.2+.
 
 ## Quick Reference
 
@@ -30,7 +30,6 @@ bash tests/e2e/test-wp-env.sh
 ```
 queuety/
 ├── queuety.php          # Entry point
-├── bootstrap.php        # Minimal worker bootstrap (no WP)
 ├── phpunit.xml.dist     # PHPUnit configuration
 ├── phpcs.xml            # PHPCS configuration
 ├── .wp-env.json         # Docker-based wp-env config
@@ -167,7 +166,7 @@ All constants are optional. Define them in `wp-config.php` or `queuety-config.ph
 
 1. **100% WordPress Coding Standards**: no exceptions. Run `composer cs` before committing.
 2. **Run tests after changes**: `composer test` for PHPUnit.
-3. **bootstrap.php is self-contained**: no autoloader, no WP functions, plain PHP only. Parses wp-config.php via regex.
+3. **Standalone workers initialize explicitly**: load the Composer autoloader, create a `Connection`, then call `Queuety::init()`. `ConfigParser` can read credentials from wp-config.php.
 4. **PHP 8.2+**: use enums, readonly classes, constructor promotion, match expressions, named arguments.
 5. **Multi-table schema**: jobs, workflows, logs, schedules, signals, chunks, queue_states, webhooks. All in WordPress's MySQL database.
 6. **Logging is in the database**: no log files. All log entries go to `queuety_logs` table.

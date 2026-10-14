@@ -284,7 +284,7 @@ wp queuety workflow list [--status=<status>] [--format=<format>]
 | `--status=<status>` | Filter by status: `running`, `completed`, `failed`, `paused`, `waiting_for_signal`, `waiting_for_workflows`, `cancelled` |
 | `--format=<format>` | Output format: `table` (default), `json`, `csv`, `yaml` |
 
-The command returns at most 50 workflows. It reads a `--limit` value, but WP-CLI currently rejects the flag because the command does not declare it ([#12](https://github.com/inline0/queuety/issues/12)); use `Queuety::list_workflows()` for a different limit.
+The command returns at most 50 workflows by default. Pass `--limit=<limit>` to choose another maximum, or call `Queuety::list_workflows()` from PHP.
 
 The default table includes `StepName` and `WaitMode` so blocked workflows are easier to scan.
 
@@ -624,10 +624,10 @@ wp queuety log --since="2025-03-01 00:00:00"
 
 ### Purging logs
 
-`LogCommand` defines a `purge` subcommand (`wp queuety log purge --older-than=<days>`), but WP-CLI registers `wp queuety log` as a single command, so the subcommand cannot be reached and fails with "Too many positional arguments: purge" ([#11](https://github.com/inline0/queuety/issues/11)). Purge old log entries from PHP instead:
+Use `wp queuety log purge --older-than=<days>` to delete old log entries. The existing `wp queuety log` options continue to query logs; `Queuety::purge_logs( $days )` provides the same purge operation in PHP.
 
 ```bash
-wp eval 'echo Queuety\Queuety::purge_logs( 30 );'
+wp queuety log purge --older-than=30
 ```
 
 ## Webhook commands

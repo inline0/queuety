@@ -448,6 +448,33 @@ else
 fi
 
 echo ""
+echo "--- WP-CLI: Log Purge and Workflow Limit ---"
+
+LOG_PURGE_OUT=$(wp_cli queuety log purge --older-than=30 2>/dev/null || true)
+assert_contains "$LOG_PURGE_OUT" "Purged" "log purge accepts its action and retention option"
+WORKFLOW_LIMIT_OUT=$(wp_cli queuety workflow list --limit=1 2>/dev/null || true)
+assert_not_contains "$WORKFLOW_LIMIT_OUT" "Error" "workflow list accepts --limit"
+
+echo ""
+echo "--- Bridged WordPress Cron ---"
+
+reset_queuety_runtime
+CRON_RESULT=$(wp_eval "
+    add_action('queuety_e2e_cron', function (\$first, \$second) {
+        update_option('queuety_e2e_cron_result', \$first . ':' . \$second);
+    }, 10, 2);
+    Queuety\\CronBridge::install();
+    wp_schedule_event(time(), 'hourly', 'queuety_e2e_cron', ['hello', 'cron']);
+    global \$wpdb;
+    \$wpdb->query(\"UPDATE wp_queuety_schedules SET next_run = '2000-01-01 00:00:00' WHERE handler = '__queuety_cron_queuety_e2e_cron'\");
+    Queuety\\Queuety::run_worker('default', true);
+    echo get_option('queuety_e2e_cron_result', 'NOT_SET');
+    Queuety\\Queuety::scheduler()->remove('__queuety_cron_queuety_e2e_cron');
+    Queuety\\CronBridge::uninstall();
+" 2>/dev/null || true)
+assert_contains "$CRON_RESULT" "hello:cron" "a bridged schedule invokes the original WordPress callbacks with their arguments"
+
+echo ""
 echo "--- WP-CLI: Recover ---"
 
 RECOVER_OUT=$(wp_cli queuety recover 2>/dev/null || true)

@@ -338,6 +338,9 @@ class WorkflowCommand extends \WP_CLI_Command {
 	 * [--status=<status>]
 	 * : Filter by status (running, completed, failed, paused).
 	 *
+	 * [--limit=<limit>]
+	 * : Maximum workflows to show. Default: 50.
+	 *
 	 * [--format=<format>]
 	 * : Output format. Default: 'table'.
 	 *

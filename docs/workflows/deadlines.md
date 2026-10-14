@@ -10,7 +10,7 @@ meta_description: "Set a maximum completion time for workflows with automatic fa
 
 # Workflow Deadlines
 
-Workflows can be given a deadline. If a running workflow has not completed within the specified duration, Queuety marks it as failed and optionally calls a handler. Workflows that are paused or waiting for a signal or for other workflows are not expired while they wait. Deadlines are checked about once a minute by a long-running `wp queuety work` process, not by `--once` workers or the WP-Cron fallback. This acts as a dead man's switch for long-running workflows that should not run indefinitely.
+Workflows can be given a deadline. If a running workflow has not completed within the specified duration, Queuety marks it as failed and optionally calls a handler. Workflows that are paused or waiting for a signal or for other workflows are not expired while they wait. Deadlines are checked during worker startup and about once a minute while the worker runs. One-shot workers, flushes, worker pools, and the WP-Cron fallback also perform this maintenance. This acts as a dead man's switch for long-running workflows that should not run indefinitely.
 
 ## Setting a deadline
 

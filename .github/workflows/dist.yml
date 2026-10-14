@@ -48,7 +48,7 @@ jobs:
       - name: Verify required files
         run: |
           cd dist/queuety
-          for f in queuety.php bootstrap.php src/Queuety.php cli/QueuetyCommand.php vendor/autoload.php; do
+          for f in queuety.php src/Queuety.php cli/QueuetyCommand.php vendor/autoload.php; do
             test -f "$f" || { echo "Missing: $f"; exit 1; }
           done
           echo "All required files present."

@@ -161,7 +161,7 @@ When you replay an exported workflow:
 2. The new workflow's name is `{original_name}_replay_{timestamp}`
 3. Historical workflow events and logs are re-inserted into the new environment
 4. Stored signals and workflow-wait dependency rows are replayed as historical state
-5. If the original workflow was still `running`, the current step is enqueued for processing. Repeat and `start_workflows()` steps are not re-enqueued, so a replay that stops on one of them stays `running` without a job ([#17](https://github.com/inline0/queuety/issues/17))
+5. If the original workflow was still `running`, its current step is enqueued for processing, including repeat and `start_workflows()` controllers.
 6. If the original workflow was `waiting_for_signal`, `waiting_for_workflows`, `paused`, `failed`, `cancelled`, or `completed`, that status is preserved on the replayed workflow
 
 The replayed workflow gets a new ID and operates independently. It does not affect the original.

@@ -24,9 +24,18 @@
         }
     },
     "scripts": {
-        "test": "phpunit",
-        "test:unit": "phpunit --testsuite unit",
-        "test:integration": "phpunit --testsuite integration",
+        "test": [
+            "Composer\\Config::disableProcessTimeout",
+            "phpunit"
+        ],
+        "test:unit": [
+            "Composer\\Config::disableProcessTimeout",
+            "phpunit --testsuite unit"
+        ],
+        "test:integration": [
+            "Composer\\Config::disableProcessTimeout",
+            "phpunit --testsuite integration"
+        ],
         "analyse": "phpstan analyse --configuration=phpstan.neon.dist --memory-limit=1G",
         "cs": "phpcs --warning-severity=0",
         "cs:fix": "phpcbf",

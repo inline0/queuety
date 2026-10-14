@@ -3,7 +3,6 @@
     <description>WordPress Coding Standards for Queuety</description>
 
     <file>./queuety.php</file>
-    <file>./bootstrap.php</file>
     <file>./src/</file>
     <file>./cli/</file>
 
@@ -62,13 +61,6 @@
         <severity>0</severity>
     </rule>
 
-    <!-- bootstrap.php defines WP constants dynamically -->
-    <rule ref="WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound">
-        <exclude-pattern>bootstrap.php</exclude-pattern>
-    </rule>
-    <rule ref="WordPress.NamingConventions.PrefixAllGlobals.VariableConstantNameFound">
-        <exclude-pattern>bootstrap.php</exclude-pattern>
-    </rule>
 
     <!-- PHP 8.2+ -->
     <config name="testVersion" value="8.2-"/>

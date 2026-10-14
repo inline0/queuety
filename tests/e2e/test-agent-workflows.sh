@@ -84,7 +84,7 @@ php -r "
     \$queue = new Queue(\$conn);
     \$logger = new Logger(\$conn);
     \$workflow_mgr = new Workflow(\$conn, \$queue, \$logger);
-    \$worker = new Worker(\$conn, \$queue, \$logger, \$workflow_mgr, new HandlerRegistry(), new Config());
+    \$worker = Queuety::worker();
 
     \$process_one = static function () use (\$queue, \$worker): void {
         \$job = \$queue->claim();
@@ -142,6 +142,9 @@ php -r "
     assert((\$status->state['completed_count'] ?? null) === 2, 'Parent should continue after two agent results.');
     assert((\$status->state['completed_topics'] ?? array()) === array('pricing', 'reviews'), 'Parent should summarize the completed agent topics.');
     echo \"PASS: started agent group quorum success\\n\";
+
+    // Finish the success group's remaining child before starting the next case.
+    \$worker->flush('default');
 
     echo \"Test 2: started agent group impossible quorum failure\\n\";
     \$failure_id = Queuety::workflow('agent_parent_failure')

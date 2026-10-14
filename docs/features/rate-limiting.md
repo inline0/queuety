@@ -27,7 +27,7 @@ The two arguments are:
 1. `$max` - Maximum number of executions allowed in the window
 2. `$window` - Window duration in seconds
 
-A dispatch-time limit is registered only in the PHP process that dispatches the job. A worker running in a separate process, such as `wp queuety work`, does not see it, so set limits that must hold across processes in the handler's `config()` as shown below ([#3](https://github.com/inline0/queuety/issues/3)).
+Dispatch-time limits are persisted in the job runtime metadata, so a fresh worker process receives and enforces them. Limits remain per handler; handler `config()` can supply defaults.
 
 ## Handler-level rate limits
 

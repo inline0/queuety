@@ -3,7 +3,7 @@
  * Plugin Name:  Queuety
  * Plugin URI:   https://github.com/inline0/queuety
  * Description:  A job queue and durable workflow engine for WordPress.
- * Version:      0.22.0
+ * Version:      0.22.1
  * Author:       Queuety
  * License:      GPL-2.0-or-later
  * Requires PHP: 8.2
@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'QUEUETY_VERSION', '0.22.0' );
+define( 'QUEUETY_VERSION', '0.22.1' );
 define( 'QUEUETY_PLUGIN_FILE', __FILE__ );
 define( 'QUEUETY_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 
@@ -31,25 +31,30 @@ if ( file_exists( $queuety_autoloader ) ) {
 
 $queuety_runtime_error = null;
 
-if ( ! class_exists( Queuety\Connection::class ) || ! Queuety\Connection::has_available_driver() ) {
+if ( ! class_exists( Queuety\Connection::class ) ) {
+	$queuety_runtime_error = 'Queuety could not load its Composer autoloader. Install dependencies with composer install or load your project vendor/autoload.php before this plugin.';
+} elseif ( ! Queuety\Connection::has_available_driver() ) {
 	$queuety_runtime_error = 'Queuety requires either mysqli or pdo_mysql on the PHP runtime that loads WordPress and WP-CLI.';
 }
 
-if ( null !== $queuety_runtime_error ) {
-	$queuety_render_notice = static function () use ( $queuety_runtime_error ) {
+$queuety_show_runtime_error = static function ( string $message ): void {
+	$queuety_render_notice = static function () use ( $message ) {
 		if ( ! current_user_can( 'activate_plugins' ) ) {
 			return;
 		}
 
 		printf(
 			'<div class="notice notice-error"><p>%s</p></div>',
-			esc_html( $queuety_runtime_error )
+			esc_html( $message )
 		);
 	};
 
 	add_action( 'admin_notices', $queuety_render_notice );
 	add_action( 'network_admin_notices', $queuety_render_notice );
+};
 
+if ( null !== $queuety_runtime_error ) {
+	$queuety_show_runtime_error( $queuety_runtime_error );
 	return;
 }
 
@@ -72,14 +77,18 @@ $queuety_make_connection = static function () {
 
 add_action(
 	'plugins_loaded',
-	static function () use ( $queuety_make_connection ) {
-		$conn = $queuety_make_connection();
+	static function () use ( $queuety_make_connection, $queuety_show_runtime_error ) {
+		try {
+			$conn = $queuety_make_connection();
 
-		if ( ! Queuety\Schema::table_exists( $conn, $conn->table( Queuety\Config::table_jobs() ) ) ) {
-			Queuety\Schema::install( $conn );
+			if ( ! Queuety\Schema::table_exists( $conn, $conn->table( Queuety\Config::table_jobs() ) ) ) {
+				Queuety\Schema::install( $conn );
+			}
+
+			Queuety\Queuety::init( $conn );
+		} catch ( \RuntimeException $e ) {
+			$queuety_show_runtime_error( $e->getMessage() );
 		}
-
-		Queuety\Queuety::init( $conn );
 	}
 );
 
@@ -124,7 +133,7 @@ add_action(
 	function () {
 		try {
 			$worker = Queuety\Queuety::worker();
-			$worker->run( 'default', once: true );
+			$worker->flush( 'default', time_budget_seconds: 20 );
 		} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Cron errors are non-fatal.
 			unset( $e );
 		}

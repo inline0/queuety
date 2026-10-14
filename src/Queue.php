@@ -584,11 +584,14 @@ class Queue {
 		$cutoff = gmdate( 'Y-m-d H:i:s', time() - ( $older_than_days * 86400 ) );
 
 		$stmt = $this->conn->pdo()->prepare(
-			"DELETE FROM {$table} WHERE status = :status AND completed_at < :cutoff"
+			"DELETE completed FROM {$table} completed
+			LEFT JOIN {$table} dependent ON dependent.depends_on = completed.id AND dependent.status <> :dependent_completed
+			WHERE completed.status = :status AND completed.completed_at < :cutoff AND dependent.id IS NULL"
 		);
 		$stmt->execute(
 			array(
 				'status' => JobStatus::Completed->value,
+				'dependent_completed' => JobStatus::Completed->value,
 				'cutoff' => $cutoff,
 			)
 		);

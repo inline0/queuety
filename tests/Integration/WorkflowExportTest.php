@@ -17,6 +17,9 @@ use Queuety\WorkflowBuilder;
 use Queuety\WorkflowEventLog;
 use Queuety\WorkflowExporter;
 use Queuety\WorkflowReplayer;
+use Queuety\Worker;
+use Queuety\HandlerRegistry;
+use Queuety\Tests\Integration\Fixtures\AccumulatingStep;
 use Queuety\Tests\IntegrationTestCase;
 
 class WorkflowExportTest extends IntegrationTestCase {
@@ -306,4 +309,45 @@ class WorkflowExportTest extends IntegrationTestCase {
 		$this->expectExceptionMessage( 'Invalid export data' );
 		WorkflowReplayer::replay( array(), $this->conn );
 	}
+	public function test_running_repeat_replays_and_completes(): void {
+		$id = ( new WorkflowBuilder( 'repeat_export', $this->conn, $this->queue, $this->logger ) )
+			->then( AccumulatingStep::class, 'work' )
+			->repeat_until( 'work', 'counter', 1 )
+			->dispatch();
+		$first = $this->queue->claim();
+		$this->assertNotNull( $first );
+		$this->workflow->advance_step( $id, $first->id, array( 'counter' => 1 ) );
+		$export = WorkflowExporter::export( $id, $this->conn );
+		$source = $this->queue->claim();
+		$this->assertNotNull( $source );
+		$this->queue->complete( $source->id );
+		$new_id = WorkflowReplayer::replay( $export, $this->conn );
+		$job = $this->queue->claim();
+		$this->assertNotNull( $job );
+		$this->assertSame( '__queuety_repeat', $job->handler );
+		$this->assertSame( $new_id, $job->workflow_id );
+		$worker = new Worker( $this->conn, $this->queue, $this->logger, $this->workflow, new HandlerRegistry(), new Config() );
+		$worker->process_job( $job );
+		$this->assertSame( WorkflowStatus::Completed, $this->workflow->status( $new_id )->status );
+	}
+
+	public function test_running_start_workflows_replays_and_completes(): void {
+		$child = ( new WorkflowBuilder( 'child_export', $this->conn, $this->queue, $this->logger ) )->then( AccumulatingStep::class );
+		$id = ( new WorkflowBuilder( 'start_export', $this->conn, $this->queue, $this->logger ) )
+			->start_workflows( 'tasks', $child )
+			->dispatch( array( 'tasks' => array() ) );
+		$export = WorkflowExporter::export( $id, $this->conn );
+		$source = $this->queue->claim();
+		$this->assertNotNull( $source );
+		$this->queue->complete( $source->id );
+		$new_id = WorkflowReplayer::replay( $export, $this->conn );
+		$job = $this->queue->claim();
+		$this->assertNotNull( $job );
+		$this->assertSame( '__queuety_start_workflows', $job->handler );
+		$this->assertSame( $new_id, $job->workflow_id );
+		$worker = new Worker( $this->conn, $this->queue, $this->logger, $this->workflow, new HandlerRegistry(), new Config() );
+		$worker->process_job( $job );
+		$this->assertSame( WorkflowStatus::Completed, $this->workflow->status( $new_id )->status );
+	}
+
 }

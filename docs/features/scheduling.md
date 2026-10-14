@@ -10,7 +10,7 @@ meta_description: "Recurring jobs with interval and cron expressions."
 
 # Scheduling
 
-Queuety has built-in support for recurring jobs. Instead of relying on `wp_cron`, schedules are stored in the database and evaluated by a long-running `wp queuety work` process (or the parent of a worker pool) about once a minute. `wp queuety work --once`, `wp queuety flush`, and the plugin's built-in WP-Cron fallback do not evaluate schedules ([#14](https://github.com/inline0/queuety/issues/14)); without a long-running worker, run `wp queuety schedule run` yourself.
+Worker maintenance evaluates recurring schedules, recovers stale jobs, checks deadlines and applies configured retention. Long-running workers run it at startup and about once a minute; one-shot workers and flush runs perform it before their first claim.
 
 ## Interval scheduling
 

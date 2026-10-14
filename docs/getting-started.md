@@ -14,7 +14,7 @@ meta_description: "Install Queuety, configure it, and run your first job and wor
 ### Requirements
 
 - PHP 8.2 or later and WordPress 6.4 or later
-- MySQL 8.0+ or MariaDB 10.6+. Workers claim jobs and due schedules with `SELECT ... FOR UPDATE SKIP LOCKED`, which older servers reject with a syntax error.
+- MySQL 8.0+ or MariaDB 10.6+. Workers claim jobs and due schedules with `SELECT ... FOR UPDATE SKIP LOCKED`, and Queuety validates the server version before installing tables or claiming work.
 - `mysqli` or `pdo_mysql` (see below)
 - WP-CLI on the server if you run dedicated workers with `wp queuety work`
 - The `pcntl` and `posix` PHP extensions if you run worker pools with `--workers` or `--min-workers`/`--max-workers`
@@ -58,7 +58,7 @@ wp plugin activate queuety
 
 On activation, Queuety creates its database tables (`queuety_jobs`, `queuety_workflows`, `queuety_logs`, `queuety_schedules`, `queuety_queue_states`, `queuety_webhooks`, `queuety_locks`, `queuety_signals`, `queuety_workflow_dependencies`, `queuety_workflow_dispatch_keys`, `queuety_batches`, `queuety_chunks`, `queuety_workflow_events`, `queuety_artifacts`, `queuety_state_machines`, `queuety_state_machine_events`) so workers can claim jobs directly from MySQL.
 
-By default, the plugin also schedules a one-shot worker through WordPress cron every minute for the `default` queue. That gives you a no-shell baseline for jobs and workflows that stay on `default`, as long as WordPress cron is firing. Each run processes at most one job, and it does not fire recurring schedules, recover stale jobs or check workflow deadlines; those only run inside a long-running `wp queuety work` process ([#14](https://github.com/inline0/queuety/issues/14)). For custom queues, recurring schedules, lower latency, or heavier workloads, move to dedicated `wp queuety work` processes.
+The plugin runs a worker through WordPress cron every minute for the `default` queue. Each invocation performs maintenance and processes jobs for a 20-second budget, checked between jobs, so the active job finishes. This supports recurring schedules, recovery and deadlines without a shell while WordPress cron is firing. Use dedicated `wp queuety work` processes for custom queues, lower latency or heavier workloads.
 
 ## Configuration
 
@@ -67,8 +67,8 @@ All constants are optional. Define them in `wp-config.php` before the plugin loa
 | Constant | Default | Description |
 |---|---|---|
 | `QUEUETY_RETENTION_DAYS` | `7` | Default age in days for `wp queuety purge` and `Queuety::purge()`. Nothing purges automatically |
-| `QUEUETY_LOG_RETENTION_DAYS` | `0` | Read by `Config::log_retention_days()` but not used yet; logs are kept until you call `Queuety::purge_logs()` ([#15](https://github.com/inline0/queuety/issues/15)) |
-| `QUEUETY_MAX_EXECUTION_TIME` | `300` | Max seconds per job before timeout (not enforced yet, see [Jobs](/docs/jobs#timeout)) |
+| `QUEUETY_LOG_RETENTION_DAYS` | `0` | Automatic log retention in days (0 = keep forever) |
+| `QUEUETY_MAX_EXECUTION_TIME` | `300` | Execution timeout in seconds when pcntl is available |
 | `QUEUETY_WORKER_SLEEP` | `1` | Seconds to sleep when queue is empty |
 | `QUEUETY_WORKER_MAX_JOBS` | `1000` | Max jobs before worker restarts |
 | `QUEUETY_WORKER_MAX_MEMORY` | `128` | Max MB before worker restarts |
@@ -241,7 +241,7 @@ The `SendEmailHandler` above sends its jobs to the `emails` queue through `confi
 wp queuety work --queue=emails,default
 ```
 
-If you do not run a dedicated worker, Queuety still has the default once-per-minute WordPress cron fallback described above, limited to the `default` queue and one job per run. The dedicated worker is the higher-throughput, lower-latency option.
+If you do not run a dedicated worker, Queuety still has the default once-per-minute WordPress cron fallback described above, limited to the `default` queue with a budget of 20 seconds per run. The budget is checked between jobs, so an active job finishes before the cron worker exits. The dedicated worker is the higher-throughput, lower-latency option.
 
 For production, run multiple workers:
 

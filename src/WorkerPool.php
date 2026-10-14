@@ -71,6 +71,7 @@ class WorkerPool {
 	 * @param string      $prefix       WordPress table prefix.
 	 * @param int|null    $max_worker_count Optional adaptive upper bound.
 	 * @param string|null $table_prefix Queuety table prefix after the WordPress prefix.
+	 * @param string|null $driver Database transport override.
 	 *
 	 * @throws \RuntimeException If pcntl is not available or worker_count is invalid.
 	 */
@@ -83,6 +84,7 @@ class WorkerPool {
 		private readonly string $prefix,
 		?int $max_worker_count = null,
 		private readonly ?string $table_prefix = null,
+		private readonly ?string $driver = null,
 	) {
 		if ( ! function_exists( 'pcntl_fork' ) ) {
 			throw new \RuntimeException( 'pcntl extension is required for --workers=N.' );
@@ -162,6 +164,9 @@ class WorkerPool {
 	 * @throws \RuntimeException If fork fails.
 	 */
 	private function fork_child( string $queue, int $restarts = 0 ): void {
+		if ( Queuety::is_initialized() ) {
+			Queuety::connection()->disconnect();
+		}
 		$pid = pcntl_fork();
 
 		if ( -1 === $pid ) {
@@ -211,6 +216,8 @@ class WorkerPool {
 			$registry = new HandlerRegistry();
 		}
 
+		Queuety::init( $conn, $registry );
+
 		$rate_limiter     = new RateLimiter( $conn, $cache );
 		$resource_manager = new ResourceManager( $conn, $cache );
 		$scheduler        = new Scheduler( $conn, $queue_op );
@@ -247,7 +254,7 @@ class WorkerPool {
 			}
 		);
 
-		$worker->run( $queue );
+		$worker->run( $queue, run_maintenance: false );
 	}
 
 	/**
@@ -321,8 +328,8 @@ class WorkerPool {
 	 */
 	private function run_scheduler_tick(): void {
 		try {
-			$scheduler = Queuety::scheduler();
-			$scheduler->tick();
+			$worker = Queuety::worker();
+			$worker->maintenance();
 		} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Scheduler may not be initialized.
 			unset( $e );
 		}
@@ -504,6 +511,6 @@ class WorkerPool {
 	 * @return Connection
 	 */
 	private function connection(): Connection {
-		return new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix, $this->table_prefix );
+		return new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix, $this->table_prefix, $this->driver );
 	}
 }
