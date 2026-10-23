@@ -906,7 +906,7 @@ Three workflows, same pattern as Rudel:
 - `test` job: PHP 8.4 with mysqli extension, runs `composer test`
 
 **dist.yml** (push to main):
-- Builds production zip (excludes tests, docs, .github, .claude, CLAUDE.md, phpunit.xml*, phpcs.xml*)
+- Builds production zip (excludes tests, docs, .github, .claude, AGENTS.md, phpunit.xml*, phpcs.xml*)
 - Verifies required files present, no dev files leaked
 - PHP syntax validation on all files
 - Autoloader resolution check
@@ -926,9 +926,9 @@ Three workflows, same pattern as Rudel:
 - WP-CLI command registration
 - Version constant: `QUEUETY_VERSION`
 
-### CLAUDE.md
+### AGENTS.md
 
-Project includes a `CLAUDE.md` with:
+Project includes an `AGENTS.md` with:
 - Quick reference (composer commands)
 - Project structure overview
 - Comment policy
@@ -945,7 +945,7 @@ queuety/
 ├── composer.json
 ├── phpunit.xml.dist
 ├── phpcs.xml
-├── CLAUDE.md
+├── AGENTS.md
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml           # Lint + test on push/PR
