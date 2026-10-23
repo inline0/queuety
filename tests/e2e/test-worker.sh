@@ -10,23 +10,24 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 DB_HOST="${QUEUETY_TEST_DB_HOST:-127.0.0.1}"
+DB_HOST_PDO="${DB_HOST/:/;port=}"
 DB_NAME="${QUEUETY_TEST_DB_NAME:-queuety_test}"
 DB_USER="${QUEUETY_TEST_DB_USER:-root}"
 DB_PASS="${QUEUETY_TEST_DB_PASS:-}"
 DB_PREFIX="${QUEUETY_TEST_DB_PREFIX:-e2e_}"
 
 # Check MySQL is available.
-if ! php -r "new PDO('mysql:host=${DB_HOST}', '${DB_USER}', '${DB_PASS}');" 2>/dev/null; then
+if ! php -d zend.assertions=1 -d assert.exception=1 -r "new PDO('mysql:host=${DB_HOST_PDO}', '${DB_USER}', '${DB_PASS}');" 2>/dev/null; then
     echo "SKIP: MySQL not available at ${DB_HOST}"
     exit 0
 fi
 
-php -r "
-    \$pdo = new PDO('mysql:host=${DB_HOST}', '${DB_USER}', '${DB_PASS}');
+php -d zend.assertions=1 -d assert.exception=1 -r "
+    \$pdo = new PDO('mysql:host=${DB_HOST_PDO}', '${DB_USER}', '${DB_PASS}');
     \$pdo->exec('CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`');
 "
 
-php -r "
+php -d zend.assertions=1 -d assert.exception=1 -r "
     require '${PROJECT_DIR}/vendor/autoload.php';
 
     use Queuety\Connection;

@@ -147,7 +147,7 @@ class ErrorPathTest extends IntegrationTestCase {
 		$completed = $this->queue->find( $id );
 		$this->assertSame( JobStatus::Completed, $completed->status );
 
-		$this->queue->retry( $id );
+		$this->assertTrue( $this->queue->admin_retry( $id, $completed->revision ) );
 
 		$retried = $this->queue->find( $id );
 		$this->assertSame( JobStatus::Pending, $retried->status );

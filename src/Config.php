@@ -14,6 +14,11 @@ use Queuety\Enums\BackoffStrategy;
  */
 class Config {
 
+	/** Schema-version table base name. */
+	public static function table_schema(): string {
+		return self::table_name( 'QUEUETY_TABLE_SCHEMA', 'schema' );
+	}
+
 	/** Jobs table base name. */
 	public static function table_jobs(): string {
 		return self::table_name( 'QUEUETY_TABLE_JOBS', 'jobs' );

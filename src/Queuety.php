@@ -197,8 +197,16 @@ class Queuety {
 	 *
 	 * @param Connection           $conn Database connection.
 	 * @param HandlerRegistry|null $registry Optional handler mappings to preserve during worker reconnects.
+	 * @throws \RuntimeException When installations change or the schema is incompatible.
 	 */
 	public static function init( Connection $conn, ?HandlerRegistry $registry = null ): void {
+		if ( null !== self::$conn && self::$conn->namespace() !== $conn->namespace() ) {
+			throw new \RuntimeException( 'Queuety supports one installation per process. Reset the runtime before switching installations.' );
+		}
+		Schema::assert_compatible( $conn );
+		if ( null !== self::$conn && self::$conn->is_discarded() && null !== self::$cache ) {
+			self::$cache->flush();
+		}
 		self::$conn = $conn;
 
 		if ( null === self::$cache ) {
@@ -257,11 +265,15 @@ class Queuety {
 	}
 
 	/**
-	 * Ensure the Queuety tables exist for the active connection.
+	 * Explicitly install or upgrade after draining workers.
+	 *
+	 * Pass a connection before init() when installing or upgrading a schema.
+	 * Runtime initialization and worker wakes never run this migration.
+	 *
+	 * @param Connection|null $conn Connection to install, or the active installation.
 	 */
-	public static function ensure_schema(): void {
-		self::ensure_initialized();
-		Schema::install( self::conn_() );
+	public static function ensure_schema( ?Connection $conn = null ): void {
+		Schema::install( $conn ?? self::conn_() );
 	}
 
 	/**
@@ -362,6 +374,31 @@ class Queuety {
 	}
 
 	/**
+	 * Run at most one bounded action without maintenance or sleeping.
+	 *
+	 * @param string|array<int, string> $queue Queue name or ordered queue list.
+	 * @param int                       $action_seconds Cooperative action budget in seconds.
+	 * @param int                       $lease_seconds Claim lifetime in seconds.
+	 * @return Job|null Claimed job, or null when none was admitted.
+	 */
+	public static function tick( string|array $queue = 'default', int $action_seconds = 20, int $lease_seconds = 30 ): ?Job {
+		self::ensure_initialized();
+		return self::worker_()->tick( $queue, $action_seconds, $lease_seconds );
+	}
+
+	/**
+	 * Run one bounded maintenance phase and return the next phase cursor.
+	 *
+	 * @param int $limit Maximum rows considered in this phase.
+	 * @param int $cursor Maintenance phase, starting at zero.
+	 * @return array{cursor: int, processed: int}
+	 */
+	public static function maintenance_batch( int $limit = 100, int $cursor = 0 ): array {
+		self::ensure_initialized();
+		return self::worker_()->maintenance_batch( $limit, $cursor );
+	}
+
+	/**
 	 * Run a forked worker pool directly.
 	 *
 	 * @param int    $workers Number of worker processes.
@@ -382,6 +419,7 @@ class Queuety {
 			null,
 			$options['table_prefix'],
 			$options['driver'],
+			$options['options'],
 		);
 		$pool->run( $queue );
 	}
@@ -408,6 +446,7 @@ class Queuety {
 			$max_workers,
 			$options['table_prefix'],
 			$options['driver'],
+			$options['options'],
 		);
 		$pool->run( $queue );
 	}
@@ -431,13 +470,15 @@ class Queuety {
 	 * @param string               $queue    Queue name.
 	 * @param int                  $priority Priority value.
 	 * @param int                  $delay    Delay in seconds.
+	 * @param string|null          $dispatch_key Durable idempotency key.
 	 * @return int
 	 */
-	public static function dispatch_job( string $handler, array $payload = array(), string $queue = 'default', int $priority = 0, int $delay = 0 ): int {
+	public static function dispatch_job( string $handler, array $payload = array(), string $queue = 'default', int $priority = 0, int $delay = 0, ?string $dispatch_key = null ): int {
 		return self::dispatch( $handler, $payload )
 			->on_queue( $queue )
 			->with_priority( Priority::tryFrom( $priority ) ?? Priority::Low )
 			->delay( $delay )
+			->with_dispatch_key( $dispatch_key )
 			->id();
 	}
 
@@ -453,7 +494,7 @@ class Queuety {
 		self::ensure_initialized();
 
 		$table  = self::conn_()->table( Config::table_jobs() );
-		$sql    = "SELECT id, queue, handler, status, attempts, priority, created_at FROM {$table} WHERE 1=1";
+		$sql    = "SELECT id, queue, handler, status, attempts, priority, created_at, revision FROM {$table} WHERE 1=1";
 		$params = array();
 
 		if ( null !== $queue ) {
@@ -521,6 +562,10 @@ class Queuety {
 				'workflow_id'   => $job->workflow_id,
 				'step_index'    => $job->step_index,
 				'depends_on'    => $job->depends_on,
+				'revision'     => $job->revision,
+				'workflow_revision' => $job->workflow_revision,
+				'lease_expires_at' => $job->lease_expires_at?->format( 'Y-m-d H:i:s.u' ),
+				'action_deadline_at' => $job->action_deadline_at?->format( 'Y-m-d H:i:s.u' ),
 			),
 			'logs' => self::logger_()->for_job( $job_id ),
 		);
@@ -529,27 +574,42 @@ class Queuety {
 	/**
 	 * Bury one job manually.
 	 *
-	 * @param int    $job_id        Job ID.
-	 * @param string $error_message Error message to record.
+	 * @param int      $job_id        Job ID.
+	 * @param string   $error_message Error message to record.
+	 * @param int|null $expected_revision Optional revision reviewed by the caller.
 	 * @return void
+	 * @throws \RuntimeException When the reviewed job revision changed.
 	 */
-	public static function bury_job( int $job_id, string $error_message = 'Manually buried via CLI.' ): void {
+	public static function bury_job( int $job_id, string $error_message = 'Manually buried via CLI.', ?int $expected_revision = null ): void {
 		self::ensure_initialized();
-		self::queue_()->bury( $job_id, $error_message );
+		$job = self::queue_()->find( $job_id );
+		if ( null !== $job && ! self::queue_()->admin_bury( $job_id, $expected_revision ?? $job->revision, $error_message ) ) {
+			throw new \RuntimeException( 'The job changed before it could be buried. Review its current revision and retry.' );
+		}
 	}
 
 	/**
 	 * Delete one job row.
 	 *
-	 * @param int $job_id Job ID.
+	 * @param int      $job_id Job ID.
+	 * @param int|null $expected_revision Optional revision reviewed by the caller.
 	 * @return bool
 	 */
-	public static function delete_job( int $job_id ): bool {
+	public static function delete_job( int $job_id, ?int $expected_revision = null ): bool {
 		self::ensure_initialized();
+		$job = self::queue_()->find( $job_id );
+		if ( null === $job ) {
+			return false;
+		}
 
 		$table = self::conn_()->table( Config::table_jobs() );
-		$stmt  = self::conn_()->pdo()->prepare( "DELETE FROM {$table} WHERE id = :id" );
-		$stmt->execute( array( 'id' => $job_id ) );
+		$stmt  = self::conn_()->pdo()->prepare( "DELETE FROM {$table} WHERE id = :id AND revision = :revision" );
+		$stmt->execute(
+			array(
+				'id' => $job_id,
+				'revision' => $expected_revision ?? $job->revision,
+			)
+		);
 
 		return $stmt->rowCount() > 0;
 	}
@@ -771,8 +831,7 @@ class Queuety {
 		$buried = self::queue_()->buried();
 		$count  = 0;
 		foreach ( $buried as $job ) {
-			self::queue_()->retry( $job->id );
-			++$count;
+			$count += self::queue_()->admin_retry( $job->id, $job->revision ) ? 1 : 0;
 		}
 		return $count;
 	}
@@ -780,11 +839,16 @@ class Queuety {
 	/**
 	 * Retry a specific job.
 	 *
-	 * @param int $job_id Job ID.
+	 * @param int      $job_id Job ID.
+	 * @param int|null $expected_revision Optional revision reviewed by the caller.
+	 * @throws \RuntimeException When the reviewed job revision changed.
 	 */
-	public static function retry( int $job_id ): void {
+	public static function retry( int $job_id, ?int $expected_revision = null ): void {
 		self::ensure_initialized();
-		self::queue_()->retry( $job_id );
+		$job = self::queue_()->find( $job_id );
+		if ( null !== $job && ! self::queue_()->admin_retry( $job_id, $expected_revision ?? $job->revision ) ) {
+			throw new \RuntimeException( 'The job changed before it could be retried. Review its current revision and retry.' );
+		}
 	}
 
 	/**

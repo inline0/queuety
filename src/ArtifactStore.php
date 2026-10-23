@@ -13,6 +13,30 @@ namespace Queuety;
 class ArtifactStore {
 
 	/**
+	 * Attempt-local artifact view.
+	 *
+	 * @var array<int, array<string, array<string, mixed>|null>>
+	 */
+	private array $staged = array();
+
+	/**
+	 * Identity of the attempt owning the staged view.
+	 *
+	 * @var string|null
+	 */
+	private ?string $staged_token = null;
+
+	/** Discard overlays when a long-lived worker switches claims. */
+	private function sync_attempt(): void {
+		$token = ExecutionContext::job()?->claim_token;
+		if ( $token !== $this->staged_token ) {
+			$this->staged = array();
+			$this->staged_token = $token;
+		}
+	}
+
+
+	/**
 	 * Constructor.
 	 *
 	 * @param Connection $conn Database connection.
@@ -55,6 +79,39 @@ class ArtifactStore {
 			throw new \InvalidArgumentException( 'Artifacts require a non-empty kind.' );
 		}
 
+		$this->sync_attempt();
+		$job = ExecutionContext::job();
+		if ( null !== $job && ! ExecutionContext::is_completing() ) {
+			$this->staged[ $workflow_id ][ $artifact_key ] = array(
+				'id' => 0,
+				'workflow_id' => $workflow_id,
+				'key' => $artifact_key,
+				'kind' => $kind,
+				'content' => $content,
+				'metadata' => $metadata,
+				'step_index' => $step_index,
+				'created_at' => null,
+				'updated_at' => null,
+			);
+			ExecutionContext::on_completion(
+				function ( Connection $conn ) use ( $workflow_id, $artifact_key, $content, $kind, $step_index, $metadata ): void {
+					if ( $conn->pdo() !== $this->conn->pdo() ) {
+						  throw new \LogicException( 'Artifacts must use the completion transaction connection.' );
+					}
+					$this->put( $workflow_id, $artifact_key, $content, $kind, $step_index, $metadata );
+				}
+			);
+			ExecutionContext::add_trace_artifact(
+				array(
+					'key' => $artifact_key,
+					'kind' => $kind,
+					'step_index' => $step_index,
+					'metadata' => $metadata,
+				)
+			);
+			return;
+		}
+
 		$table = $this->conn->table( Config::table_artifacts() );
 		$stmt  = $this->conn->pdo()->prepare(
 			"INSERT INTO {$table}
@@ -80,7 +137,7 @@ class ArtifactStore {
 			)
 		);
 
-		if ( ExecutionContext::workflow_id() === $workflow_id ) {
+		if ( ExecutionContext::workflow_id() === $workflow_id && ! ExecutionContext::is_completing() ) {
 			ExecutionContext::add_trace_artifact(
 				array(
 					'key'        => $artifact_key,
@@ -100,6 +157,11 @@ class ArtifactStore {
 	 * @return array<string,mixed>|null
 	 */
 	public function get( int $workflow_id, string $artifact_key ): ?array {
+		$this->sync_attempt();
+		$artifact_key = trim( $artifact_key );
+		if ( array_key_exists( $artifact_key, $this->staged[ $workflow_id ] ?? array() ) ) {
+			return $this->staged[ $workflow_id ][ $artifact_key ];
+		}
 		$table = $this->conn->table( Config::table_artifacts() );
 		$stmt  = $this->conn->pdo()->prepare(
 			"SELECT * FROM {$table}
@@ -158,6 +220,16 @@ class ArtifactStore {
 			$rows[] = $this->map_row( $typed, $include_content );
 		}
 
+		$this->sync_attempt();
+		foreach ( $this->staged[ $workflow_id ] ?? array() as $key => $staged ) {
+			$rows = array_values( array_filter( $rows, static fn( array $row ): bool => $row['key'] !== $key ) );
+			if ( null !== $staged ) {
+				if ( ! $include_content ) {
+					unset( $staged['content'] );
+				}
+				$rows[] = $staged;
+			}
+		}
 		return $rows;
 	}
 
@@ -168,6 +240,19 @@ class ArtifactStore {
 	 * @param string $artifact_key Artifact key.
 	 */
 	public function delete( int $workflow_id, string $artifact_key ): void {
+		$this->sync_attempt();
+		if ( null !== ExecutionContext::job() && ! ExecutionContext::is_completing() ) {
+			$this->staged[ $workflow_id ][ trim( $artifact_key ) ] = null;
+			ExecutionContext::on_completion(
+				function ( Connection $conn ) use ( $workflow_id, $artifact_key ): void {
+					if ( $conn->pdo() !== $this->conn->pdo() ) {
+						  throw new \LogicException( 'Artifacts must use the completion transaction connection.' );
+					}
+					$this->delete( $workflow_id, $artifact_key );
+				}
+			);
+			return;
+		}
 		$table = $this->conn->table( Config::table_artifacts() );
 		$stmt  = $this->conn->pdo()->prepare(
 			"DELETE FROM {$table}

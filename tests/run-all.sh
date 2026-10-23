@@ -33,7 +33,7 @@ run_check() {
 }
 
 run_check "Coding Standards" "composer cs"
-run_check "Static Analysis" "composer stan"
+run_check "Static Analysis" "composer analyse"
 run_check "Unit Tests" "composer test:unit"
 run_check "Integration Tests" "composer test:integration"
 run_check "E2E Tests" "bash tests/e2e/run-all.sh"

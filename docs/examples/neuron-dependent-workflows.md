@@ -14,7 +14,7 @@ This example answers a common agentic question:
 
 > Can one workflow decide that another workflow should only continue after an earlier workflow finishes?
 
-Yes. The important nuance is that Queuety already supports this with `wait_for_workflow()` and `wait_for_workflows()`.
+Queuety supports this with `wait_for_workflow()` and `wait_for_workflows()`.
 
 That means:
 
@@ -42,7 +42,7 @@ $research_id = Queuety::workflow('research_packet')
     ->then(SynthesizeResearchPacketStep::class)
     ->dispatch([
         'brief_id' => 42,
-        'provider' => 'anthropic',
+        'credential_reference' => 'research-service',
     ]);
 ```
 
@@ -57,18 +57,23 @@ Queuety::workflow('write_brief')
     ->dispatch([
         'brief_id' => 42,
         'research_workflow_id' => $research_id,
-        'provider' => 'openai',
+        'credential_reference' => 'writing-service',
     ]);
 ```
 
 When the writing workflow starts, it immediately pauses in `waiting_for_workflows` until the research workflow has completed successfully.
 
-## The Neuron writing step
+## One bounded provider request
+
+Use the [provider factory](/docs/examples/neuron-planner-executor) and application credential resolver from the other examples. The dependency wait releases the worker; no HTTP request starts until research completes.
 
 ```php
 namespace App\Workflow\Steps;
 
-use App\Neuron\WriterAgent;
+use App\Ai\Credentials;
+use App\Neuron\ProviderFactory;
+use NeuronAI\Chat\Messages\ToolCallMessage;
+use Queuety\ExecutionContext;
 use NeuronAI\Chat\Messages\UserMessage;
 use Queuety\Step;
 
@@ -76,17 +81,24 @@ final class WriteBriefWithNeuronStep implements Step
 {
     public function handle(array $state): array
     {
-        $agent = new WriterAgent(
-            providerName: $state['provider'] ?? 'openai',
+        $credential = Credentials::forRun($state['credential_reference']);
+        $provider = ProviderFactory::make(
+            $credential->provider,
+            $credential->key,
+            $credential->model,
         );
-
-        $message = $agent->chat(
+        ExecutionContext::assert_active();
+        $message = $provider->chat(
             new UserMessage(sprintf(
                 "Write the final brief for brief %d using this research packet:\n\n%s",
                 $state['brief_id'],
                 json_encode($state['research'], JSON_PRETTY_PRINT),
             ))
-        )->getMessage();
+        )->message();
+        ExecutionContext::assert_active();
+        if ($message instanceof ToolCallMessage) {
+            throw new \RuntimeException('This writing step expects text only.');
+        }
 
         return [
             'draft_markdown' => $message->getContent(),
@@ -95,7 +107,7 @@ final class WriteBriefWithNeuronStep implements Step
 
     public function config(): array
     {
-        return [];
+        return ['max_attempts' => 1];
     }
 }
 ```
@@ -119,17 +131,7 @@ Prefer one workflow when:
 
 If this writing flow belongs to a longer-lived editorial session, let a [state machine](/docs/state-machines) own the outer lifecycle and use these workflows for the bounded execution stages. That keeps lifecycle states like `awaiting_brief`, `researching`, `awaiting_review`, and `completed` explicit while preserving workflow durability inside each phase.
 
-## One important distinction
-
-This pattern means:
-
-- `X` exists now, but waits for `Y`
-
-It does **not** mean:
-
-- `X` is not created until `Y` is done
-
-If you want the second behavior, have a parent workflow wait for `Y` and only then call `start_workflows()` or `start_agents()` for `X`.
+The waiting workflow already exists and can be inspected. To delay its creation instead, let a parent wait for the dependency and then call `start_workflows()`.
 
 ## Related docs
 

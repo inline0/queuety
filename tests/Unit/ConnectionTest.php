@@ -7,6 +7,55 @@ use Queuety\Connection;
 
 class ConnectionTest extends TestCase {
 
+	public function test_worker_options_preserve_explicit_driver_namespace_and_timeout_controls(): void {
+		$options = array( 'connect_timeout' => 3, 'read_timeout' => 2, 'lock_wait_timeout' => 1, 'metadata_lock_timeout' => 1 );
+		$conn = new Connection( 'localhost', 'testdb', 'root', 'pass', 'app_', 'agents_', 'mysqli', $options );
+		$fresh = new Connection( ...$conn->worker_options() );
+		$this->assertSame( $options, $fresh->worker_options()['options'] );
+		$this->assertSame( $conn->namespace(), $fresh->namespace() );
+		$this->assertSame( 'mysqli', $fresh->driver() );
+		$this->assertNotSame( $conn, $fresh );
+	}
+
+	public function test_installation_namespaces_include_database_and_table_prefixes(): void {
+		$a = new Connection( 'localhost', 'a', 'root', '', 'wp_', 'agents_' );
+		$b = new Connection( 'localhost', 'b', 'root', '', 'wp_', 'agents_' );
+		$c = new Connection( 'localhost', 'a', 'root', '', 'wp_', 'plugin_' );
+		$this->assertNotSame( $a->namespace(), $b->namespace() );
+		$this->assertNotSame( $a->namespace(), $c->namespace() );
+	}
+
+	public function test_timeout_options_reject_unbounded_zero(): void {
+		$this->expectException( \InvalidArgumentException::class );
+		new Connection( 'localhost', 'test', 'root', '', options: array( 'read_timeout' => 0 ) );
+	}
+
+	public function test_timeout_options_reject_unknown_names(): void {
+		$this->expectException( \InvalidArgumentException::class );
+		new Connection( 'localhost', 'test', 'root', '', options: array( 'query_timeout' => 1 ) );
+	}
+
+	public function test_native_pdo_reports_and_rejects_unsupported_read_timeout(): void {
+		if ( ! extension_loaded( 'pdo_mysql' ) ) {
+			$this->markTestSkipped( 'pdo_mysql is not available.' );
+		}
+		$conn = new Connection( 'localhost', 'test', 'root', '', driver: 'pdo', options: array( 'read_timeout' => 1 ) );
+		$this->assertFalse( $conn->timeout_capabilities()['read_timeout'] );
+		$this->assertFalse( $conn->timeout_capabilities()['hard_deadline'] );
+		$this->expectException( \InvalidArgumentException::class );
+		$this->expectExceptionMessage( 'PDO MySQL cannot guarantee a read timeout' );
+		$conn->pdo();
+	}
+
+	public function test_discarded_connection_cannot_silently_reconnect(): void {
+		$conn = new Connection( 'localhost', 'test', 'root', '' );
+		$conn->discard();
+		$this->assertTrue( $conn->is_discarded() );
+		$this->expectException( \RuntimeException::class );
+		$this->expectExceptionMessage( 'Reconcile durable state' );
+		$conn->pdo();
+	}
+
 	public function test_table_prefixes_name(): void {
 		$conn = new Connection( 'localhost', 'testdb', 'root', 'pass', 'wp_' );
 

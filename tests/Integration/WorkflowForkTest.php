@@ -46,7 +46,7 @@ class WorkflowForkTest extends IntegrationTestCase {
 		// Advance through step 0.
 		$job0 = $this->queue->claim();
 		$this->assertNotNull( $job0 );
-		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ) );
+		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ) , job: $job0);
 
 		// Fork the workflow at step 1.
 		$forked_id = $this->workflow->fork( $wf_id );
@@ -78,7 +78,7 @@ class WorkflowForkTest extends IntegrationTestCase {
 
 		// Advance through step 0.
 		$job0 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ) );
+		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ) , job: $job0);
 
 		// Fork the workflow.
 		$forked_id = $this->workflow->fork( $wf_id );
@@ -87,7 +87,7 @@ class WorkflowForkTest extends IntegrationTestCase {
 		// Advance the original.
 		$job_orig = $this->queue->claim();
 		$this->assertNotNull( $job_orig );
-		$this->workflow->advance_step( $wf_id, $job_orig->id, array( 'step1_result' => 'original_b' ) );
+		$this->workflow->advance_step( $wf_id, $job_orig->id, array( 'step1_result' => 'original_b' ) , job: $job_orig);
 
 		$original_status = $this->workflow->status( $wf_id );
 		$this->assertSame( 2, $original_status->current_step );
@@ -106,7 +106,7 @@ class WorkflowForkTest extends IntegrationTestCase {
 
 		// Advance through step 0.
 		$job0 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ) );
+		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ) , job: $job0);
 
 		// Fork at step 1.
 		$forked_id = $this->workflow->fork( $wf_id );
@@ -114,7 +114,7 @@ class WorkflowForkTest extends IntegrationTestCase {
 		// Advance the original to completion.
 		$job_orig = $this->queue->claim();
 		$this->assertNotNull( $job_orig );
-		$this->workflow->advance_step( $wf_id, $job_orig->id, array( 'step1_result' => 'orig_b' ) );
+		$this->workflow->advance_step( $wf_id, $job_orig->id, array( 'step1_result' => 'orig_b' ) , job: $job_orig);
 
 		$original_status = $this->workflow->status( $wf_id );
 		$this->assertSame( WorkflowStatus::Completed, $original_status->status );
@@ -122,7 +122,7 @@ class WorkflowForkTest extends IntegrationTestCase {
 		// Advance the forked to completion.
 		$job_fork = $this->queue->claim();
 		$this->assertNotNull( $job_fork );
-		$this->workflow->advance_step( $forked_id, $job_fork->id, array( 'step1_result' => 'fork_b' ) );
+		$this->workflow->advance_step( $forked_id, $job_fork->id, array( 'step1_result' => 'fork_b' ) , job: $job_fork);
 
 		$forked_status = $this->workflow->status( $forked_id );
 		$this->assertSame( WorkflowStatus::Completed, $forked_status->status );

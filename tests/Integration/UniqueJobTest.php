@@ -97,8 +97,8 @@ class UniqueJobTest extends IntegrationTestCase {
 		);
 
 		// Claim and complete the first job.
-		$this->queue->claim();
-		$this->queue->complete( $id1 );
+		$claim = $this->queue->claim();
+		$this->queue->complete( $id1, $claim->claim_token );
 
 		$id2 = $this->queue->dispatch(
 			handler: 'send_email',

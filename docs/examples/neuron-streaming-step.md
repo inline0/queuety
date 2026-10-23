@@ -10,121 +10,103 @@ meta_description: "Wrap a Neuron streaming agent in a durable Queuety StreamingS
 
 # Neuron Streaming Step
 
-This example shows a clean split. Neuron streams the agent response chunk by chunk, while Queuety persists each chunk durably through `StreamingStep`. That means the UI can receive a live draft while the workflow still survives worker crashes or retries.
+Stream one bounded provider request and persist its chunks as provisional output for the current claim. An interrupted model generation cannot resume at an arbitrary token offset. A retry starts a new attempt; old partial chunks are not a completed draft. This follows the [pinned integration contract](/docs/examples).
 
-## When this pattern is useful
+## Stream the provider generator
 
-Use it when a draft or response is long enough that you want to stream it live, when you do not want to lose partial output if the worker dies, and when the final artifact should still land in workflow state after the stream completes.
-
-## The Neuron agent
-
+<!-- executable: provider-stream -->
 ```php
 namespace App\Neuron;
 
-use NeuronAI\Agent\Agent;
+use NeuronAI\Chat\Messages\Stream\Chunks\ReasoningChunk;
+use NeuronAI\Chat\Messages\Stream\Chunks\TextChunk;
+use NeuronAI\Chat\Messages\ToolCallMessage;
+use NeuronAI\Chat\Messages\UserMessage;
 use NeuronAI\Providers\AIProviderInterface;
-use NeuronAI\Providers\OpenAI\Responses\OpenAIResponses;
-use NeuronAI\SystemPrompt;
+use Queuety\ExecutionContext;
 
-final class DraftMemoAgent extends Agent
+final class ProviderStream
 {
-    protected function provider(): AIProviderInterface
-    {
-        return new OpenAIResponses(
-            key: $_ENV['OPENAI_API_KEY'],
-            model: $_ENV['OPENAI_MODEL'],
-        );
+    public static function text(
+        AIProviderInterface $provider,
+        string $prompt,
+        array $existing_chunks = [],
+    ): \Generator {
+        if ($existing_chunks !== []) {
+            throw new \RuntimeException('Partial output requires an explicit new attempt.');
+        }
+        ExecutionContext::assert_active();
+        $stream = $provider->stream(new UserMessage($prompt));
+        foreach ($stream as $chunk) {
+            ExecutionContext::assert_active();
+            if ($chunk instanceof TextChunk && !$chunk instanceof ReasoningChunk) {
+                yield ['type' => 'text', 'text' => $chunk->content];
+            }
+        }
+        ExecutionContext::assert_active();
+        $message = $stream->getReturn()->message();
+        if ($message instanceof ToolCallMessage) {
+            throw new \RuntimeException('This text-only stream does not accept tools.');
+        }
+        yield ['type' => 'complete'];
     }
 
-    public function instructions(): string
+    public static function complete(array $chunks): array
     {
-        return (string) new SystemPrompt(
-            background: [
-                'You write crisp internal strategy memos.',
-                'Prefer short sections and operationally useful language.',
-            ],
-        );
+        $last = $chunks === [] ? null : $chunks[array_key_last($chunks)];
+        if (!is_array($last) || ($last['type'] ?? null) !== 'complete') {
+            throw new \RuntimeException('The stream has no completion marker.');
+        }
+        $text = '';
+        foreach ($chunks as $chunk) {
+            if (is_array($chunk) && ($chunk['type'] ?? null) === 'text') {
+                $text .= $chunk['text'];
+            }
+        }
+        return ['draft_markdown' => $text];
     }
 }
 ```
 
-## The Queuety streaming step
+The generator's final return value is a `ProviderResponse`. Only a normal end with a final text response emits the completion marker. Reasoning and tool-argument chunks are not published as draft text. Queuety still validates the live claim before committing the final workflow state.
+
+## Wrap it in a Queuety step
 
 ```php
 namespace App\Workflow\Steps;
 
-use App\Neuron\DraftMemoAgent;
-use NeuronAI\Chat\Messages\UserMessage;
+use App\Ai\Credentials;
+use App\Neuron\ProviderFactory;
+use App\Neuron\ProviderStream;
 use Queuety\Contracts\StreamingStep;
-use Queuety\Heartbeat;
 
 final class StreamMemoDraftStep implements StreamingStep
 {
     public function stream(array $state, array $existing_chunks = []): \Generator
     {
-        if (! empty($existing_chunks)) {
-            return;
-        }
-
-        $handler = (new DraftMemoAgent())->stream(
-            new UserMessage(sprintf(
-                "Write a strategy memo about %s for account %d.",
-                $state['topic'],
-                $state['account_id'],
-            ))
+        $credential = Credentials::forRun($state['credential_reference']);
+        $provider = ProviderFactory::make(
+            $credential->provider,
+            $credential->key,
+            $credential->model,
         );
-
-        foreach ($handler->events() as $i => $chunk) {
-            Heartbeat::beat(['chunks' => $i + 1]);
-
-            // This example assumes the agent has no tools attached, so
-            // Neuron will stream text/reasoning chunks only.
-            yield $chunk->content;
-        }
+        yield from ProviderStream::text($provider, $state['prompt'], $existing_chunks);
     }
 
     public function on_complete(array $chunks, array $state): array
     {
-        return [
-            'draft_markdown' => implode('', $chunks),
-        ];
+        return ProviderStream::complete($chunks);
     }
 
     public function config(): array
     {
-        return [
-            'max_attempts' => 3,
-        ];
+        return ['max_attempts' => 1];
     }
 }
 ```
 
-## Use it in a workflow
+This step uses the same remaining-budget HTTP client as [Planner / Executor](/docs/examples/neuron-planner-executor). A heartbeat or chunk callback cannot interrupt a blocked network read; the client connection and total timeouts bound that wait cooperatively. The request must fit one action budget. Streaming is optional for shared-hosting execution.
 
-```php
-use Queuety\Queuety;
+Display provisional chunks with their attempt identity and promote them only after the job completes. If a worker dies, the application may explicitly authorize a fresh generation after reconciling its request record; that can incur another provider charge. Never return early merely because some previous chunks exist.
 
-Queuety::workflow('memo_drafting')
-    ->then(BuildDraftBriefStep::class)
-    ->then(StreamMemoDraftStep::class)
-    ->then(StoreMemoStep::class)
-    ->dispatch([
-        'account_id' => 10,
-        'topic' => 'pricing changes for enterprise accounts',
-    ]);
-```
-
-## Why use Queuety instead of Neuron stream adapters alone
-
-Neuron's stream adapters are useful for frontend protocols and transports. Queuety adds something different: every yielded chunk is persisted, retries can resume with the previously saved chunks, the completed draft is merged back into workflow state, and the stream becomes one durable step in a larger orchestration.
-
-That makes this pattern a good fit when the stream is part of a multi-step business process, not just a request/response UI.
-
-## One caveat
-
-If your Neuron agent uses tools while streaming, handle the streamed chunk types explicitly. Neuron's current streaming docs describe `TextChunk`, `ReasoningChunk`, `ToolCallChunk`, and `ToolResultChunk`. For a background drafting workflow, the simplest approach is usually to keep the streaming agent text-only.
-
-## Related docs
-
-- [Streaming Steps](/docs/workflows/streaming)
-- [Agent Orchestration](/docs/workflows/agent-orchestration)
+See [streaming steps](/docs/workflows/streaming) and [agent orchestration](/docs/workflows/agent-orchestration).

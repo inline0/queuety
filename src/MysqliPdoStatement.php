@@ -48,15 +48,20 @@ class MysqliPdoStatement extends \PDOStatement {
 	 */
 	private int $row_count = 0;
 
+	/** Connection failure state. */
+	private readonly DatabaseFailureGuard $guard;
+
 	/**
 	 * Initialize the statement facade.
 	 *
 	 * @param \mysqli $mysqli Active mysqli connection.
 	 * @param string  $query  SQL query.
+	 * @param DatabaseFailureGuard|null $guard Shared connection failure state.
 	 */
-	public function __construct( \mysqli $mysqli, string $query ) {
+	public function __construct( \mysqli $mysqli, string $query, ?DatabaseFailureGuard $guard = null ) {
 		$this->mysqli = $mysqli;
 		$this->query  = $query;
+		$this->guard  = $guard ?? new DatabaseFailureGuard();
 	}
 
 	/**
@@ -66,6 +71,21 @@ class MysqliPdoStatement extends \PDOStatement {
 	 * @return bool
 	 */
 	public function execute( ?array $params = null ): bool {
+		$this->guard->check();
+		try {
+			return $this->execute_once( $params );
+		} catch ( \Throwable $error ) {
+			$this->guard->handle( $error, 1 === preg_match( '/^\s*COMMIT\b/i', $this->query ) );
+		}
+	}
+
+	/**
+	 * Execute one statement without retrying a failed transport.
+	 *
+	 * @param array<string|int, mixed>|null $params Bound parameters.
+	 * @return bool
+	 */
+	private function execute_once( ?array $params ): bool {
 		$params = $params ?? array();
 
 		$this->rows      = array();

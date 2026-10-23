@@ -11,6 +11,7 @@ use Queuety\Contracts\StateAction;
 use Queuety\Contracts\StateGuard;
 use Queuety\Enums\Priority;
 use Queuety\Enums\StateMachineStatus;
+use Queuety\Exceptions\LostClaimException;
 
 /**
  * Persists machine lifecycle, transitions, and queued state-entry actions.
@@ -29,6 +30,67 @@ class StateMachine {
 		private readonly Queue $queue,
 		private readonly ?StateMachineEventLog $event_log = null,
 	) {}
+
+	/**
+	 * Validate action identity and semantic generation under the machine lock.
+	 *
+	 * @param array<string, mixed> $context Locked machine context.
+	 * @param Job|null             $job     Originating action claim.
+	 * @param bool                 $recover Whether this is terminal stale recovery.
+	 * @throws LostClaimException When the action no longer owns this transition.
+	 */
+	private function guard_action( array $context, ?Job $job, bool $recover = false ): void {
+		$row = $this->as_array( $context['row'] ?? array() );
+		if ( null === $job ) {
+			$table = $this->conn->table( Config::table_jobs() );
+			$stmt = $this->conn->pdo()->prepare( "SELECT id FROM {$table} WHERE handler = '__queuety_state_machine_action' AND status = 'processing' AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.machine_id')) = :machine_id LIMIT 1 FOR UPDATE" );
+			$stmt->execute( array( 'machine_id' => $row['id'] ?? 0 ) );
+			$active_id = $stmt->fetchColumn();
+			if ( is_numeric( $active_id ) ) {
+				throw new LostClaimException( (int) $active_id );
+			}
+			return;
+		}
+
+		$expected = $job->payload['machine_revision'] ?? null;
+		if ( ( $job->payload['machine_id'] ?? null ) !== (int) ( is_scalar( $row['id'] ?? null ) ? $row['id'] : 0 )
+			|| ( $job->payload['state_name'] ?? null ) !== ( $context['current_state'] ?? null )
+			|| ( null !== $expected && ( ! is_scalar( $expected ) || (string) $expected !== (string) ( is_scalar( $row['revision'] ?? null ) ? $row['revision'] : '' ) ) ) ) {
+			throw new LostClaimException( $job->id );
+		}
+		if ( $recover ) {
+			if ( ! $this->queue->recover( $job, bury: true ) ) {
+				throw new LostClaimException( $job->id );
+			}
+		} elseif ( null !== $job->claim_token ) {
+			$this->queue->assert_claim( $job->id, $job->claim_token, true );
+		} else {
+			throw new LostClaimException( $job->id );
+		}
+	}
+
+	/**
+	 * Finish an action and its machine transition in one transaction.
+	 *
+	 * @param \PDO        $pdo   Active transaction.
+	 * @param Job|null    $job   Completing action claim.
+	 * @param string|null $error Terminal failure, otherwise successful completion.
+	 * @param bool        $commit Whether this call owns the database transaction.
+	 */
+	private function commit_action( \PDO $pdo, ?Job $job, ?string $error = null, bool $commit = true ): void {
+		if ( null !== $job && null !== $job->claim_token ) {
+			$this->queue->assert_claim( $job->id, $job->claim_token, true );
+			if ( null === $error ) {
+				ExecutionContext::flush_completion( $this->conn, $job );
+				$this->queue->complete( $job->id, $job->claim_token );
+			} else {
+				$this->queue->bury( $job->id, $error, $job->claim_token );
+			}
+		}
+		if ( $commit ) {
+			$pdo->commit();
+		}
+	}
 
 	/**
 	 * Narrow a mixed value to an array<string, mixed>.
@@ -332,6 +394,31 @@ class StateMachine {
 	 * @throws \Throwable When a transition guard fails.
 	 */
 	public function send_event( int $machine_id, string $event_name, array $payload = array() ): void {
+		$job = ExecutionContext::job();
+		if ( null !== $job && null !== $job->claim_token ) {
+			$this->queue->with_claim(
+				$job->id,
+				$job->claim_token,
+				function () use ( $machine_id, $event_name, $payload ): void {
+					$this->send_event_transaction( $machine_id, $event_name, $payload );
+				}
+			);
+			return;
+		}
+		$this->send_event_transaction( $machine_id, $event_name, $payload );
+	}
+
+	/**
+	 * Apply an external event while retaining ownership of an enclosing transaction.
+	 *
+	 * @param int                  $machine_id Machine ID.
+	 * @param string               $event_name Event name.
+	 * @param array<string, mixed> $payload Event data.
+	 * @throws \Throwable When the event transition fails.
+	 * @throws \InvalidArgumentException When the event name is empty.
+	 * @throws \RuntimeException When the machine is not waiting.
+	 */
+	private function send_event_transaction( int $machine_id, string $event_name, array $payload ): void {
 		$event_name = trim( $event_name );
 		if ( '' === $event_name ) {
 			throw new \InvalidArgumentException( 'State machine event name cannot be empty.' );
@@ -403,12 +490,16 @@ class StateMachine {
 						'error'        => $this->error_payload( $e ),
 					)
 				);
-				$context['pdo']->commit();
+				if ( $context['owns_transaction'] ) {
+					$context['pdo']->commit();
+				}
 			}
 
 			throw $e;
 		} finally {
-			$this->unlock_if_needed( $context['pdo'] );
+			if ( $context['owns_transaction'] ) {
+				$this->unlock_if_needed( $context['pdo'] );
+			}
 		}
 	}
 
@@ -422,8 +513,10 @@ class StateMachine {
 	 * @param array<string, mixed> $runtime       Worker runtime metadata.
 	 * @throws \RuntimeException When the queued state no longer defines an action.
 	 * @throws \Throwable When the action fails so worker retries apply.
+	 * @param Job|null             $job Current worker claim.
 	 */
-	public function handle_action_job( int $machine_id, string $state_name, ?string $event_name = null, array $event_payload = array(), array $runtime = array() ): void {
+	public function handle_action_job( int $machine_id, string $state_name, ?string $event_name = null, array $event_payload = array(), array $runtime = array(), ?Job $job = null ): void {
+		$job ??= ExecutionContext::job();
 		$context        = $this->lock_machine( $machine_id );
 		$state_before   = array();
 		$action_input   = array();
@@ -432,8 +525,9 @@ class StateMachine {
 		$started_at     = hrtime( true );
 
 		try {
+			$this->guard_action( $context, $job );
 			if ( StateMachineStatus::Running !== $context['status'] || $context['current_state'] !== $state_name ) {
-				$context['pdo']->commit();
+				$this->commit_action( $context['pdo'], $job );
 				return;
 			}
 
@@ -536,7 +630,7 @@ class StateMachine {
 				if ( empty( $transition_payload ) ) {
 					$transition_payload = $public_updates;
 				}
-				$this->apply_transition_from_locked_context( $context, $state, $emitted_event, $transition_payload );
+				$this->apply_transition_from_locked_context( $context, $state, $emitted_event, $transition_payload, $job );
 				return;
 			}
 
@@ -554,10 +648,17 @@ class StateMachine {
 			);
 
 			$this->record_lifecycle_state_event( $machine_id, $state_name, 'machine_waiting', null, $state, array( 'event' => $event_name ) );
-			$context['pdo']->commit();
+			$this->commit_action( $context['pdo'], $job );
 		} catch ( \Throwable $e ) {
 			if ( $context['pdo']->inTransaction() ) {
 				$context['pdo']->rollBack();
+			}
+
+			if ( $e instanceof LostClaimException ) {
+				throw $e;
+			}
+			if ( null !== $job && null !== $job->claim_token ) {
+				$this->queue->assert_claim( $job->id, $job->claim_token );
 			}
 
 			$trace       = ExecutionContext::consume_trace();
@@ -615,12 +716,16 @@ class StateMachine {
 	 * @param string               $error_message Failure message.
 	 * @param array<string, mixed> $runtime       Worker runtime metadata.
 	 * @throws \Throwable When the failure state cannot be persisted.
+	 * @param Job|null             $job Current worker claim.
+	 * @param bool                 $recover Whether to atomically recover an expired terminal attempt.
 	 */
-	public function fail_action( int $machine_id, string $state_name, string $error_message, array $runtime = array() ): void {
+	public function fail_action( int $machine_id, string $state_name, string $error_message, array $runtime = array(), ?Job $job = null, bool $recover = false ): void {
+		$job ??= ExecutionContext::job();
 		$context = $this->lock_machine( $machine_id );
 		try {
+			$this->guard_action( $context, $job, $recover );
 			if ( StateMachineStatus::Completed === $context['status'] || StateMachineStatus::Cancelled === $context['status'] ) {
-				$context['pdo']->commit();
+				$this->commit_action( $context['pdo'], $recover ? null : $job, $error_message );
 				return;
 			}
 
@@ -678,7 +783,7 @@ class StateMachine {
 				)
 			);
 
-			$context['pdo']->commit();
+			$this->commit_action( $context['pdo'], $recover ? null : $job, $error_message );
 		} catch ( \Throwable $e ) {
 			if ( $context['pdo']->inTransaction() ) {
 				$context['pdo']->rollBack();
@@ -691,20 +796,25 @@ class StateMachine {
 	 * Lock one machine row and decode its persisted definition/state.
 	 *
 	 * @param int $machine_id Machine ID.
-	 * @return array{pdo: \PDO, row: array<string, mixed>, definition: array<string, mixed>, state: array<string, mixed>, state_def: array<string, mixed>, current_state: string, status: StateMachineStatus}
+	 * @return array{pdo: \PDO, owns_transaction: bool, row: array<string, mixed>, definition: array<string, mixed>, state: array<string, mixed>, state_def: array<string, mixed>, current_state: string, status: StateMachineStatus}
 	 * @throws \RuntimeException When the machine row or current state definition is missing.
 	 */
 	private function lock_machine( int $machine_id ): array {
 		$table = $this->conn->table( Config::table_state_machines() );
 		$pdo   = $this->conn->pdo();
-		$pdo->beginTransaction();
+		$owns_transaction = ! $pdo->inTransaction();
+		if ( $owns_transaction ) {
+			$pdo->beginTransaction();
+		}
 
 		$stmt = $pdo->prepare( "SELECT * FROM {$table} WHERE id = :id FOR UPDATE" );
 		$stmt->execute( array( 'id' => $machine_id ) );
 		$row = $stmt->fetch();
 
 		if ( ! is_array( $row ) ) {
-			$pdo->rollBack();
+			if ( $owns_transaction ) {
+				$pdo->rollBack();
+			}
 			throw new \RuntimeException( "State machine {$machine_id} not found." );
 		}
 
@@ -723,7 +833,9 @@ class StateMachine {
 		$state_def         = is_array( $state_def_raw ) ? $state_def_raw : null;
 
 		if ( null === $state_def ) {
-			$pdo->rollBack();
+			if ( $owns_transaction ) {
+				$pdo->rollBack();
+			}
 			throw new \RuntimeException( "State machine {$machine_id} is missing persisted state definition '{$current_state}'." );
 		}
 
@@ -737,6 +849,7 @@ class StateMachine {
 
 		return array(
 			'pdo'           => $pdo,
+			'owns_transaction' => $owns_transaction,
 			'row'           => $row_assoc,
 			'definition'    => $definition,
 			'state'         => $state,
@@ -753,9 +866,11 @@ class StateMachine {
 	 * @param array<string, mixed> $state         Updated public state.
 	 * @param string               $event_name    Event name.
 	 * @param array<string, mixed> $event_payload Event payload.
+	 * @param Job|null             $job Current worker claim.
 	 * @throws \RuntimeException When the event is not allowed or the target state is missing.
+	 * @throws \Throwable When the state update or next action cannot be persisted.
 	 */
-	private function apply_transition_from_locked_context( array $context, array $state, string $event_name, array $event_payload ): void {
+	private function apply_transition_from_locked_context( array $context, array $state, string $event_name, array $event_payload, ?Job $job = null ): void {
 		$pdo           = $context['pdo'] ?? null;
 		$row           = $this->as_array( $context['row'] ?? null );
 		$definition    = $this->as_array( $context['definition'] ?? null );
@@ -786,93 +901,101 @@ class StateMachine {
 			);
 		}
 
-		$target_state_raw = $transition['target_state'] ?? '';
-		$target_state     = is_scalar( $target_state_raw ) ? (string) $target_state_raw : '';
-		$states_map       = is_array( $definition['states'] ?? null ) ? $definition['states'] : array();
-		$target_state_def = $states_map[ $target_state ] ?? null;
-		if ( ! is_array( $target_state_def ) ) {
-			throw new \RuntimeException(
-				sprintf(
-					"State machine target state '%s' is missing from the definition.",
-					$target_state
-				)
-			);
-		}
+		$pdo->exec( 'SAVEPOINT queuety_machine_transition' );
+		try {
+			$target_state_raw = $transition['target_state'] ?? '';
+			$target_state     = is_scalar( $target_state_raw ) ? (string) $target_state_raw : '';
+			$states_map       = is_array( $definition['states'] ?? null ) ? $definition['states'] : array();
+			$target_state_def = $states_map[ $target_state ] ?? null;
+			if ( ! is_array( $target_state_def ) ) {
+				throw new \RuntimeException(
+					sprintf(
+						"State machine target state '%s' is missing from the definition.",
+						$target_state
+					)
+				);
+			}
 
-		$target_state_def_assoc = array();
-		foreach ( $target_state_def as $key => $value ) {
-			$target_state_def_assoc[ (string) $key ] = $value;
-		}
+			$target_state_def_assoc = array();
+			foreach ( $target_state_def as $key => $value ) {
+				$target_state_def_assoc[ (string) $key ] = $value;
+			}
 
-		$transition_name = $transition['name'] ?? $event_name;
+			$transition_name = $transition['name'] ?? $event_name;
 
-		$this->record_machine_event(
-			$machine_id,
-			$current_state,
-			'transitioned',
-			$event_name,
-			$state,
-			array(
-				'from' => $current_state,
-				'to'   => $target_state,
-				'name' => $transition_name,
-			),
-			null,
-			array(
-				'transition_name' => $transition_name,
-				'input'           => $event_payload,
-				'output'          => array(
-					'from'  => $current_state,
-					'to'    => $target_state,
-					'name'  => $transition_name,
-					'event' => $event_name,
-				),
-				'state_before'    => $state,
-				'state_after'     => $state,
-				'context'         => array(
+			$this->record_machine_event(
+				$machine_id,
+				$current_state,
+				'transitioned',
+				$event_name,
+				$state,
+				array(
 					'from' => $current_state,
 					'to'   => $target_state,
+					'name' => $transition_name,
 				),
-			)
-		);
+				null,
+				array(
+					'transition_name' => $transition_name,
+					'input'           => $event_payload,
+					'output'          => array(
+						'from'  => $current_state,
+						'to'    => $target_state,
+						'name'  => $transition_name,
+						'event' => $event_name,
+					),
+					'state_before'    => $state,
+					'state_after'     => $state,
+					'context'         => array(
+						'from' => $current_state,
+						'to'   => $target_state,
+					),
+				)
+			);
 
-		$status       = $this->status_for_entered_state( $target_state_def_assoc );
-		$completed_at = null;
-		$failed_at    = null;
-		$error        = null;
+			$status       = $this->status_for_entered_state( $target_state_def_assoc );
+			$completed_at = null;
+			$failed_at    = null;
+			$error        = null;
 
-		if ( StateMachineStatus::Completed === $status || StateMachineStatus::Cancelled === $status ) {
-			$completed_at = gmdate( 'Y-m-d H:i:s' );
-		} elseif ( StateMachineStatus::Failed === $status ) {
-			$failed_at = gmdate( 'Y-m-d H:i:s' );
+			if ( StateMachineStatus::Completed === $status || StateMachineStatus::Cancelled === $status ) {
+				$completed_at = gmdate( 'Y-m-d H:i:s' );
+			} elseif ( StateMachineStatus::Failed === $status ) {
+				$failed_at = gmdate( 'Y-m-d H:i:s' );
+			}
+
+			$this->update_machine_row(
+				$pdo,
+				$machine_id,
+				array(
+					'status'        => $status->value,
+					'current_state' => $target_state,
+					'state'         => json_encode( $state, JSON_THROW_ON_ERROR ),
+					'completed_at'  => $completed_at,
+					'failed_at'     => $failed_at,
+					'error_message' => $error,
+				)
+			);
+
+			if ( StateMachineStatus::Running === $status ) {
+				$this->enqueue_state_action( $machine_id, $definition, $target_state, $event_name, $event_payload, $state );
+			} elseif ( StateMachineStatus::WaitingEvent === $status ) {
+				$this->record_lifecycle_state_event( $machine_id, $target_state, 'machine_waiting', $event_name, $state, $event_payload );
+			} elseif ( StateMachineStatus::Completed === $status ) {
+				$this->record_lifecycle_state_event( $machine_id, $target_state, 'machine_completed', $event_name, $state, $event_payload );
+			} elseif ( StateMachineStatus::Failed === $status ) {
+				$this->record_lifecycle_state_event( $machine_id, $target_state, 'machine_failed', $event_name, $state, $event_payload );
+			} elseif ( StateMachineStatus::Cancelled === $status ) {
+				$this->record_lifecycle_state_event( $machine_id, $target_state, 'machine_cancelled', $event_name, $state, $event_payload );
+			}
+
+			$this->commit_action( $pdo, $job, commit: true === ( $context['owns_transaction'] ?? true ) );
+		} catch ( \Throwable $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->exec( 'ROLLBACK TO SAVEPOINT queuety_machine_transition' );
+			}
+			throw $e;
 		}
-
-		$this->update_machine_row(
-			$pdo,
-			$machine_id,
-			array(
-				'status'        => $status->value,
-				'current_state' => $target_state,
-				'state'         => json_encode( $state, JSON_THROW_ON_ERROR ),
-				'completed_at'  => $completed_at,
-				'failed_at'     => $failed_at,
-				'error_message' => $error,
-			)
-		);
-
-		if ( StateMachineStatus::Running === $status ) {
-			$this->enqueue_state_action( $machine_id, $definition, $target_state, $event_name, $event_payload, $state );
-		} elseif ( StateMachineStatus::WaitingEvent === $status ) {
-			$this->record_lifecycle_state_event( $machine_id, $target_state, 'machine_waiting', $event_name, $state, $event_payload );
-		} elseif ( StateMachineStatus::Completed === $status ) {
-			$this->record_lifecycle_state_event( $machine_id, $target_state, 'machine_completed', $event_name, $state, $event_payload );
-		} elseif ( StateMachineStatus::Failed === $status ) {
-			$this->record_lifecycle_state_event( $machine_id, $target_state, 'machine_failed', $event_name, $state, $event_payload );
-		} elseif ( StateMachineStatus::Cancelled === $status ) {
-			$this->record_lifecycle_state_event( $machine_id, $target_state, 'machine_cancelled', $event_name, $state, $event_payload );
-		}
-
-		$pdo->commit();
 	}
 
 	/**
@@ -1028,14 +1151,21 @@ class StateMachine {
 		$priority     = Priority::tryFrom( $priority_int ) ?? Priority::Low;
 		$attempts_raw = $definition['max_attempts'] ?? 3;
 		$max_attempts = max( 1, is_scalar( $attempts_raw ) ? (int) $attempts_raw : 3 );
-		$job_id       = $this->queue->dispatch(
+		$table = $this->conn->table( Config::table_state_machines() );
+		$stmt = $this->conn->pdo()->prepare( "SELECT revision FROM {$table} WHERE id = :id" );
+		$stmt->execute( array( 'id' => $machine_id ) );
+		$revision_row = $stmt->fetch();
+		$revision = is_array( $revision_row ) && is_scalar( $revision_row['revision'] ?? null ) ? (int) $revision_row['revision'] : 0;
+		$job_id = $this->queue->dispatch(
 			handler: '__queuety_state_machine_action',
 			payload: array(
 				'machine_id'    => $machine_id,
+				'machine_revision' => $revision,
 				'state_name'    => $state_name,
 				'event_name'    => $event_name,
 				'event_payload' => $event_payload,
 			),
+			unique: true,
 			queue: $queue_name,
 			priority: $priority,
 			max_attempts: $max_attempts,
@@ -1243,7 +1373,7 @@ class StateMachine {
 	 */
 	private function update_machine_row( \PDO $pdo, int $machine_id, array $changes ): void {
 		$table       = $this->conn->table( Config::table_state_machines() );
-		$assignments = array();
+		$assignments = array( 'revision = revision + 1' );
 		$params      = array( 'id' => $machine_id );
 
 		foreach ( $changes as $column => $value ) {

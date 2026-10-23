@@ -114,7 +114,7 @@ class WorkflowCancellationTest extends IntegrationTestCase {
 
 		// Advance to completion.
 		$job = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job->id, array() );
+		$this->workflow->advance_step( $wf_id, $job->id, array() , job: $job);
 
 		$this->expectException( \RuntimeException::class );
 		$this->expectExceptionMessage( 'already completed' );

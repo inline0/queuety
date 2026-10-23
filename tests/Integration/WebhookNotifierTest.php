@@ -27,12 +27,7 @@ class WebhookNotifierTest extends TestCase {
 		parent::setUp();
 
 		try {
-			$dsn = sprintf(
-				'mysql:host=%s;dbname=%s;charset=utf8mb4',
-				QUEUETY_TEST_DB_HOST,
-				QUEUETY_TEST_DB_NAME
-			);
-			new \PDO( $dsn, QUEUETY_TEST_DB_USER, QUEUETY_TEST_DB_PASS );
+			( new Connection( QUEUETY_TEST_DB_HOST, QUEUETY_TEST_DB_NAME, QUEUETY_TEST_DB_USER, QUEUETY_TEST_DB_PASS ) )->pdo();
 
 			$conn = new Connection(
 				host: QUEUETY_TEST_DB_HOST,

@@ -57,7 +57,7 @@ class JobDependencyTest extends IntegrationTestCase {
 		$this->assertNull( $claimed_again );
 
 		// Complete the parent.
-		$this->queue->complete( $parent_id );
+		$this->queue->complete( $parent_id, $claimed->claim_token );
 
 		// Now the child should be claimable.
 		$child_claimed = $this->queue->claim();
@@ -108,13 +108,13 @@ class JobDependencyTest extends IntegrationTestCase {
 		$this->assertNull( $this->queue->claim() );
 
 		// Complete A, then B should be claimable.
-		$this->queue->complete( $id_a );
+		$this->queue->complete( $id_a, $claimed->claim_token );
 		$claimed = $this->queue->claim();
 		$this->assertSame( $id_b, $claimed->id );
 		$this->assertNull( $this->queue->claim() );
 
 		// Complete B, then C should be claimable.
-		$this->queue->complete( $id_b );
+		$this->queue->complete( $id_b, $claimed->claim_token );
 		$claimed = $this->queue->claim();
 		$this->assertSame( $id_c, $claimed->id );
 	}

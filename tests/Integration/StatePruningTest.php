@@ -56,15 +56,15 @@ class StatePruningTest extends IntegrationTestCase {
 
 		// Step 0: output some data.
 		$job = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job->id, array( 'step0_data' => 'value0' ) );
+		$this->workflow->advance_step( $wf_id, $job->id, array( 'step0_data' => 'value0' ) , job: $job);
 
 		// Step 1: output some data.
 		$job = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job->id, array( 'step1_data' => 'value1' ) );
+		$this->workflow->advance_step( $wf_id, $job->id, array( 'step1_data' => 'value1' ) , job: $job);
 
 		// Step 2: output some data. Now step 0 data should be pruned (current=2, cutoff=0).
 		$job = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job->id, array( 'step2_data' => 'value2' ) );
+		$this->workflow->advance_step( $wf_id, $job->id, array( 'step2_data' => 'value2' ) , job: $job);
 
 		$state = $this->get_internal_state( $wf_id );
 
@@ -84,7 +84,7 @@ class StatePruningTest extends IntegrationTestCase {
 		for ( $i = 0; $i < 3; $i++ ) {
 			$job = $this->queue->claim();
 			$this->assertNotNull( $job, "Should be able to claim step {$i}." );
-			$this->workflow->advance_step( $wf_id, $job->id, array( "step{$i}_out" => "v{$i}" ) );
+			$this->workflow->advance_step( $wf_id, $job->id, array( "step{$i}_out" => "v{$i}" ) , job: $job);
 		}
 
 		$state = $this->get_internal_state( $wf_id );
@@ -107,7 +107,7 @@ class StatePruningTest extends IntegrationTestCase {
 		for ( $i = 0; $i < 4; $i++ ) {
 			$job = $this->queue->claim();
 			$this->assertNotNull( $job );
-			$this->workflow->advance_step( $wf_id, $job->id, array( "step{$i}_data" => "val{$i}" ) );
+			$this->workflow->advance_step( $wf_id, $job->id, array( "step{$i}_data" => "val{$i}" ) , job: $job);
 		}
 
 		$state = $this->get_internal_state( $wf_id );
@@ -130,7 +130,7 @@ class StatePruningTest extends IntegrationTestCase {
 		for ( $i = 0; $i < 4; $i++ ) {
 			$job = $this->queue->claim();
 			$this->assertNotNull( $job );
-			$this->workflow->advance_step( $wf_id, $job->id, array( "step{$i}_data" => "val{$i}" ) );
+			$this->workflow->advance_step( $wf_id, $job->id, array( "step{$i}_data" => "val{$i}" ) , job: $job);
 		}
 
 		$state = $this->get_internal_state( $wf_id );
@@ -150,7 +150,7 @@ class StatePruningTest extends IntegrationTestCase {
 		for ( $i = 0; $i < 3; $i++ ) {
 			$job = $this->queue->claim();
 			$this->assertNotNull( $job );
-			$this->workflow->advance_step( $wf_id, $job->id, array( "step{$i}_out" => "v{$i}" ) );
+			$this->workflow->advance_step( $wf_id, $job->id, array( "step{$i}_out" => "v{$i}" ) , job: $job);
 		}
 
 		$state = $this->get_internal_state( $wf_id );

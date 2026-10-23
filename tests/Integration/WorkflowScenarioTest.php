@@ -230,7 +230,7 @@ class WorkflowScenarioTest extends IntegrationTestCase {
 		$this->assertSame( $urgent_id, $first_job->workflow_id );
 
 		// Process all.
-		$this->queue->release( $first_job->id );
+		$this->queue->release( $first_job->id, $first_job->claim_token );
 		$this->worker->flush();
 
 		$low_status    = Queuety::workflow_status( $low_id );

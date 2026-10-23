@@ -114,3 +114,13 @@ See [CLI](/docs/cli) for the full command reference.
 Artifacts are included in workflow exports and copied into replayed workflows.
 
 That means artifact-backed agent runs stay inspectable even when you move them between environments or recreate a run from its exported execution history.
+
+## Publication from a running handler
+
+Artifact writes made during job execution are staged for its fenced completion
+transaction. The same `ArtifactStore` provides read-your-writes access during the
+handler. A failure or expired claim cannot publish those staged artifacts, and
+checkpoint/next-step failure rolls them back with workflow state. Writes outside
+an execution context remain explicit administrative writes. Artifact staging
+covers Queuety's database content and manifest; it does not make arbitrary file
+or remote-object writes transactional.

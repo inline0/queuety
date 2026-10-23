@@ -167,6 +167,14 @@ fi
 echo ""
 echo "--- Plugin Activation ---"
 
+# A ready HTTP installer is not an installed site. Initialize this test site
+# explicitly when wp-env has only provisioned its containers.
+if ! wp_cli core is-installed >/dev/null 2>&1; then
+    wp_cli core install --url="http://localhost:${WP_ENV_PORT}" --title=QueuetyTest \
+        --admin_user=admin --admin_password=password --admin_email=test@example.test --skip-email
+fi
+wp_cli plugin activate queuety
+
 # Test: plugin is active.
 ACTIVE_PLUGINS=$(wp_cli plugin list --status=active --field=name 2>/dev/null || true)
 assert_contains "$ACTIVE_PLUGINS" "queuety" "Plugin is active"
@@ -309,8 +317,8 @@ if [ -n "$WF_ID" ] && [ "$WF_ID" != "0" ]; then
     wp_cli eval "Queuety\\Queuety::worker()->flush();" > /dev/null 2>&1 || true
 
     WF_AFTER_PAUSED_FLUSH=$(wp_cli queuety workflow status "$WF_ID" 2>/dev/null || true)
-    assert_contains "$WF_AFTER_PAUSED_FLUSH" "paused" "workflow stays paused after current step finishes"
-    assert_contains "$WF_AFTER_PAUSED_FLUSH" "1/2" "workflow advanced while paused without enqueuing the next step"
+    assert_contains "$WF_AFTER_PAUSED_FLUSH" "paused" "workflow stays paused while work is excluded"
+    assert_contains "$WF_AFTER_PAUSED_FLUSH" "0/2" "workflow did not advance while paused"
 
     # Test: workflow resume.
     RESUME_OUT=$(wp_cli queuety workflow resume "$WF_ID" 2>/dev/null || true)

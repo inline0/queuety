@@ -27,6 +27,9 @@ class MysqliPdo extends \PDO {
 	 */
 	private bool $in_transaction = false;
 
+	/** Failure state shared by prepared statements. */
+	private readonly DatabaseFailureGuard $guard;
+
 	/**
 	 * Initialize the mysqli-backed PDO facade.
 	 *
@@ -34,17 +37,29 @@ class MysqliPdo extends \PDO {
 	 * @param string $dbname   Database name.
 	 * @param string $user     Database user.
 	 * @param string $password Database password.
+	 * @param array<string, int> $options Optional connection and read timeouts in seconds.
+	 * @param \Closure|null $discard Callback that poisons the owning Connection.
 	 */
-	public function __construct( string $host, string $dbname, string $user, string $password ) {
+	public function __construct( string $host, string $dbname, string $user, string $password, array $options = array(), ?\Closure $discard = null ) {
+		$this->guard = new DatabaseFailureGuard( $discard );
 		$parts  = self::parse_host( $host );
 		$mysqli = mysqli_init();
 		if ( false === $mysqli ) {
 			throw new \RuntimeException( 'Could not initialize mysqli.' );
 		}
 
-		mysqli_report( MYSQLI_REPORT_OFF );
+		if ( isset( $options['connect_timeout'] ) ) {
+			mysqli_options( $mysqli, MYSQLI_OPT_CONNECT_TIMEOUT, $options['connect_timeout'] );
+		}
+		if ( isset( $options['read_timeout'] ) ) {
+			if ( ! self::supports_read_timeout() ) {
+				throw new \RuntimeException( 'read_timeout requires mysqli with mysqlnd.' );
+			}
+			mysqli_options( $mysqli, MYSQLI_OPT_READ_TIMEOUT, $options['read_timeout'] );
+		}
 
-		$connected = @mysqli_real_connect(
+		try {
+			$connected = @mysqli_real_connect(
 			$mysqli,
 			$parts['host'],
 			$user,
@@ -52,7 +67,10 @@ class MysqliPdo extends \PDO {
 			$dbname,
 			$parts['port'],
 			$parts['socket']
-		);
+			);
+		} catch ( \mysqli_sql_exception $error ) {
+			$this->guard->handle( $error );
+		}
 
 		if ( false === $connected ) {
 			throw self::exception_from_mysqli( $mysqli, 'Could not connect to MySQL through mysqli.' );
@@ -74,6 +92,11 @@ class MysqliPdo extends \PDO {
 		return extension_loaded( 'mysqli' ) && function_exists( 'mysqli_init' );
 	}
 
+	/** Whether this mysqli build exposes mysqlnd socket read timeouts. */
+	public static function supports_read_timeout(): bool {
+		return self::available() && defined( 'MYSQLI_OPT_READ_TIMEOUT' ) && str_contains( mysqli_get_client_info(), 'mysqlnd' );
+	}
+
 	/**
 	 * Prepare a statement.
 	 *
@@ -83,8 +106,9 @@ class MysqliPdo extends \PDO {
 	 */
 	public function prepare( string $query, array $options = array() ): \PDOStatement|false {
 		unset( $options );
+		$this->guard->check();
 
-		return new MysqliPdoStatement( $this->mysqli, $query );
+		return new MysqliPdoStatement( $this->mysqli, $query, $this->guard );
 	}
 
 	/**
@@ -94,6 +118,8 @@ class MysqliPdo extends \PDO {
 	 * @return int|false
 	 */
 	public function exec( string $statement ): int|false {
+		$this->guard->check();
+		try {
 		$result = mysqli_query( $this->mysqli, $statement );
 		if ( false === $result ) {
 			throw self::exception_from_mysqli( $this->mysqli, 'MySQL statement failed.' );
@@ -104,6 +130,9 @@ class MysqliPdo extends \PDO {
 		}
 
 		return max( 0, (int) mysqli_affected_rows( $this->mysqli ) );
+		} catch ( \Throwable $error ) {
+			$this->guard->handle( $error, 1 === preg_match( '/^\s*COMMIT\b/i', $statement ) );
+		}
 	}
 
 	/**
@@ -117,7 +146,8 @@ class MysqliPdo extends \PDO {
 	public function query( string $query, ?int $fetchMode = null, mixed ...$fetchModeArgs ): \PDOStatement|false {
 		unset( $fetchMode, $fetchModeArgs );
 
-		$statement = new MysqliPdoStatement( $this->mysqli, $query );
+		$this->guard->check();
+		$statement = new MysqliPdoStatement( $this->mysqli, $query, $this->guard );
 		$statement->execute();
 
 		return $statement;
@@ -131,6 +161,7 @@ class MysqliPdo extends \PDO {
 	 */
 	public function lastInsertId( ?string $name = null ): string|false {
 		unset( $name );
+		$this->guard->check();
 
 		return (string) mysqli_insert_id( $this->mysqli );
 	}
@@ -182,7 +213,12 @@ class MysqliPdo extends \PDO {
 	 * @return bool
 	 */
 	public function inTransaction(): bool {
-		return $this->in_transaction;
+		return ! $this->guard->failed() && $this->in_transaction;
+	}
+
+	/** Prevent use of handles retained after their owner discards the connection. */
+	public function discard(): void {
+		$this->guard->discard();
 	}
 
 	/**

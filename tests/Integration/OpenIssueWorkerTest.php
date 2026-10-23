@@ -75,7 +75,7 @@ class OpenIssueWorkerTest extends IntegrationTestCase {
 	public function test_once_recovers_stale_jobs(): void {
 		$id = Queuety::queue()->dispatch( OpenIssueSuccessHandler::class, max_attempts: 3 );
 		$this->assertNotNull( Queuety::queue()->claim() );
-		$this->raw_update( Config::table_jobs(), array( 'reserved_at' => '2000-01-01 00:00:00' ), array( 'id' => $id ) );
+		$this->raw_update( Config::table_jobs(), array( 'lease_expires_at' => '2000-01-01 00:00:00' ), array( 'id' => $id ) );
 		Queuety::run_worker( 'default', true );
 		$this->assertSame( JobStatus::Pending, Queuety::queue()->find( $id )->status );
 	}

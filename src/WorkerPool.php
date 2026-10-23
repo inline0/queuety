@@ -8,6 +8,7 @@
 namespace Queuety;
 
 use Queuety\Cache\CacheFactory;
+use Queuety\Cache\MemoryCache;
 
 /**
  * Forks multiple worker processes and monitors them.
@@ -63,15 +64,16 @@ class WorkerPool {
 	/**
 	 * Constructor.
 	 *
-	 * @param int         $worker_count Minimum worker count, or the fixed count when adaptive scaling is disabled.
-	 * @param string      $host         Database host.
-	 * @param string      $dbname       Database name.
-	 * @param string      $user         Database user.
-	 * @param string      $password     Database password.
-	 * @param string      $prefix       WordPress table prefix.
-	 * @param int|null    $max_worker_count Optional adaptive upper bound.
-	 * @param string|null $table_prefix Queuety table prefix after the WordPress prefix.
-	 * @param string|null $driver Database transport override.
+	 * @param int                $worker_count Minimum worker count, or the fixed count when adaptive scaling is disabled.
+	 * @param string             $host         Database host.
+	 * @param string             $dbname       Database name.
+	 * @param string             $user         Database user.
+	 * @param string             $password     Database password.
+	 * @param string             $prefix       WordPress table prefix.
+	 * @param int|null           $max_worker_count Optional adaptive upper bound.
+	 * @param string|null        $table_prefix Queuety table prefix after the WordPress prefix.
+	 * @param string|null        $driver Database transport override.
+	 * @param array<string, int> $connection_options Database timeout controls copied to every fresh process.
 	 *
 	 * @throws \RuntimeException If pcntl is not available or worker_count is invalid.
 	 */
@@ -85,6 +87,7 @@ class WorkerPool {
 		?int $max_worker_count = null,
 		private readonly ?string $table_prefix = null,
 		private readonly ?string $driver = null,
+		private readonly array $connection_options = array(),
 	) {
 		if ( ! function_exists( 'pcntl_fork' ) ) {
 			throw new \RuntimeException( 'pcntl extension is required for --workers=N.' );
@@ -201,6 +204,10 @@ class WorkerPool {
 			} catch ( \RuntimeException ) {
 				$cache = CacheFactory::create();
 			}
+		}
+		if ( $cache instanceof MemoryCache ) {
+			$cache = new MemoryCache();
+			Queuety::set_cache( $cache );
 		}
 
 		$queue_op          = new Queue( $conn, $cache );
@@ -511,6 +518,6 @@ class WorkerPool {
 	 * @return Connection
 	 */
 	private function connection(): Connection {
-		return new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix, $this->table_prefix, $this->driver );
+		return new Connection( $this->host, $this->dbname, $this->user, $this->password, $this->prefix, $this->table_prefix, $this->driver, $this->connection_options );
 	}
 }

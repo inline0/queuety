@@ -171,10 +171,12 @@ class Scheduler {
 	 *
 	 * Uses FOR UPDATE SKIP LOCKED to prevent double-enqueue from concurrent workers.
 	 *
+	 * @param int $limit Maximum due schedules considered in this transaction.
 	 * @return int Number of jobs enqueued.
 	 * @throws \Throwable On database errors (transaction is rolled back).
 	 */
-	public function tick(): int {
+	public function tick( int $limit = 100 ): int {
+		$limit = max( 1, min( 1000, $limit ) );
 		$table = $this->conn->table( Config::table_schedules() );
 		$pdo   = $this->conn->pdo();
 		$count = 0;
@@ -184,6 +186,7 @@ class Scheduler {
 			$stmt = $pdo->prepare(
 				"SELECT * FROM {$table}
 				WHERE enabled = 1 AND next_run <= NOW()
+				ORDER BY id LIMIT {$limit}
 				FOR UPDATE SKIP LOCKED"
 			);
 			$stmt->execute();
@@ -279,7 +282,9 @@ class Scheduler {
 
 			$pdo->commit();
 		} catch ( \Throwable $e ) {
-			$pdo->rollBack();
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
 			throw $e;
 		}
 

@@ -97,7 +97,7 @@ queuety/
 │   ├── Cache/
 │   │   ├── MemoryCache.php  # In-memory cache (per-request)
 │   │   ├── ApcuCache.php    # APCu-backed persistent cache
-│   │   └── CacheFactory.php # Auto-detects best available backend
+│   │   └── CacheFactory.php # Defaults to isolated MemoryCache
 │   ├── Middleware/
 │   │   ├── RateLimited.php        # Rate limit middleware
 │   │   ├── Timeout.php            # Timeout middleware (pcntl)
@@ -182,13 +182,13 @@ All constants are optional. Define them in `wp-config.php` or `queuety-config.ph
 2. **Run tests after changes**: `composer test` for PHPUnit.
 3. **Standalone workers initialize explicitly**: load the Composer autoloader, create a `Connection`, then call `Queuety::init()`. `ConfigParser` can read credentials from wp-config.php.
 4. **PHP 8.2+**: use enums, readonly classes, constructor promotion, match expressions, named arguments.
-5. **Multi-table schema**: jobs, workflows, logs, schedules, signals, chunks, queue_states, webhooks. All in WordPress's MySQL database.
+5. **Multi-table schema**: jobs, workflows, logs, schedules, signals, chunks, queue_states, webhooks. Use explicit connection table namespaces; WordPress and standalone installations share the same engine.
 6. **Logging is in the database**: no log files. All log entries go to `queuety_logs` table.
 7. **Workflows store step definitions in state**: the `_steps` key in the workflow's state JSON holds the ordered list of handler class names.
 8. **Rate limits are per-handler**: tracked in-memory with periodic DB refresh from logs table.
 9. **Worker concurrency uses pcntl_fork()**: each child creates its own DB connection. Parent monitors and restarts crashed children.
-10. **Cache layer is pluggable**: `CacheFactory` auto-detects APCu or falls back to `MemoryCache`. Custom backends implement `Contracts\Cache`.
-11. **Streaming steps yield chunks**: each yielded value is persisted to the `queuety_chunks` table immediately. On retry, `$existing_chunks` provides previously saved data so the stream can resume.
+10. **Cache layer is pluggable**: `CacheFactory` defaults to `MemoryCache`; shared APCu requires an explicit installation namespace. Custom backends implement `Contracts\Cache`.
+11. **Streaming steps yield chunks**: each yielded value is persisted to the `queuety_chunks` table immediately. On retry, `$existing_chunks` provides a fenced copy of the prior attempt; the handler must verify whether its source supports resumption.
 12. **Middleware wraps job execution**: middleware classes implement `Contracts\Middleware` and are declared in a `middleware()` method on the job class. The pipeline is onion-style (outer to inner).
 13. **Workflow tracing records step transitions**: every step start, completion, and failure is recorded with input, output, before/after state, context, artifacts, chunks, and errors for debugger UIs and time-travel debugging.
 14. **Keep `CliCommandMap` and `CliCommandAdapters` aligned with the real CLI surface**: new or changed commands need a stable operation ID, a public API target, and resolver coverage.

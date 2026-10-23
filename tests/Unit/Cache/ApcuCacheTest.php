@@ -21,7 +21,7 @@ class ApcuCacheTest extends TestCase {
 			$this->markTestSkipped( 'APCu extension is not available.' );
 		}
 
-		$this->cache = new ApcuCache();
+		$this->cache = new ApcuCache( 'queuety-test:' . getmypid() );
 		$this->cache->flush();
 	}
 
@@ -134,6 +134,23 @@ class ApcuCacheTest extends TestCase {
 
 		$this->assertNull( $this->cache->get( 'key1' ) );
 		$this->assertNull( $this->cache->get( 'key2' ) );
+	}
+
+	public function test_flush_preserves_other_installations_and_application_keys(): void {
+		$other = new ApcuCache( 'queuety-other-test:' . getmypid() );
+		$key = 'unrelated-application:' . getmypid();
+		try {
+			$this->cache->set( 'same-key', 'installation-a' );
+			$other->set( 'same-key', 'installation-b' );
+			apcu_store( $key, 'unrelated' );
+			$this->cache->flush();
+			$this->assertNull( $this->cache->get( 'same-key' ) );
+			$this->assertSame( 'installation-b', $other->get( 'same-key' ) );
+			$this->assertSame( 'unrelated', apcu_fetch( $key ) );
+		} finally {
+			$other->flush();
+			apcu_delete( $key );
+		}
 	}
 
 	// -- constructor ---------------------------------------------------------

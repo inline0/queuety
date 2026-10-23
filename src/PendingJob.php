@@ -66,6 +66,13 @@ class PendingJob {
 	private bool $unique = false;
 
 	/**
+	 * Durable dispatch identity supplied by the caller.
+	 *
+	 * @var string|null
+	 */
+	private ?string $dispatch_key = null;
+
+	/**
 	 * ID of a job this job depends on (must complete first).
 	 *
 	 * @var int|null
@@ -232,6 +239,17 @@ class PendingJob {
 	}
 
 	/**
+	 * Deduplicate identical dispatch input even after its job finishes.
+	 *
+	 * @param string|null $key Durable idempotency key, or null to disable it.
+	 * @return self
+	 */
+	public function with_dispatch_key( ?string $key ): self {
+		$this->dispatch_key = $key;
+		return $this;
+	}
+
+	/**
 	 * Set a job dependency. This job will not be claimed until the
 	 * specified job has completed.
 	 *
@@ -303,6 +321,7 @@ class PendingJob {
 	 * @throws \RuntimeException If dispatch did not produce a job ID.
 	 */
 	public function id(): int {
+		ExecutionContext::assert_active();
 		if ( ! $this->dispatched ) {
 			$this->do_dispatch();
 		}
@@ -323,6 +342,8 @@ class PendingJob {
 			$payload[ StepDispatchOptions::RUNTIME_PAYLOAD_KEY ] = $runtime;
 		}
 
+		// A failed or ambiguous explicit attempt must not retry from the destructor.
+		$this->dispatched = true;
 		$this->job_id     = $this->queue_ops->dispatch(
 			handler: $this->handler,
 			payload: $payload,
@@ -336,8 +357,8 @@ class PendingJob {
 			concurrency_group: $this->concurrency_group,
 			concurrency_limit: $this->concurrency_limit,
 			cost_units: $this->cost_units,
+			dispatch_key: $this->dispatch_key,
 		);
-		$this->dispatched = true;
 
 		if ( null !== $this->rate_limit_config ) {
 			try {

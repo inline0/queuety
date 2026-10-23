@@ -10,165 +10,110 @@ meta_description: "Keep Neuron chat memory across human review rounds with a Que
 
 # Neuron Memory + Review State Machine
 
-This pattern is useful when an agent should keep conversational context across repeated human review rounds, but the overall lifecycle should still be orchestrated by Queuety.
+Keep conversation context as versioned JSON alongside the Queuety run. Every review round restores those messages and sends one bounded provider request. No Neuron `Agent` workflow or SQL history subsystem is needed. See the [integration contract](/docs/examples) and [provider factory](/docs/examples/neuron-planner-executor).
 
-Queuety owns the review state machine, while Neuron owns the agent memory for the drafting thread.
+## A JSON conversation checkpoint
 
-## Why Neuron memory helps here
-
-If a reviewer rejects a draft and asks for revisions, the next agent call should not have to reconstruct the whole context from scratch.
-
-Neuron's `SQLChatHistory` is a good fit for that because the agent can keep working inside the same conversation thread while Queuety routes reviewer decisions and revision rounds.
-
-## The Neuron agent with SQL-backed history
-
+<!-- executable: conversation-turn -->
 ```php
 namespace App\Neuron;
 
-use NeuronAI\Agent\Agent;
-use NeuronAI\Chat\History\ChatHistoryInterface;
-use NeuronAI\Chat\History\SQLChatHistory;
-use NeuronAI\Providers\AIProviderInterface;
-use NeuronAI\Providers\Anthropic\Anthropic;
-use NeuronAI\SystemPrompt;
-
-final class EditorAgent extends Agent
-{
-    public function __construct(
-        private readonly string $threadId,
-        private readonly \PDO $pdo,
-    ) {}
-
-    protected function provider(): AIProviderInterface
-    {
-        return new Anthropic(
-            key: $_ENV['ANTHROPIC_API_KEY'],
-            model: $_ENV['ANTHROPIC_MODEL'],
-        );
-    }
-
-    protected function chatHistory(): ChatHistoryInterface
-    {
-        return new SQLChatHistory(
-            thread_id: $this->threadId,
-            pdo: $this->pdo,
-            table: 'neuron_chat_history',
-            contextWindow: 50000,
-        );
-    }
-
-    public function instructions(): string
-    {
-        return (string) new SystemPrompt(
-            background: [
-                'You are an editorial agent for long-form product briefs.',
-                'Apply reviewer notes without losing the original intent.',
-            ],
-        );
-    }
-}
-```
-
-## Draft once, revise with the same memory thread
-
-```php
-namespace App\StateMachines\Actions;
-
-use App\Neuron\EditorAgent;
+use NeuronAI\Chat\Messages\MessageDeserializer;
+use NeuronAI\Chat\Messages\ToolCallMessage;
 use NeuronAI\Chat\Messages\UserMessage;
-use Queuety\Contracts\StateAction;
+use NeuronAI\Providers\AIProviderInterface;
+use Queuety\ExecutionContext;
 
-final class DraftBriefAction implements StateAction
+final class ConversationTurn
 {
-    public function handle(array $state, ?string $event = null, array $event_payload = [], array $payload = []): array|string
-    {
-        // Queuety creates actions with `new DraftBriefAction()`, so build dependencies here.
-        $pdo = new \PDO($_ENV['NEURON_DB_DSN'], $_ENV['NEURON_DB_USER'], $_ENV['NEURON_DB_PASSWORD']);
-
-        $threadId = $state['neuron_thread_id'] ?? sprintf(
-            'brief:%d:editor',
-            $state['brief_id'],
-        );
-
-        $prompt = "Write the first draft for brief {$state['brief_id']}.";
-
-        if ('reject' === $event) {
-            $prompt = sprintf(
-                'Revise the draft using these review notes: %s',
-                $event_payload['reason'] ?? 'Tighten the draft and address reviewer concerns.',
-            );
+    public static function run(
+        AIProviderInterface $provider,
+        array $checkpoint,
+        string $prompt,
+    ): array {
+        if (($checkpoint['version'] ?? null) !== 1
+            || !is_string($checkpoint['thread_id'] ?? null)
+            || $checkpoint['thread_id'] === '') {
+            throw new \InvalidArgumentException('Unsupported conversation checkpoint.');
         }
-
-        $agent = new EditorAgent($threadId, $pdo);
-        $message = $agent->chat(
-            new UserMessage($prompt)
-        )->getMessage();
-
+        $decoder = new MessageDeserializer();
+        $messages = array_map(
+            $decoder->deserialize(...),
+            $checkpoint['messages'],
+        );
+        $messages[] = new UserMessage($prompt);
+        ExecutionContext::assert_active();
+        $message = $provider->chat(...$messages)->message();
+        ExecutionContext::assert_active();
+        $messages[] = $message;
         return [
-            'neuron_thread_id' => $threadId,
-            'draft_markdown' => $message->getContent(),
-            'review_round' => (int) ($state['review_round'] ?? 0) + 1,
-            '_event' => 'draft_ready',
+            'version' => 1,
+            'thread_id' => $checkpoint['thread_id'],
+            'messages' => json_decode(
+                json_encode($messages, JSON_THROW_ON_ERROR),
+                true,
+                flags: JSON_THROW_ON_ERROR,
+            ),
+            'status' => $message instanceof ToolCallMessage
+                ? 'waiting_for_tool'
+                : 'completed',
+            'reply' => $message->getContent(),
         ];
     }
 }
 ```
 
-## The Queuety state machine
+The `thread_id` is your application's stable conversation identity. It is independent of a queue claim token, which changes whenever a worker claims the action. Message serialization retains provider tool-call IDs so an authorized tool result can be attached to its original call in a later action.
+
+## Draft once per workflow action
 
 ```php
-use Queuety\Enums\StateMachineStatus;
-use Queuety\Queuety;
+namespace App\Workflow\Steps;
 
-$machine_id = Queuety::machine('brief_review_session')
-    ->version('brief-review-session.v1')
-    ->state('drafting')
-    ->action(DraftBriefAction::class)
-    ->on('draft_ready', 'awaiting_review')
-    ->state('awaiting_review')
-    ->on('approve', 'completed')
-    ->on('reject', 'drafting')
-    ->state('completed', StateMachineStatus::Completed)
-    ->dispatch([
-        'brief_id' => 42,
-    ]);
+use App\Ai\Credentials;
+use App\Neuron\ConversationTurn;
+use App\Neuron\ProviderFactory;
+use Queuety\Step;
 
-// Later, once the draft action has finished and the machine waits in `awaiting_review`:
-Queuety::machine_event(
-    $machine_id,
-    'reject',
-    [ 'reason' => 'Tighten the introduction and add pricing context.' ]
-);
+final class DraftBriefStep implements Step
+{
+    public function handle(array $state): array
+    {
+        $credential = Credentials::forRun($state['credential_reference']);
+        $provider = ProviderFactory::make(
+            $credential->provider,
+            $credential->key,
+            $credential->model,
+        );
+        $checkpoint = ConversationTurn::run(
+            $provider,
+            $state['checkpoint'],
+            $state['prompt'],
+        );
+        if ($checkpoint['status'] !== 'completed') {
+            throw new \RuntimeException('This drafting workflow expects text only.');
+        }
+        return [
+            'checkpoint' => $checkpoint,
+            'draft_markdown' => $checkpoint['reply'],
+        ];
+    }
 
-Queuety::machine_event(
-    $machine_id,
-    'approve',
-    [ 'reviewer' => 'editor@example.com' ]
-);
+    public function config(): array
+    {
+        return ['max_attempts' => 1];
+    }
+}
 ```
 
-The first pass enters `drafting`, runs the queued action, and transitions into `awaiting_review`.
+For the first round, initialize `checkpoint` to `['version' => 1, 'thread_id' => 'brief:42:editor', 'messages' => []]`. Later rounds pass the previous committed checkpoint and a prompt containing the reviewer notes. Returning that checkpoint lets Queuety commit it together with the workflow transition. For large conversations, stage the same JSON in an application checkpoint table through `ExecutionContext::on_completion()` using the supplied connection; keep a reference in workflow state.
 
-If the reviewer rejects the draft, the machine moves back into `drafting`. Because the `reject` event payload is passed into `DraftBriefAction`, the next draft can use the reviewer notes without losing the original Neuron thread history.
+## Review lifecycle
 
-## Why this is cleaner than a workflow repeat
+Use the short dispatch action and completion handoff from [Session State Machine](/docs/examples/neuron-session-state-machine). Its inference workflow can run `DraftBriefStep` and then the result notification step. The state machine waits in `awaiting_review`, accepts `approve` to complete, or `reject` to dispatch another drafting workflow with the last checkpoint and new notes.
 
-This problem is lifecycle-oriented. A draft waits for human review, a reviewer can approve or reject it, rejection returns the session to drafting, and approval finishes the session. That maps more directly to a state machine than to a linear workflow with a back-edge.
+An inference timeout or lost connection leaves an ambiguous provider outcome. Preserve the previous committed checkpoint and ask your retry policy whether a new paid attempt is allowed. Partial or uncommitted output must never replace the last completed draft.
 
-Workflow state is still excellent for orchestration facts such as review round count, artifact IDs, workflow IDs, and routing decisions. Neuron memory is better for conversational context like prior prompts, iterative revisions, and model responses that should remain part of the drafting thread.
+Before appending a tool result, validate the tool name, arguments, authorization, and stable invocation identity. Queuety schedules that work separately. Do not call Neuron's tool executor from the inference step or store PHP callables in the checkpoint.
 
-Using both gives each system the job it is best at.
-
-## When to keep this as a workflow instead
-
-Prefer a workflow when the review path is tightly bounded and execution-oriented, for example:
-
-Generate one draft, wait for one approval, and publish.
-
-Prefer a state machine when the session may revisit the same states several times and outside events drive the lifecycle.
-
-## Related docs
-
-- [State Machines](/docs/state-machines)
-- [Workflow Signals](/docs/workflows/signals)
-- [Agent Orchestration](/docs/workflows/agent-orchestration)
+See [workflow signals](/docs/workflows/signals) and [state machines](/docs/state-machines).

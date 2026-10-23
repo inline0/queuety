@@ -30,15 +30,24 @@ class Connection {
 	private ?PDO $pdo = null;
 
 	/**
+	 * Whether a transport failure requires explicit durable-state reconciliation.
+	 *
+	 * @var bool
+	 */
+	private bool $discarded = false;
+
+	/**
 	 * Constructor.
 	 *
-	 * @param string      $host     Database host.
-	 * @param string      $dbname   Database name.
-	 * @param string      $user     Database user.
-	 * @param string      $password Database password.
-	 * @param string      $prefix       WordPress table prefix.
-	 * @param string|null $table_prefix Queuety table prefix after the WordPress prefix. Defaults to Config::table_prefix().
-	 * @param string|null $driver       Optional driver override.
+	 * @param string             $host     Database host.
+	 * @param string             $dbname   Database name.
+	 * @param string             $user     Database user.
+	 * @param string             $password Database password.
+	 * @param string             $prefix       WordPress table prefix.
+	 * @param string|null        $table_prefix Queuety table prefix after the WordPress prefix. Defaults to Config::table_prefix().
+	 * @param string|null        $driver       Optional driver override.
+	 * @param array<string, int> $options Optional connect_timeout, read_timeout, lock_wait_timeout and metadata_lock_timeout in seconds.
+	 * @throws \InvalidArgumentException When a timeout option is invalid.
 	 */
 	public function __construct(
 		private readonly string $host,
@@ -48,7 +57,14 @@ class Connection {
 		private readonly string $prefix = 'wp_',
 		private readonly ?string $table_prefix = null,
 		private readonly ?string $driver = null,
-	) {}
+		private readonly array $options = array(),
+	) {
+		foreach ( $this->options as $name => $value ) {
+			if ( ! in_array( $name, array( 'connect_timeout', 'read_timeout', 'lock_wait_timeout', 'metadata_lock_timeout' ), true ) || ! is_int( $value ) || $value < 1 ) {
+				throw new \InvalidArgumentException( 'Connection timeouts must use supported option names and positive integer seconds.' );
+			}
+		}
+	}
 
 	/**
 	 * Get the PDO instance, creating it on first access.
@@ -57,6 +73,9 @@ class Connection {
 	 * @throws \RuntimeException When the server version is unsupported or cannot be identified.
 	 */
 	public function pdo(): PDO {
+		if ( $this->discarded ) {
+			throw new \RuntimeException( 'The Queuety connection was discarded after a database failure. Reconcile durable state using a new Connection before replaying writes.' );
+		}
 		if ( null === $this->pdo ) {
 			$pdo = $this->create_pdo();
 			$statement = $pdo->query( 'SELECT VERSION()' );
@@ -65,6 +84,13 @@ class Connection {
 				throw new \RuntimeException( 'Queuety could not determine the database server version.' );
 			}
 			self::assert_server_version( $version );
+			$pdo->exec( "SET SESSION time_zone = '+00:00'" );
+			if ( isset( $this->options['lock_wait_timeout'] ) ) {
+				$pdo->exec( 'SET SESSION innodb_lock_wait_timeout = ' . $this->options['lock_wait_timeout'] );
+			}
+			if ( isset( $this->options['metadata_lock_timeout'] ) ) {
+				$pdo->exec( 'SET SESSION lock_wait_timeout = ' . $this->options['metadata_lock_timeout'] );
+			}
 			$this->pdo = $pdo;
 		}
 		return $this->pdo;
@@ -97,7 +123,7 @@ class Connection {
 	/**
 	 * Connection settings for fresh worker processes.
 	 *
-	 * @return array{host: string, dbname: string, user: string, password: string, prefix: string, table_prefix: string|null, driver: string}
+	 * @return array{host: string, dbname: string, user: string, password: string, prefix: string, table_prefix: string|null, driver: string, options: array<string, int>}
 	 */
 	public function worker_options(): array {
 		return array(
@@ -108,7 +134,51 @@ class Connection {
 			'prefix'       => $this->prefix,
 			'table_prefix' => $this->table_prefix,
 			'driver'       => $this->driver(),
+			'options'      => $this->options,
 		);
+	}
+
+	/**
+	 * Stable installation identity for cache and migration isolation.
+	 *
+	 * @return string
+	 */
+	public function namespace(): string {
+		return hash( 'sha256', implode( "\0", array( $this->host, $this->dbname, $this->table( Config::table_schema() ), $this->table( Config::table_jobs() ) ) ) );
+	}
+
+	/**
+	 * Report driver controls without promising a hard wall-clock deadline.
+	 *
+	 * Connect controls limit socket connection attempts, not handshake reads.
+	 * PDO MySQL cannot set a supported per-connection read timeout here.
+	 * Session lock limits affect their respective lock waits on either driver.
+	 *
+	 * @return array{connect_timeout: bool, read_timeout: bool, lock_wait_timeout: bool, metadata_lock_timeout: bool, hard_deadline: bool}
+	 */
+	public function timeout_capabilities(): array {
+		return array(
+			'connect_timeout' => true,
+			'read_timeout' => 'mysqli' === $this->driver() && MysqliPdo::supports_read_timeout(),
+			'lock_wait_timeout' => true,
+			'metadata_lock_timeout' => true,
+			'hard_deadline' => false,
+		);
+	}
+
+	/** Discard an uncertain transport without silently reconnecting or retrying. */
+	public function discard(): void {
+		$this->discarded = true;
+		$pdo = $this->pdo;
+		$this->pdo = null;
+		if ( $pdo instanceof MysqliPdo || $pdo instanceof MysqlPdo ) {
+			$pdo->discard();
+		}
+	}
+
+	/** Whether this connection requires a new instance and durable-state reconciliation. */
+	public function is_discarded(): bool {
+		return $this->discarded;
 	}
 
 	/**
@@ -136,23 +206,46 @@ class Connection {
 	 * Build the PDO-compatible transport.
 	 *
 	 * @return PDO
+	 * @throws \InvalidArgumentException When PDO is asked to enforce a read timeout.
 	 */
 	private function create_pdo(): PDO {
 		$driver = $this->resolve_driver();
 		if ( 'mysqli' === $driver ) {
-			return new MysqliPdo( $this->host, $this->dbname, $this->user, $this->password );
+			return new MysqliPdo( $this->host, $this->dbname, $this->user, $this->password, $this->options, $this->failure_callback() );
 		}
-
-		return new PDO(
+		if ( isset( $this->options['read_timeout'] ) ) {
+			throw new \InvalidArgumentException( 'PDO MySQL cannot guarantee a read timeout. Select mysqli/mysqlnd explicitly for read_timeout.' );
+		}
+		$options = array(
+			PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+			PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+			PDO::ATTR_EMULATE_PREPARES   => false,
+		);
+		if ( isset( $this->options['connect_timeout'] ) ) {
+			$options[ PDO::ATTR_TIMEOUT ] = $this->options['connect_timeout'];
+		}
+		return new MysqlPdo(
 			$this->build_dsn(),
 			$this->user,
 			$this->password,
-			array(
-				PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-				PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-				PDO::ATTR_EMULATE_PREPARES   => false,
-			)
+			$options,
+			$this->failure_callback(),
 		);
+	}
+
+	/**
+	 * Notify the owner without retaining the connection through a reference cycle.
+	 *
+	 * @return \Closure
+	 */
+	private function failure_callback(): \Closure {
+		$owner = \WeakReference::create( $this );
+		return static function () use ( $owner ): void {
+			$conn = $owner->get();
+			if ( $conn instanceof self ) {
+				$conn->discard();
+			}
+		};
 	}
 
 	/**

@@ -10,177 +10,129 @@ meta_description: "Govern a long-lived Neuron agent session with a Queuety state
 
 # Neuron Session State Machine
 
-This pattern is useful when the thing you are building behaves more like a session than a one-off run.
+Keep session lifecycle changes short. A state action dispatches a Queuety workflow; that workflow performs one bounded Neuron provider request outside the state-machine transaction. A completion callback then delivers its result atomically with the workflow step's completion.
 
-Queuety state machines own the session lifecycle, Queuety workflows do the background work that benefits from retries, for-each completion modes, and aggregation, and Neuron handles the actual agent calls and conversation memory.
+The inference step below is `DraftBriefStep` from [Memory + Review](/docs/examples/neuron-memory-review), using the [bounded provider factory](/docs/examples/neuron-planner-executor). No state action calls a provider, waits for HTTP, or runs a Neuron `Agent` loop.
 
-That split is a good fit for support copilots, internal research assistants, editorial agents that may pause for human review, and chat threads that move between planning, waiting, and response phases.
-
-## Lifecycle shape
-
-In this example, one support session moves through `awaiting_user`, `planning`, `waiting_on_research`, and `responding`. The machine keeps that lifecycle explicit, while a background workflow gathers research and signals the session when it is done.
-
-## The state machine
+## Session lifecycle
 
 ```php
+use App\StateMachines\CurrentTurn;
+use App\StateMachines\StartTurnAction;
 use Queuety\Queuety;
 
-$session_id = Queuety::machine( 'support_session' )
-    ->version( 'support-session.v1' )
-    ->state( 'awaiting_user' )
-    ->on( 'user_message', 'planning' )
-    ->state( 'planning' )
-    ->action( DispatchResearchWorkflowAction::class )
-    ->on( 'research_dispatched', 'waiting_on_research' )
-    ->state( 'waiting_on_research' )
-    ->on( 'research_completed', 'responding' )
-    ->state( 'responding' )
-    ->action( RespondWithNeuronAction::class )
-    ->on( 'response_ready', 'awaiting_user' )
-    ->dispatch( [
-        'thread_id' => 'support:customer-42',
-    ] );
+$machine_id = Queuety::machine('support_session')
+    ->version('support-session.v2')
+    ->state('awaiting_user')
+    ->on('user_message', 'dispatching')
+    ->state('dispatching')
+    ->action(StartTurnAction::class)
+    ->on('turn_dispatched', 'waiting_on_response')
+    ->state('waiting_on_response')
+    ->on('response_ready', 'awaiting_user', CurrentTurn::class)
+    ->dispatch([
+        'credential_reference' => 'support-service',
+        'checkpoint' => [
+            'version' => 1,
+            'thread_id' => 'support:customer-42',
+            'messages' => [],
+        ],
+    ]);
+
+Queuety::machine_event($machine_id, 'user_message', [
+    'machine_id' => $machine_id,
+    'request_id' => 'turn-001',
+    'prompt' => 'Compare our pricing with the research supplied in this thread.',
+]);
 ```
 
-When a user sends a message:
+The application authenticates incoming events and supplies a stable request ID for each user intent. Retries of that intent reuse the same ID. Another user turn gets a new ID.
+
+## Dispatch a workflow without external I/O
 
 ```php
-Queuety::machine_event(
-    $session_id,
-    'user_message',
-    [
-        'session_machine_id' => $session_id,
-        'message' => 'Can you compare our pricing to the main competitors?',
-    ]
-);
-```
+namespace App\StateMachines;
 
-The machine transitions into `planning`, queues its action, and starts the research workflow.
-
-## Planning action: dispatch the workflow
-
-```php
-namespace App\StateMachines\Actions;
-
+use App\Workflow\Steps\DraftBriefStep;
+use App\Workflow\Steps\NotifySessionStep;
 use Queuety\Contracts\StateAction;
-use Queuety\Enums\WaitMode;
+use Queuety\Contracts\StateGuard;
 use Queuety\Queuety;
 
-final class DispatchResearchWorkflowAction implements StateAction
+final class StartTurnAction implements StateAction
 {
-    public function handle( array $state, ?string $event = null, array $event_payload = [], array $payload = [] ): array|string
+    public function handle(array $state, ?string $event = null, array $event_payload = [], array $payload = []): array|string
     {
-        $message = trim( (string) ( $event_payload['message'] ?? '' ) );
-
-        $agent_workflow = Queuety::workflow( 'support_research_agent' )
-            ->then( ResearchTopicStep::class );
-
-        $research_workflow = Queuety::workflow( 'support_research_packet' )
-            ->then( PlanResearchTasksStep::class )
-            ->start_agents( 'agent_tasks', $agent_workflow )
-            ->wait_for_agents( mode: WaitMode::All, result_key: 'agent_results' )
-            ->then( SynthesizeResearchPacketStep::class )
-            ->then( NotifySessionResearchReadyStep::class );
-
-        $workflow_id = $research_workflow->dispatch( [
-            'machine_id'      => $state['session_machine_id'],
-            'thread_id'       => $state['thread_id'],
-            'customer_prompt' => $message,
-        ] );
-
+        $request_id = $event_payload['request_id'];
+        $workflow_id = Queuety::workflow('session_turn')
+            ->idempotency_key('session:' . $state['machine_id'] . ':' . $request_id)
+            ->then(DraftBriefStep::class)
+            ->then(NotifySessionStep::class)
+            ->dispatch([
+                'machine_id' => $state['machine_id'],
+                'request_id' => $request_id,
+                'credential_reference' => $state['credential_reference'],
+                'checkpoint' => $state['checkpoint'],
+                'prompt' => $event_payload['prompt'],
+            ]);
         return [
-            'latest_user_message'  => $message,
-            'research_workflow_id' => $workflow_id,
-            '_event'               => 'research_dispatched',
+            'pending_request_id' => $request_id,
+            'turn_workflow_id' => $workflow_id,
+            '_event' => 'turn_dispatched',
         ];
+    }
+}
+
+final class CurrentTurn implements StateGuard
+{
+    public function allows(array $state, array $event_payload, string $event, array $payload = []): bool
+    {
+        return isset($state['pending_request_id'])
+            && $state['pending_request_id'] === ($event_payload['response_request_id'] ?? null);
     }
 }
 ```
 
-This state action does not try to do the research itself. It dispatches a workflow and records the workflow ID in machine state.
+Workflow dispatch joins the owning transaction. The action commits the workflow ID and transition to `waiting_on_response` together. The guard uses different names for the pending and received identities so merging an event payload cannot accidentally replace the identity being checked.
 
-## Workflow step: signal the machine when research is ready
+## Commit the response handoff
 
 ```php
 namespace App\Workflow\Steps;
 
+use Queuety\Connection;
+use Queuety\ExecutionContext;
+use Queuety\Job;
 use Queuety\Queuety;
 use Queuety\Step;
 
-final class NotifySessionResearchReadyStep implements Step
+final class NotifySessionStep implements Step
 {
-    public function handle( array $state ): array
+    public function handle(array $state): array
     {
-        Queuety::machine_event(
-            $state['machine_id'],
-            'research_completed',
-            [
-                'research_packet' => $state['research_packet'],
-            ]
+        $machine_id = (int) $state['machine_id'];
+        $receipt = [
+            'response_request_id' => $state['request_id'],
+            'assistant_reply' => $state['draft_markdown'],
+            'checkpoint' => $state['checkpoint'],
+        ];
+        ExecutionContext::on_completion(
+            static function (Connection $conn, Job $job) use ($machine_id, $receipt): void {
+                Queuety::machine_event($machine_id, 'response_ready', $receipt);
+            }
         );
-
         return [];
     }
 
     public function config(): array
     {
-        return [];
+        return ['max_attempts' => 3];
     }
 }
 ```
 
-When the workflow finishes, it sends `research_completed` back into the machine and includes the synthesized packet as event payload.
+The callback performs database work only and uses the initialized Queuety installation's connection. It does not commit independently. If the claim is stale or the state machine rejects the receipt, the enclosing completion transaction rolls back.
 
-## Responding action: call Neuron with session memory
+After `response_ready`, the session is ready for another user message with the new conversation checkpoint. If inference fails or becomes ambiguous, surface the failed turn to the application for reconciliation; do not silently move the session forward using partial output.
 
-```php
-namespace App\StateMachines\Actions;
-
-use App\Neuron\SupportAgent;
-use NeuronAI\Chat\Messages\UserMessage;
-use Queuety\Contracts\StateAction;
-
-final class RespondWithNeuronAction implements StateAction
-{
-    public function handle( array $state, ?string $event = null, array $event_payload = [], array $payload = [] ): array|string
-    {
-        // Queuety creates actions with `new RespondWithNeuronAction()`, so build dependencies here.
-        $pdo = new \PDO( $_ENV['NEURON_DB_DSN'], $_ENV['NEURON_DB_USER'], $_ENV['NEURON_DB_PASSWORD'] );
-
-        $agent = new SupportAgent(
-            threadId: $state['thread_id'],
-            pdo: $pdo,
-        );
-
-        $message = $agent->chat(
-            new UserMessage(
-                sprintf(
-                    "Answer the user message '%s' using this research packet:\n\n%s",
-                    $state['latest_user_message'],
-                    json_encode( $state['research_packet'] ?? [], JSON_PRETTY_PRINT )
-                )
-            )
-        )->getMessage();
-
-        return [
-            'assistant_reply' => $message->getContent(),
-            '_event'          => 'response_ready',
-        ];
-    }
-}
-```
-
-After the response is generated, the machine transitions back to `awaiting_user` with the updated reply in public state. The same session can then accept another `user_message` event and continue.
-
-## Why this is cleaner than one large workflow
-
-The heavy lifting is still workflow-shaped because the research side needs planning, specialist runs, aggregation, and synthesis. The long-lived support conversation is state-machine-shaped because the session must keep track of whether it is waiting for a user turn, waiting on research, or allowed to emit a response.
-
-That split keeps the runtime readable and keeps the session model explicit.
-
-## Related docs
-
-- [State Machines](/docs/state-machines)
-- [Agent Orchestration](/docs/workflows/agent-orchestration)
-- [Async Handoffs](/docs/workflows/async-handoffs)
-- [Workflow Dependencies](/docs/workflows/dependencies)
+See [state machines](/docs/state-machines), [workflow dependencies](/docs/workflows/dependencies), and [async handoffs](/docs/workflows/async-handoffs).

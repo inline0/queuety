@@ -14,6 +14,87 @@ Workers are long-running processes that poll the database for pending jobs, exec
 
 The plugin also installs a default once-per-minute WordPress cron fallback for environments without shell access. This page covers dedicated WP-CLI workers, which are the recommended higher-throughput deployment mode.
 
+## One-action execution
+
+`Queuety::tick($queues, action_seconds: 20, lease_seconds: 30)` processes at most
+one admitted action without maintenance. It works without WordPress or `pcntl`.
+Use the separate bounded `Queuety::maintenance_batch()` API to recover expired
+claims, tick schedules and prune retention. See [Standalone Use](/docs/features/standalone-use)
+for deployment, cursors, transport limits and upgrades. `run(..., once: true)`
+continues to run a bounded maintenance pass before its one job; `flush()` checks
+its optional budget between jobs.
+
+## Ownership and outcomes
+
+A claim carries a fresh token, database-time lease and fixed action deadline.
+The worker passes that original token to every mutation. A paused workflow is
+not claimable, and pausing or cancelling revokes active results. Resume uses a
+transaction and reuses or uniquely schedules the next action. A worker that
+loses ownership stops publishing; maintenance recovers the expired claim with a
+conditional update. Recovery cannot reopen a job that a different worker already
+completed or reclaimed.
+
+Handlers choose outcomes explicitly:
+
+| Outcome | Handler behavior | Durable result |
+|---|---|---|
+| Complete | Return normally | Commit completion and workflow output |
+| Wait | Throw `WaitException($availableAt)` | Release until that time, refund the attempt |
+| Retry at | Throw `RetryAtException($availableAt)` | Release until that time, consume the attempt |
+| Terminal failure | Throw `TerminalFailureException($reason)` | Bury immediately and fail the owning workflow |
+| Transient failure | Throw another exception | Retry with configured backoff until attempts are exhausted |
+
+The two scheduling exceptions take a `DateTimeImmutable` and optional message.
+Retry-at still obeys `max_attempts`. Requested times in the past are clamped to at least one database second
+in the future to avoid immediately reclaiming the same row. Use workflow signal/approval steps for human waits.
+These outcomes preserve the existing handler interfaces; they do not make
+external effects transactional. If the database action deadline has already
+expired, even failure/completion writes are refused and recovery decides the
+next attempt.
+
+```php
+use Queuety\Exceptions\RetryAtException;
+use Queuety\Exceptions\TerminalFailureException;
+use Queuety\Exceptions\WaitException;
+
+// Inside a handler, after validating its current authority:
+throw new WaitException( new DateTimeImmutable( '+5 minutes' ) );
+// Or: throw new RetryAtException( $providerRetryAt );
+// Or: throw new TerminalFailureException( 'Input is no longer authorized.' );
+```
+
+Manual queue integrations must retain the returned Job and pass
+`claim_token: $job->claim_token` to `complete`, `fail`, `retry`, `unclaim`, `bury`,
+`release` and `reschedule`. Tokenless calls cannot mutate processing jobs.
+Administrative facade controls obtain the current revision and compare it when
+changing the job; they invalidate previous claims.
+
+## Atomic application checkpoints
+
+Stage application database writes with `ExecutionContext::on_completion()`:
+
+```php
+use Queuety\Connection;
+use Queuety\ExecutionContext;
+use Queuety\Job;
+
+ExecutionContext::on_completion( static function ( Connection $conn, Job $job ): void {
+    $stmt = $conn->pdo()->prepare(
+        'INSERT INTO factory_receipts (operation_id, job_id) VALUES (:operation, :job)'
+    );
+    $stmt->execute( [ 'operation' => 'report:42:render', 'job' => $job->id ] );
+} );
+```
+
+The application owns its receipt table and operation uniqueness. This callback
+runs inside the actual fenced completion transaction together with workflow
+state, job completion and next-job dispatch. Throwing rolls all of them back.
+Callbacks must use that connection, perform only database work and never commit,
+roll back or make network calls. A handler that leaves its own transaction open
+is rolled back and fails permanently; it cannot defer the worker's commit. Calling the same connection earlier in the
+handler does not join this transaction. Remote tool effects require their own
+idempotency or reconciliation ledger.
+
 ## Starting a worker
 
 ```bash

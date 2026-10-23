@@ -512,3 +512,27 @@ dispatch() -> pending -> processing -> completed
 | `completed` | Successfully finished |
 | `failed` | Reserved; the worker does not set it today. A failed attempt that will be retried goes back to `pending` |
 | `buried` | All retry attempts exhausted |
+
+## Durable dispatch keys
+
+Use `with_dispatch_key()` when callers may submit the same logical operation
+concurrently or retry after an uncertain acknowledgement:
+
+```php
+$id = Queuety::dispatch( 'render_report', [ 'report_id' => 42 ] )
+    ->with_dispatch_key( 'report:42:render:v1' )
+    ->id();
+```
+
+The database enforces the key within the installation's jobs table. Equivalent
+submissions return the same job; a different payload or dispatch configuration
+under that key throws `DispatchConflictException`. The lower-level
+`Queue::dispatch()` and `Queuety::dispatch_job()` accept `dispatch_key:` directly.
+Keys are durable across completion. Automatic retention preserves keyed rows;
+explicit deletion deliberately forgets that deduplication history. Use a new key
+when a new logical operation should execute.
+
+Legacy `unique()` behavior remains active-job uniqueness: it releases the key
+when a job reaches a terminal status. Neither mode makes a remote API call or
+filesystem mutation exactly once. Use an external operation key or receipt and
+reconcile ambiguous effects before retrying.

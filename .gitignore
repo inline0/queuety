@@ -1,4 +1,5 @@
 /vendor/
+/tests/examples/vendor/
 /node_modules/
 /.phpunit.cache/
 /.phpstan/

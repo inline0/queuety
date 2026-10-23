@@ -12,7 +12,11 @@ use Queuety\Contracts\Job as JobContract;
 use Queuety\Contracts\StreamingStep;
 use Queuety\Enums\BackoffStrategy;
 use Queuety\Enums\LogEvent;
+use Queuety\Exceptions\LostClaimException;
+use Queuety\Exceptions\RetryAtException;
+use Queuety\Exceptions\TerminalFailureException;
 use Queuety\Exceptions\TimeoutException;
+use Queuety\Exceptions\WaitException;
 use Queuety\Exceptions\WorkflowConstraintViolationException;
 
 /**
@@ -32,6 +36,13 @@ class Worker {
 	 * @var int
 	 */
 	private int $last_maintenance_at = 0;
+
+	/**
+	 * External batch callbacks released only after durable bookkeeping commits.
+	 *
+	 * @var list<array{batch_id: int, type: string}>
+	 */
+	private array $batch_callbacks = array();
 
 	/**
 	 * Constructor.
@@ -97,9 +108,11 @@ class Worker {
 	 *
 	 * @param string[] $queues       Ordered list of queue names.
 	 * @param bool     $log_paused   Whether to log paused queue messages.
+	 * @param int|null $lease_seconds Ownership duration, or the configured default.
+	 * @param int|null $action_seconds Action budget, or the configured default.
 	 * @return Job|null The claimed job, or null if no job is available.
 	 */
-	private function claim_from_queues( array $queues, bool $log_paused = false ): ?Job {
+	private function claim_from_queues( array $queues, bool $log_paused = false, ?int $lease_seconds = null, ?int $action_seconds = null ): ?Job {
 		foreach ( $queues as $q ) {
 			if ( $this->queue->is_queue_paused( $q ) ) {
 				if ( $log_paused ) {
@@ -116,7 +129,7 @@ class Worker {
 			}
 
 			$this->debug_log( 'Attempting to claim job from queue.', $q );
-			$job = $this->queue->claim( $q );
+			$job = $this->queue->claim( $q, $lease_seconds ?? Config::stale_timeout(), $action_seconds );
 
 			if ( null !== $job ) {
 				return $job;
@@ -159,8 +172,44 @@ class Worker {
 			),
 			$job->queue
 		);
-		$this->queue->unclaim( $job->id );
+		$this->queue->unclaim( $job->id, claim_token: $job->claim_token );
 		return false;
+	}
+
+	/**
+	 * Execute at most one action without scheduling, recovery or retention work.
+	 *
+	 * Handlers must apply the remaining deadline to their own transports. This
+	 * budget is cooperative; only an external watchdog can stop arbitrary I/O.
+	 *
+	 * @param string|array<int, string> $queue_name Queue names in priority order.
+	 * @param int                       $action_seconds Cooperative action budget in seconds.
+	 * @param int                       $lease_seconds Ownership lease in seconds, longer than the budget.
+	 * @return Job|null The attempted job, or null when no job was admitted.
+	 * @throws \InvalidArgumentException If the lease does not cover the action.
+	 */
+	public function tick( string|array $queue_name = 'default', int $action_seconds = 20, int $lease_seconds = 30 ): ?Job {
+		if ( $action_seconds < 1 || $lease_seconds <= $action_seconds ) {
+			throw new \InvalidArgumentException( 'The lease must be longer than the positive action budget.' );
+		}
+		Schema::assert_compatible( $this->conn );
+		$started = hrtime( true );
+		$job = $this->claim_from_queues( $this->parse_queue_names( $queue_name ), lease_seconds: $lease_seconds, action_seconds: $action_seconds );
+		if ( null === $job ) {
+			return null;
+		}
+		if ( null !== $this->rate_limiter ) {
+			$this->register_job_rate_limit( $job );
+			if ( $this->rate_limiter->is_limited( $job->handler ) ) {
+				$this->queue->unclaim( $job->id, claim_token: $job->claim_token );
+				return null;
+			}
+		}
+		if ( ! $this->admit_claimed_job( $job, true, $started ) ) {
+			return null;
+		}
+		$this->process_job( $job, $started + $action_seconds * 1_000_000_000, $lease_seconds );
+		return $job;
 	}
 
 	/**
@@ -221,7 +270,7 @@ class Worker {
 
 					if ( $this->rate_limiter->is_limited( $job->handler ) ) {
 						$this->debug_log( "Handler {$job->handler} is rate-limited, unclaiming job #{$job->id}.", $job->queue );
-						$this->queue->unclaim( $job->id );
+						$this->queue->unclaim( $job->id, claim_token: $job->claim_token );
 						if ( $once ) {
 							break;
 						}
@@ -297,7 +346,7 @@ class Worker {
 				$this->register_job_rate_limit( $job );
 
 				if ( $this->rate_limiter->is_limited( $job->handler ) ) {
-					$this->queue->unclaim( $job->id );
+					$this->queue->unclaim( $job->id, claim_token: $job->claim_token );
 
 					// Flush mode should not spin forever on a single rate-limited head job.
 					if ( $last_skipped === $job->id ) {
@@ -344,25 +393,63 @@ class Worker {
 		if ( ! $force && time() - $this->last_maintenance_at < 60 ) {
 			return;
 		}
-		$this->recover_stale();
-		$this->scheduler?->tick();
-		$this->workflow->check_deadlines();
-		if ( Config::retention_days() > 0 ) {
-			$this->queue->purge_completed( Config::retention_days() );
-		}
-		if ( Config::log_retention_days() > 0 ) {
-			$this->logger->purge( Config::log_retention_days() );
+		for ( $cursor = 0; $cursor < 5; ++$cursor ) {
+			$this->maintenance_batch( cursor: $cursor );
 		}
 		$this->last_maintenance_at = time();
 	}
 
 	/**
+	 * Run one bounded maintenance phase and return the next phase cursor.
+	 *
+	 * Cursor phases are recovery, schedules, deadlines, completed jobs and logs.
+	 * Persist the returned cursor between short HTTP wakeups. Each phase removes
+	 * or advances eligible rows, so repeated cycles drain a backlog without OFFSET.
+	 *
+	 * @param int $limit Maximum records considered in this phase (1 to 1000).
+	 * @param int $cursor Phase cursor (0 to 4).
+	 * @return array{cursor: int, processed: int} Next cursor and affected row count.
+	 * @throws \InvalidArgumentException If the cursor or limit is out of range.
+	 */
+	public function maintenance_batch( int $limit = 100, int $cursor = 0 ): array {
+		if ( $limit < 1 || $limit > 1000 || $cursor < 0 || $cursor > 4 ) {
+			throw new \InvalidArgumentException( 'Maintenance requires a limit of 1 to 1000 and cursor of 0 to 4.' );
+		}
+		Schema::assert_compatible( $this->conn );
+		$count = match ( $cursor ) {
+			0 => $this->recover_stale( $limit ),
+			1 => $this->scheduler?->tick( $limit ) ?? 0,
+			2 => $this->workflow->check_deadlines( $limit ),
+			3 => Config::retention_days() > 0 ? $this->queue->purge_completed( Config::retention_days(), $limit ) : 0,
+			4 => Config::log_retention_days() > 0 ? $this->logger->purge( Config::log_retention_days(), $limit ) : 0,
+		};
+		return array(
+			'cursor' => ( $cursor + 1 ) % 5,
+			'processed' => $count,
+		);
+	}
+
+	/**
 	 * Execute a single job.
 	 *
-	 * @param Job $job The claimed job.
-	 * @throws TimeoutException|\RuntimeException If execution times out or an internal workflow placeholder is malformed.
+	 * @param Job      $job The claimed job.
+	 * @param int|null $deadline_ns Optional monotonic action deadline.
+	 * @param int      $lease_seconds Heartbeat lease duration.
+	 * @throws \LogicException If execution starts inside an application transaction.
+	 * @throws \RuntimeException If an internal workflow placeholder is malformed.
+	 * @throws TerminalFailureException If a workflow wait definition is invalid.
+	 * @throws \Throwable When the database transport is discarded and reconciliation is required.
 	 */
-	public function process_job( Job $job ): void {
+	public function process_job( Job $job, ?int $deadline_ns = null, int $lease_seconds = 600 ): void {
+		$this->batch_callbacks = array();
+		if ( $this->conn->pdo()->inTransaction() ) {
+			throw new \LogicException( 'Worker execution must start outside an application transaction.' );
+		}
+		try {
+			$this->queue->assert_claim( $job->id, $job->claim_token ?? '' );
+		} catch ( LostClaimException $e ) {
+			return;
+		}
 		$start_time       = hrtime( true );
 		$timeout_seconds  = Config::max_execution_time();
 		$max_attempts     = $job->max_attempts;
@@ -415,38 +502,59 @@ class Worker {
 			$custom_backoff   = null;
 		}
 
-		$this->logger->log(
-			LogEvent::Started,
-			array(
-				'job_id'      => $job->id,
-				'workflow_id' => $job->workflow_id,
-				'step_index'  => $job->step_index,
-				'handler'     => $job->handler,
-				'queue'       => $job->queue,
-				'attempt'     => $job->attempts,
-			)
-		);
+		try {
+			$this->queue->with_claim(
+				$job->id,
+				$job->claim_token ?? '',
+				function () use ( $job, $workflow_trace ): void {
+					$this->logger->log(
+						LogEvent::Started,
+						array(
+							'job_id'      => $job->id,
+							'workflow_id' => $job->workflow_id,
+							'step_index'  => $job->step_index,
+							'handler'     => $job->handler,
+							'queue'       => $job->queue,
+							'attempt'     => $job->attempts,
+						)
+					);
 
-		if ( null !== $this->event_log && $job->is_workflow_step() ) {
-			$this->event_log->record_step_started(
-				workflow_id: $job->workflow_id,
-				step_index: $job->step_index,
-				handler: $job->handler,
-				step_name: $workflow_trace['step_name'] ?? null,
-				step_type: $workflow_trace['step_type'] ?? null,
-				job_id: $job->id,
-				attempt: $job->attempts,
-				queue: $job->queue,
-				input: $workflow_trace['input'] ?? null,
-				state_before: $workflow_trace['state_before'] ?? null,
-				context: $workflow_trace['context'] ?? null,
+					if ( null !== $this->event_log && $job->is_workflow_step() ) {
+						$this->event_log->record_step_started(
+							workflow_id: $job->workflow_id,
+							step_index: $job->step_index,
+							handler: $job->handler,
+							step_name: $workflow_trace['step_name'] ?? null,
+							step_type: $workflow_trace['step_type'] ?? null,
+							job_id: $job->id,
+							attempt: $job->attempts,
+							queue: $job->queue,
+							input: $workflow_trace['input'] ?? null,
+							state_before: $workflow_trace['state_before'] ?? null,
+							context: $workflow_trace['context'] ?? null,
+						);
+					}
+				}
 			);
+		} catch ( LostClaimException $e ) {
+			return;
 		}
 
+		if ( null !== $deadline_ns ) {
+			$timeout_seconds = min( $timeout_seconds, max( 1, (int) ceil( ( $deadline_ns - hrtime( true ) ) / 1_000_000_000 ) ) );
+		}
 		$alarm = $pcntl_available ? new AlarmGuard( $timeout_seconds ) : null;
 
-		Heartbeat::init( $job->id, $this->conn );
-		ExecutionContext::enter( $job->id, $job->workflow_id, $job->step_index, $job->payload );
+		Heartbeat::init( $job->id, $this->conn, $job->claim_token, $lease_seconds );
+		ExecutionContext::enter( $job->id, $job->workflow_id, $job->step_index, $job->payload, job: $job );
+		ExecutionContext::set_deadline( $deadline_ns ?? $start_time + $timeout_seconds * 1_000_000_000 );
+		if ( null !== $this->batch_manager && null !== $job->batch_id ) {
+			ExecutionContext::on_completion(
+				function ( Connection $conn, Job $completed ): void {
+					$this->batch_callbacks = $this->batch_manager->stage_batch_completion( $completed );
+				}
+			);
+		}
 		if ( null !== $workflow_trace ) {
 			ExecutionContext::set_trace_input( $workflow_trace['input'] ?? array() );
 			if ( ! empty( $workflow_trace['context'] ) && is_array( $workflow_trace['context'] ) ) {
@@ -455,6 +563,7 @@ class Worker {
 		}
 
 		try {
+			ExecutionContext::assert_active();
 			if ( $this->is_state_machine_action_job( $job ) ) {
 				$meta = $this->state_machine_action_meta( $job );
 
@@ -472,11 +581,10 @@ class Worker {
 						'queue'   => $job->queue,
 						'attempt' => $job->attempts,
 					),
+					job: $job,
 				);
 
 				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
-
-				$this->queue->complete( $job->id );
 
 				$this->logger->log(
 					LogEvent::Completed,
@@ -490,13 +598,14 @@ class Worker {
 					)
 				);
 			} elseif ( $job->is_workflow_step() && '__queuety_run_workflow' === $job->handler ) {
-				$state = $this->workflow->get_state( $job->workflow_id ) ?? array();
+				$state = $this->workflow->get_state_uncached( $job->workflow_id ) ?? array();
 
 				$this->workflow->handle_run_workflow_step(
 					workflow_id: $job->workflow_id,
 					job_id: $job->id,
 					step_index: $job->step_index,
 					workflow_state: $state,
+					job: $job,
 				);
 
 				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
@@ -514,13 +623,14 @@ class Worker {
 					)
 				);
 			} elseif ( $job->is_workflow_step() && '__queuety_for_each' === $job->handler ) {
-				$state = $this->workflow->get_state( $job->workflow_id ) ?? array();
+				$state = $this->workflow->get_state_uncached( $job->workflow_id ) ?? array();
 
 				$placeholder_completed = $this->workflow->handle_for_each_step(
 					workflow_id: $job->workflow_id,
 					job_id: $job->id,
 					step_index: $job->step_index,
 					workflow_state: $state,
+					job: $job,
 				);
 
 				if ( $placeholder_completed ) {
@@ -540,7 +650,7 @@ class Worker {
 					);
 				}
 			} elseif ( $job->is_workflow_step() && '__queuety_repeat' === $job->handler ) {
-				$wf_state         = $this->workflow->get_state( $job->workflow_id ) ?? array();
+				$wf_state         = $this->workflow->get_state_uncached( $job->workflow_id ) ?? array();
 				$steps_raw        = $wf_state['_steps'] ?? array();
 				$steps            = is_array( $steps_raw ) ? $steps_raw : array();
 				$step_def_in      = $steps[ $job->step_index ] ?? null;
@@ -560,20 +670,24 @@ class Worker {
 
 				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
+				$this->assert_handler_transaction_closed();
 				$this->workflow->advance_step(
 					workflow_id: $job->workflow_id,
 					completed_job_id: $job->id,
 					step_output: $step_output,
 					duration_ms: $duration_ms,
+					job: $job,
 				);
 			} elseif ( $job->is_workflow_step() && '__queuety_delay' === $job->handler ) {
 				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
+				$this->assert_handler_transaction_closed();
 				$this->workflow->advance_step(
 					workflow_id: $job->workflow_id,
 					completed_job_id: $job->id,
 					step_output: array(),
 					duration_ms: $duration_ms,
+					job: $job,
 				);
 
 				$this->logger->log(
@@ -589,21 +703,22 @@ class Worker {
 					)
 				);
 			} elseif ( $job->is_workflow_step() && '__queuety_wait_for_signal' === $job->handler ) {
-				$wf_state       = $this->workflow->get_state( $job->workflow_id ) ?? array();
+				$wf_state       = $this->workflow->get_state_uncached( $job->workflow_id ) ?? array();
 				$steps_raw      = $wf_state['_steps'] ?? array();
 				$steps          = is_array( $steps_raw ) ? $steps_raw : array();
 				$step_def_in    = $steps[ $job->step_index ] ?? null;
 				$step_def_typed = self::normalize_step_def( $step_def_in );
 				$step_def       = is_array( $step_def_typed ) ? $step_def_typed : null;
 
-				$this->queue->complete( $job->id );
-
 				if ( null !== $step_def && 'wait_for_signal' === ( $step_def['type'] ?? '' ) ) {
 					$this->workflow->handle_signal_step(
 						workflow_id: $job->workflow_id,
 						step_def: $step_def,
 						step_index: $job->step_index,
+						job: $job,
 					);
+				} else {
+					throw new TerminalFailureException( 'The signal wait step definition is missing or invalid.' );
 				}
 
 				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
@@ -621,14 +736,12 @@ class Worker {
 					)
 				);
 			} elseif ( $job->is_workflow_step() && '__queuety_wait_for_workflows' === $job->handler ) {
-				$wf_state       = $this->workflow->get_state( $job->workflow_id ) ?? array();
+				$wf_state       = $this->workflow->get_state_uncached( $job->workflow_id ) ?? array();
 				$steps_raw      = $wf_state['_steps'] ?? array();
 				$steps          = is_array( $steps_raw ) ? $steps_raw : array();
 				$step_def_in    = $steps[ $job->step_index ] ?? null;
 				$step_def_typed = self::normalize_step_def( $step_def_in );
 				$step_def       = is_array( $step_def_typed ) ? $step_def_typed : null;
-
-				$this->queue->complete( $job->id );
 
 				if ( null !== $step_def && 'wait_for_workflows' === ( $step_def['type'] ?? '' ) ) {
 					$this->workflow->handle_wait_for_workflows_step(
@@ -636,7 +749,10 @@ class Worker {
 						step_def: $step_def,
 						step_index: $job->step_index,
 						workflow_state: $wf_state,
+						job: $job,
 					);
+				} else {
+					throw new TerminalFailureException( 'The workflow wait step definition is missing or invalid.' );
 				}
 
 				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
@@ -654,21 +770,15 @@ class Worker {
 					)
 				);
 			} elseif ( $job->is_workflow_step() && '__queuety_start_workflows' === $job->handler ) {
-				$wf_state    = $this->workflow->get_state( $job->workflow_id ) ?? array();
+				$wf_state    = $this->workflow->get_state_uncached( $job->workflow_id ) ?? array();
 				$step_output = $this->workflow->handle_start_workflows_step(
 					workflow_id: $job->workflow_id,
 					step_index: $job->step_index,
 					workflow_state: $wf_state,
+					job: $job,
 				);
 
 				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
-
-				$this->workflow->advance_step(
-					workflow_id: $job->workflow_id,
-					completed_job_id: $job->id,
-					step_output: $step_output,
-					duration_ms: $duration_ms,
-				);
 
 				$this->logger->log(
 					LogEvent::Completed,
@@ -698,17 +808,16 @@ class Worker {
 					}
 				}
 
-				$queue_ref   = $this->queue;
 				$logger_ref  = $this->logger;
 				$webhook_ref = $this;
 				$job_record  = $job;
 				$start_ref   = $start_time;
-				$core        = function ( \Queuety\Contracts\Job $job_obj ) use ( $queue_ref, $logger_ref, $job_record, $start_ref ): void {
+				$core        = function ( \Queuety\Contracts\Job $job_obj ) use ( $logger_ref, $job_record, $start_ref ): void {
 					$job_obj->handle();
 
 					$duration_ms = (int) ( ( hrtime( true ) - $start_ref ) / 1_000_000 );
 
-					$queue_ref->complete( $job_record->id );
+					$this->complete_job( $job_record );
 
 					$logger_ref->log(
 						LogEvent::Completed,
@@ -732,6 +841,7 @@ class Worker {
 
 				$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
+				$this->fire_batch_callbacks();
 				$this->notify_webhook(
 					'job.completed',
 					array(
@@ -742,7 +852,6 @@ class Worker {
 					)
 				);
 
-				$this->record_batch_completion( $job );
 			} else {
 
 				$this->debug_log( "Resolving handler: {$job->handler}", $job->queue );
@@ -770,7 +879,7 @@ class Worker {
 				if ( $job->is_workflow_step() && $handler instanceof StreamingStep ) {
 					$this->process_streaming_step( $job, $handler, $start_time );
 				} elseif ( $job->is_workflow_step() && $handler instanceof ForEachHandler && $this->is_for_each_workflow_job( $job ) ) {
-					$state           = $this->workflow->get_state( $job->workflow_id ) ?? array();
+					$state           = $this->workflow->get_state_uncached( $job->workflow_id ) ?? array();
 					$branch_meta_raw = $job->payload['__for_each'] ?? array();
 					$branch_meta     = is_array( $branch_meta_raw ) ? $branch_meta_raw : array();
 					$item_index_raw  = $branch_meta['item_index'] ?? 0;
@@ -782,23 +891,27 @@ class Worker {
 
 					$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
+					$this->assert_handler_transaction_closed();
 					$this->workflow->advance_step(
 						workflow_id: $job->workflow_id,
 						completed_job_id: $job->id,
 						step_output: $output,
 						duration_ms: $duration_ms,
+						job: $job,
 					);
 				} elseif ( $job->is_workflow_step() && $handler instanceof Step ) {
-					$state  = $this->workflow->get_state( $job->workflow_id ) ?? array();
+					$state  = $this->workflow->get_state_uncached( $job->workflow_id ) ?? array();
 					$output = $handler->handle( $state );
 
 					$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
+					$this->assert_handler_transaction_closed();
 					$this->workflow->advance_step(
 						workflow_id: $job->workflow_id,
 						completed_job_id: $job->id,
 						step_output: $output,
 						duration_ms: $duration_ms,
+						job: $job,
 					);
 				} else {
 					if ( ! $handler instanceof Handler ) {
@@ -809,7 +922,7 @@ class Worker {
 
 					$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
-					$this->queue->complete( $job->id );
+					$this->complete_job( $job );
 
 					$this->logger->log(
 						LogEvent::Completed,
@@ -823,6 +936,7 @@ class Worker {
 						)
 					);
 
+					$this->fire_batch_callbacks();
 					$this->notify_webhook(
 						'job.completed',
 						array(
@@ -833,16 +947,46 @@ class Worker {
 						)
 					);
 
-					$this->record_batch_completion( $job );
 				}
 			}
 
+			$this->fire_batch_callbacks();
 			if ( null !== $this->rate_limiter ) {
 				$this->rate_limiter->record( $job->handler );
 			}
+		} catch ( LostClaimException $e ) {
+			// A replacement owner or expired deadline alone decides the next action.
+			return;
 		} catch ( \Throwable $e ) {
+			$this->batch_callbacks = array();
+			if ( $this->conn->is_discarded() ) {
+				throw $e;
+			}
+			if ( $this->conn->pdo()->inTransaction() ) {
+				$this->conn->pdo()->rollBack();
+			}
+			try {
+				$this->queue->assert_claim( $job->id, $job->claim_token ?? '' );
+				if ( $e instanceof WaitException || ( $e instanceof RetryAtException && $job->attempts < $max_attempts ) ) {
+					$this->queue->reschedule( $job->id, $e->available_at, ! $e instanceof WaitException, $job->claim_token );
+					return;
+				}
+				$terminal = $e instanceof TerminalFailureException || $e instanceof WorkflowConstraintViolationException || $job->attempts >= $max_attempts;
+				if ( $terminal ) {
+					$this->fail_terminal( $job, $e->getMessage() );
+				} else {
+					if ( is_array( $custom_backoff ) ) {
+						$index = max( 0, min( $job->attempts - 1, count( $custom_backoff ) - 1 ) );
+						$picked = $custom_backoff[ $index ] ?? 0;
+						$custom_backoff = is_scalar( $picked ) ? (int) $picked : 0;
+					}
+					$backoff = is_int( $custom_backoff ) ? $custom_backoff : Queue::calculate_backoff( $job->attempts, $backoff_strategy ?? Config::retry_backoff() );
+					$this->queue->retry( $job->id, $backoff, claim_token: $job->claim_token );
+				}
+			} catch ( LostClaimException $lost ) {
+				return;
+			}
 			$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
-
 			if ( null !== $this->event_log && $job->is_workflow_step() ) {
 				$trace          = ExecutionContext::consume_trace();
 				$trace_input    = $trace['input'] ?? null;
@@ -872,153 +1016,183 @@ class Worker {
 				);
 			}
 
-			$effective_max = $max_attempts;
+			$this->logger->log(
+				$terminal ? LogEvent::Buried : LogEvent::Failed,
+				array(
+					'job_id' => $job->id,
+					'workflow_id' => $job->workflow_id,
+					'step_index' => $job->step_index,
+					'handler' => $job->handler,
+					'queue' => $job->queue,
+					'attempt' => $job->attempts,
+					'duration_ms' => $duration_ms,
+					'error_message' => $e->getMessage(),
+					'error_class' => get_class( $e ),
+					'error_trace' => $e->getTraceAsString(),
+				)
+			);
 
-			if ( is_array( $custom_backoff ) ) {
-				$attempt_index       = min( $job->attempts - 1, count( $custom_backoff ) - 1 );
-				$custom_backoff_pick = $custom_backoff[ max( 0, $attempt_index ) ];
-				$custom_backoff      = is_scalar( $custom_backoff_pick ) ? (int) $custom_backoff_pick : 0;
-			}
-
-			$workflow_constraint_violation = $job->is_workflow_step() && $e instanceof WorkflowConstraintViolationException;
-
-			if ( $workflow_constraint_violation || $job->attempts >= $effective_max ) {
-				$is_for_each_terminal = $job->is_workflow_step() && $this->is_for_each_workflow_job( $job );
-
-				if ( ! $is_for_each_terminal ) {
-					$this->queue->bury( $job->id, $e->getMessage() );
-				}
-
-				$this->call_failed_hook( $job, $job_instance, $e );
-				$this->call_chain_catch( $job, $e );
-
-				$this->logger->log(
-					LogEvent::Buried,
-					array(
-						'job_id'        => $job->id,
-						'workflow_id'   => $job->workflow_id,
-						'step_index'    => $job->step_index,
-						'handler'       => $job->handler,
-						'queue'         => $job->queue,
-						'attempt'       => $job->attempts,
-						'duration_ms'   => $duration_ms,
-						'error_message' => $e->getMessage(),
-						'error_class'   => get_class( $e ),
-						'error_trace'   => $e->getTraceAsString(),
-					)
+			$this->fire_batch_callbacks();
+			if ( $terminal ) {
+				ExecutionContext::without_claim(
+					function () use ( $job, $job_instance, $e ): void {
+						$this->call_failed_hook( $job, $job_instance, $e );
+						$this->call_chain_catch( $job, $e );
+					}
 				);
-
-				$this->notify_webhook(
-					'job.buried',
-					array(
-						'job_id'        => $job->id,
-						'handler'       => $job->handler,
-						'queue'         => $job->queue,
-						'error_message' => $e->getMessage(),
-					)
-				);
-
-				if ( $job->is_workflow_step() ) {
-					$workflow_failed = false;
-
-					if ( $is_for_each_terminal ) {
-						$workflow_failed = $this->workflow->handle_for_each_terminal_failure(
-							$job->workflow_id,
-							$job->id,
-							$e->getMessage(),
-						);
-					} else {
-						$this->workflow->fail( $job->workflow_id, $job->id, $e->getMessage() );
-						$workflow_failed = true;
-					}
-
-					if ( $workflow_failed ) {
-						$this->notify_webhook(
-							'workflow.failed',
-							array(
-								'workflow_id'   => $job->workflow_id,
-								'job_id'        => $job->id,
-								'handler'       => $job->handler,
-								'error_message' => $e->getMessage(),
-							)
-						);
-					}
-				} elseif ( $this->is_state_machine_action_job( $job ) ) {
-					$meta = $this->state_machine_action_meta( $job );
-					if ( null !== $meta && null !== $this->state_machines ) {
-						$this->state_machines->fail_action(
-							$meta['machine_id'],
-							$meta['state_name'],
-							$e->getMessage(),
-							array(
-								'job_id'                 => $job->id,
-								'queue'                  => $job->queue,
-								'attempt'                => $job->attempts,
-								'action_failed_recorded' => true,
-							),
-						);
-					}
-				}
-
-				$this->record_batch_failure( $job );
 			} else {
-				$backoff = is_int( $custom_backoff ) ? $custom_backoff : Queue::calculate_backoff( $job->attempts, $backoff_strategy ?? Config::retry_backoff() );
-				$this->queue->retry( $job->id, $backoff );
-
-				$this->logger->log(
-					LogEvent::Failed,
-					array(
-						'job_id'        => $job->id,
-						'workflow_id'   => $job->workflow_id,
-						'step_index'    => $job->step_index,
-						'handler'       => $job->handler,
-						'queue'         => $job->queue,
-						'attempt'       => $job->attempts,
-						'duration_ms'   => $duration_ms,
-						'error_message' => $e->getMessage(),
-						'error_class'   => get_class( $e ),
-						'error_trace'   => $e->getTraceAsString(),
-					)
-				);
-
-				$this->notify_webhook(
-					'job.failed',
-					array(
-						'job_id'        => $job->id,
-						'handler'       => $job->handler,
-						'queue'         => $job->queue,
-						'attempt'       => $job->attempts,
-						'error_message' => $e->getMessage(),
-					)
-				);
-
 				$this->logger->log(
 					LogEvent::Retried,
 					array(
-						'job_id'      => $job->id,
+						'job_id' => $job->id,
 						'workflow_id' => $job->workflow_id,
-						'step_index'  => $job->step_index,
-						'handler'     => $job->handler,
-						'queue'       => $job->queue,
-						'attempt'     => $job->attempts,
+						'handler' => $job->handler,
+						'queue' => $job->queue,
+						'attempt' => $job->attempts,
 					)
 				);
 			}
+			$this->notify_webhook(
+				$terminal ? 'job.buried' : 'job.failed',
+				array(
+					'job_id' => $job->id,
+					'handler' => $job->handler,
+					'queue' => $job->queue,
+					'error_message' => $e->getMessage(),
+				)
+			);
 		} finally {
-			ExecutionContext::clear();
-			Heartbeat::clear();
-
-			$alarm?->close();
+			try {
+				if ( ! $this->conn->is_discarded() && $this->conn->pdo()->inTransaction() ) {
+					$this->conn->pdo()->rollBack();
+				}
+			} finally {
+				ExecutionContext::clear();
+				Heartbeat::clear();
+				$this->batch_callbacks = array();
+				$alarm?->close();
+			}
 		}
 	}
 
 	/**
-	 * Find and recover stale jobs.
+	 * Refuse a handler-owned transaction that would delay or swallow completion.
 	 *
+	 * @throws TerminalFailureException When a handler leaves its transaction open.
+	 */
+	private function assert_handler_transaction_closed(): void {
+		if ( $this->conn->pdo()->inTransaction() ) {
+			$this->conn->pdo()->rollBack();
+			throw new TerminalFailureException( 'A handler left a database transaction open. Use on_completion() for atomic checkpoints.' );
+		}
+	}
+
+	/**
+	 * Commit ordinary job completion and application checkpoints together.
+	 *
+	 * @param Job $job Current claim.
+	 * @throws \Throwable If ownership or a checkpoint write fails.
+	 */
+	private function complete_job( Job $job ): void {
+		$this->assert_handler_transaction_closed();
+		$pdo = $this->conn->pdo();
+		$pdo->beginTransaction();
+		try {
+			$this->queue->assert_claim( $job->id, $job->claim_token ?? '', true );
+			ExecutionContext::flush_completion( $this->conn, $job );
+			$this->queue->complete( $job->id, claim_token: $job->claim_token );
+			$pdo->commit();
+		} catch ( \Throwable $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+			throw $e;
+		}
+	}
+
+	/**
+	 * Atomically stop the job and its owning workflow or state machine.
+	 *
+	 * @param Job    $job Current claim, or the expired claim observed by recovery.
+	 * @param string $message Durable failure reason.
+	 * @param bool   $recover Whether to compare and recover an expired claim.
+	 * @return bool Whether the observed job was transitioned.
+	 * @throws \Throwable If the terminal transition cannot commit.
+	 */
+	private function fail_terminal( Job $job, string $message, bool $recover = false ): bool {
+		if ( $job->is_workflow_step() ) {
+			if ( $this->is_for_each_workflow_job( $job ) ) {
+				$failed = $this->workflow->handle_for_each_terminal_failure( $job->workflow_id, $job->id, $message, job: $job, recover: $recover );
+			} else {
+				$this->workflow->fail( $job->workflow_id, $job->id, $message, job: $job, recover: $recover );
+				$failed = true;
+			}
+			if ( $failed ) {
+				$this->notify_webhook(
+					'workflow.failed',
+					array(
+						'workflow_id' => $job->workflow_id,
+						'job_id' => $job->id,
+						'handler' => $job->handler,
+						'error_message' => $message,
+					)
+				);
+			}
+			return true;
+		}
+		if ( $this->is_state_machine_action_job( $job ) && null !== $this->state_machines ) {
+			$meta = $this->state_machine_action_meta( $job );
+			if ( null !== $meta ) {
+				$this->state_machines->fail_action(
+					$meta['machine_id'],
+					$meta['state_name'],
+					$message,
+					array(
+						'job_id' => $job->id,
+						'queue' => $job->queue,
+						'attempt' => $job->attempts,
+						'action_failed_recorded' => ! $recover,
+					),
+					job: $job,
+					recover: $recover
+				);
+				return true;
+			}
+		}
+		$pdo = $this->conn->pdo();
+		$pdo->beginTransaction();
+		try {
+			if ( $recover ) {
+				if ( ! $this->queue->recover( $job, bury: true, error_message: $message, timeout_seconds: Config::stale_timeout() ) ) {
+					$pdo->rollBack();
+					return false;
+				}
+			} else {
+				$this->queue->assert_claim( $job->id, $job->claim_token ?? '', true );
+			}
+			$callbacks = $this->batch_manager?->stage_failure( $job ) ?? array();
+			if ( ! $recover ) {
+				$this->queue->bury( $job->id, $message, claim_token: $job->claim_token );
+			}
+			$pdo->commit();
+			$this->batch_callbacks = $callbacks;
+			return true;
+		} catch ( \Throwable $e ) {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+			throw $e;
+		}
+	}
+
+	/**
+	 * Find and conditionally recover one bounded batch of stale jobs.
+	 *
+	 * @param int $limit Maximum expired claims considered.
 	 * @return int Number of stale jobs recovered.
 	 */
-	public function recover_stale(): int {
-		$stale_jobs = $this->queue->find_stale( Config::stale_timeout() );
+	public function recover_stale( int $limit = 100 ): int {
+		$stale_jobs = $this->queue->find_stale( Config::stale_timeout(), $limit );
 		$count      = 0;
 
 		foreach ( $stale_jobs as $job ) {
@@ -1058,72 +1232,36 @@ class Worker {
 				$handler_backoff  = null;
 			}
 
-			if ( $job->attempts >= $effective_max ) {
-					$is_for_each_terminal = $job->is_workflow_step() && $this->is_for_each_workflow_job( $job );
-				if ( ! $is_for_each_terminal ) {
-					$this->queue->bury( $job->id, 'Stale: worker died without completing.' );
-				}
-
-				$this->logger->log(
-					LogEvent::Buried,
-					array(
-						'job_id'        => $job->id,
-						'workflow_id'   => $job->workflow_id,
-						'step_index'    => $job->step_index,
-						'handler'       => $job->handler,
-						'queue'         => $job->queue,
-						'error_message' => 'Stale: worker died without completing.',
-					)
-				);
-
-				if ( $job->is_workflow_step() ) {
-					$workflow_id = $job->workflow_id;
-					if ( $is_for_each_terminal ) {
-						$this->workflow->handle_for_each_terminal_failure(
-							$workflow_id,
-							$job->id,
-							'Stale: worker died without completing.',
-						);
-					} else {
-						$this->workflow->fail( $workflow_id, $job->id, 'Stale: worker died without completing.' );
-					}
-				} elseif ( $this->is_state_machine_action_job( $job ) ) {
-					$meta = $this->state_machine_action_meta( $job );
-					if ( null !== $meta && null !== $this->state_machines ) {
-						$this->state_machines->fail_action(
-							$meta['machine_id'],
-							$meta['state_name'],
-							'Stale: worker died without completing.',
-							array(
-								'job_id'  => $job->id,
-								'queue'   => $job->queue,
-								'attempt' => $job->attempts,
-							),
-						);
-					}
-				}
-			} else {
-				if ( is_array( $handler_backoff ) ) {
-					$attempt_index = min( $job->attempts - 1, count( $handler_backoff ) - 1 );
-					$pick          = $handler_backoff[ max( 0, $attempt_index ) ];
-					$backoff       = is_scalar( $pick ) ? (int) $pick : 0;
+			try {
+				if ( $job->attempts >= $effective_max ) {
+					$recovered = $this->fail_terminal( $job, 'Stale: worker died without completing.', recover: true );
 				} else {
-					$backoff = Queue::calculate_backoff( $job->attempts, $backoff_strategy );
+					if ( is_array( $handler_backoff ) ) {
+						$index = max( 0, min( $job->attempts - 1, count( $handler_backoff ) - 1 ) );
+						$picked = $handler_backoff[ $index ] ?? 0;
+						$backoff = is_scalar( $picked ) ? (int) $picked : 0;
+					} else {
+						$backoff = Queue::calculate_backoff( $job->attempts, $backoff_strategy );
+					}
+					$recovered = $this->queue->recover( $job, delay_sec: $backoff, timeout_seconds: Config::stale_timeout() );
 				}
-				$this->queue->retry( $job->id, $backoff );
-
-				$this->logger->log(
-					LogEvent::Retried,
-					array(
-						'job_id'      => $job->id,
-						'workflow_id' => $job->workflow_id,
-						'step_index'  => $job->step_index,
-						'handler'     => $job->handler,
-						'queue'       => $job->queue,
-						'attempt'     => $job->attempts,
-					)
-				);
+			} catch ( LostClaimException $e ) {
+				continue;
 			}
+			if ( ! $recovered ) {
+				continue;
+			}
+			$this->fire_batch_callbacks();
+			$this->logger->log(
+				$job->attempts >= $effective_max ? LogEvent::Buried : LogEvent::Retried,
+				array(
+					'job_id' => $job->id,
+					'workflow_id' => $job->workflow_id,
+					'handler' => $job->handler,
+					'queue' => $job->queue,
+					'attempt' => $job->attempts,
+				)
+			);
 
 			++$count;
 		}
@@ -1199,9 +1337,9 @@ class Worker {
 			throw new \RuntimeException( 'Streaming steps must run inside a workflow.' );
 		}
 
-		$state = $this->workflow->get_state( $job->workflow_id ) ?? array();
+		$state = $this->workflow->get_state_uncached( $job->workflow_id ) ?? array();
 
-		$existing_chunks = array_values( $this->chunk_store->get_chunks( $job->id ) );
+		$existing_chunks = array_values( $this->chunk_store->resume_chunks( $job ) );
 		$chunk_index     = count( $existing_chunks );
 
 		$generator = $handler->stream( $state, $existing_chunks );
@@ -1209,12 +1347,14 @@ class Worker {
 		foreach ( $generator as $chunk ) {
 			$content = is_scalar( $chunk ) ? (string) $chunk : '';
 
+			$this->assert_handler_transaction_closed();
 			$this->chunk_store->append_chunk(
 				job_id: $job->id,
 				chunk_index: $chunk_index,
 				content: $content,
 				workflow_id: $job->workflow_id,
 				step_index: $job->step_index,
+				claim_token: $job->claim_token,
 			);
 
 			++$chunk_index;
@@ -1222,15 +1362,16 @@ class Worker {
 			Heartbeat::beat( array( 'streaming_chunks' => $chunk_index ) );
 		}
 
-		$all_chunks = array_values( $this->chunk_store->get_chunks( $job->id ) );
-		foreach ( $all_chunks as $chunk ) {
+		$all_chunks = array_values( $this->chunk_store->get_chunks( $job->id, claim_token: $job->claim_token ) );
+		foreach ( $all_chunks as $index => $chunk ) {
 			ExecutionContext::add_trace_chunk(
 				array(
 					'job_id'      => $job->id,
 					'workflow_id' => $job->workflow_id,
 					'step_index'  => $job->step_index,
-					'chunk_index' => $chunk['chunk_index'] ?? null,
-					'content'     => $chunk['content'] ?? null,
+					'chunk_index' => $index,
+					'claim_token' => $job->claim_token,
+					'content'     => $chunk,
 				)
 			);
 		}
@@ -1239,40 +1380,24 @@ class Worker {
 
 		$duration_ms = (int) ( ( hrtime( true ) - $start_time ) / 1_000_000 );
 
-		$this->chunk_store->clear_chunks( $job->id );
-
+		$this->assert_handler_transaction_closed();
 		$this->workflow->advance_step(
 			workflow_id: $job->workflow_id,
 			completed_job_id: $job->id,
 			step_output: $output,
 			duration_ms: $duration_ms,
+			job: $job,
 		);
+		$this->chunk_store->clear_chunks( $job->id, claim_token: $job->claim_token );
 	}
 
-	/**
-	 * Record a batch completion for a job if it belongs to a batch.
-	 *
-	 * @param Job $job The completed job record.
-	 */
-	private function record_batch_completion( Job $job ): void {
-		if ( null === $this->batch_manager || null === $job->batch_id ) {
-			return;
+	/** Run best-effort external batch callbacks after their counters commit. */
+	private function fire_batch_callbacks(): void {
+		$callbacks = $this->batch_callbacks;
+		$this->batch_callbacks = array();
+		if ( null !== $this->batch_manager && ! empty( $callbacks ) ) {
+			$this->batch_manager->fire_deferred( $callbacks );
 		}
-
-		$this->batch_manager->record_completion( $job->batch_id );
-	}
-
-	/**
-	 * Record a batch failure for a job if it belongs to a batch.
-	 *
-	 * @param Job $job The failed job record.
-	 */
-	private function record_batch_failure( Job $job ): void {
-		if ( null === $this->batch_manager || null === $job->batch_id ) {
-			return;
-		}
-
-		$this->batch_manager->record_failure( $job->batch_id, $job->id );
 	}
 
 	/**
@@ -1363,7 +1488,7 @@ class Worker {
 		if ( ! $job->is_workflow_step() ) {
 			return $empty;
 		}
-		$state        = $this->workflow->get_state( $job->workflow_id ) ?? array();
+		$state        = $this->workflow->get_state_uncached( $job->workflow_id ) ?? array();
 		$public_state = $this->public_workflow_state( $state );
 		$steps_raw    = $state['_steps'] ?? array();
 		$steps        = is_array( $steps_raw ) ? $steps_raw : array();
@@ -1531,7 +1656,7 @@ class Worker {
 			return false;
 		}
 
-		$state     = $this->workflow->get_state( $job->workflow_id ) ?? array();
+		$state     = $this->workflow->get_state_uncached( $job->workflow_id ) ?? array();
 		$steps_raw = $state['_steps'] ?? array();
 		$steps     = is_array( $steps_raw ) ? $steps_raw : array();
 		$step      = $steps[ $job->step_index ] ?? null;

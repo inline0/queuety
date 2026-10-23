@@ -12,8 +12,7 @@ use Queuety\Contracts\Cache;
 /**
  * APCu-backed cache implementation, shared across processes on the same server.
  *
- * All keys are prefixed with 'queuety:' to avoid collisions with other
- * applications using APCu on the same server.
+ * Each instance requires the installation namespace it may read or clear.
  */
 class ApcuCache implements Cache {
 
@@ -22,17 +21,23 @@ class ApcuCache implements Cache {
 	 *
 	 * @var string
 	 */
-	private const PREFIX = 'queuety:';
+	private readonly string $prefix;
 
 	/**
 	 * Constructor.
 	 *
+	 * @param string $namespace Stable installation identity.
 	 * @throws \RuntimeException If the APCu extension is not available.
+	 * @throws \InvalidArgumentException If the namespace is empty.
 	 */
-	public function __construct() {
-		if ( ! function_exists( 'apcu_store' ) ) {
+	public function __construct( string $namespace ) {
+		if ( '' === trim( $namespace ) ) {
+			throw new \InvalidArgumentException( 'An installation namespace is required for APCu.' );
+		}
+		if ( ! function_exists( 'apcu_store' ) || ! apcu_enabled() ) {
 			throw new \RuntimeException( 'APCu extension is not available. Install php-apcu to use ApcuCache.' );
 		}
+		$this->prefix = 'queuety:' . hash( 'sha256', $namespace ) . ':';
 	}
 
 	/**
@@ -43,7 +48,7 @@ class ApcuCache implements Cache {
 	 */
 	public function get( string $key ): mixed {
 		$success = false;
-		$value   = apcu_fetch( self::PREFIX . $key, $success );
+		$value   = apcu_fetch( $this->prefix . $key, $success );
 
 		if ( ! $success ) {
 			return null;
@@ -60,7 +65,7 @@ class ApcuCache implements Cache {
 	 * @param int    $ttl   Time-to-live in seconds. 0 means no expiry.
 	 */
 	public function set( string $key, mixed $value, int $ttl = 0 ): void {
-		apcu_store( self::PREFIX . $key, $value, $ttl );
+		apcu_store( $this->prefix . $key, $value, $ttl );
 	}
 
 	/**
@@ -69,7 +74,7 @@ class ApcuCache implements Cache {
 	 * @param string $key Cache key.
 	 */
 	public function delete( string $key ): void {
-		apcu_delete( self::PREFIX . $key );
+		apcu_delete( $this->prefix . $key );
 	}
 
 	/**
@@ -79,7 +84,7 @@ class ApcuCache implements Cache {
 	 * @return bool
 	 */
 	public function has( string $key ): bool {
-		return apcu_exists( self::PREFIX . $key );
+		return apcu_exists( $this->prefix . $key );
 	}
 
 	/**
@@ -91,13 +96,13 @@ class ApcuCache implements Cache {
 	 * @return bool True if the value was set, false if the key already exists.
 	 */
 	public function add( string $key, mixed $value, int $ttl = 0 ): bool {
-		return apcu_add( self::PREFIX . $key, $value, $ttl );
+		return apcu_add( $this->prefix . $key, $value, $ttl );
 	}
 
 	/**
-	 * Remove all items from the cache.
+	 * Remove this installation's items without clearing unrelated APCu entries.
 	 */
 	public function flush(): void {
-		apcu_clear_cache();
+		apcu_delete( new \APCUIterator( '/^' . preg_quote( $this->prefix, '/' ) . '/' ) );
 	}
 }

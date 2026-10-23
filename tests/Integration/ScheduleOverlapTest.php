@@ -118,7 +118,7 @@ class ScheduleOverlapTest extends IntegrationTestCase {
 		// Complete the first job.
 		$job = $this->queue->claim();
 		$this->assertNotNull( $job );
-		$this->queue->complete( $job->id );
+		$this->queue->complete( $job->id, $job->claim_token );
 
 		// Second tick: should enqueue because previous is completed.
 		$this->force_due( 'SkipCompleteHandler' );
@@ -173,7 +173,7 @@ class ScheduleOverlapTest extends IntegrationTestCase {
 		// Complete the first job.
 		$job = $this->queue->claim();
 		$this->assertNotNull( $job );
-		$this->queue->complete( $job->id );
+		$this->queue->complete( $job->id, $job->claim_token );
 
 		// Second tick: should enqueue because previous completed.
 		$this->force_due( 'BufferCompleteHandler' );

@@ -41,6 +41,12 @@ readonly class Job {
 	 * @param string|null               $concurrency_group Optional global concurrency group name.
 	 * @param int|null                  $concurrency_limit Optional maximum concurrent jobs for the group.
 	 * @param int                       $cost_units        Relative execution cost units for guardrails.
+	 * @param string|null               $claim_token       Opaque ownership token for the current attempt.
+	 * @param \DateTimeImmutable|null   $lease_expires_at  Database deadline for claim ownership.
+	 * @param \DateTimeImmutable|null   $action_deadline_at Database deadline for executing this action.
+	 * @param int                       $revision          Mutation revision, independent of retry attempts.
+	 * @param string|null               $dispatch_key      Hashed dispatch identity, if deduplicated.
+	 * @param int|null                  $workflow_revision Workflow control revision captured at claim time.
 	 */
 	public function __construct(
 		public int $id,
@@ -66,6 +72,12 @@ readonly class Job {
 		public ?string $concurrency_group = null,
 		public ?int $concurrency_limit = null,
 		public int $cost_units = 1,
+		public ?string $claim_token = null,
+		public ?\DateTimeImmutable $lease_expires_at = null,
+		public ?\DateTimeImmutable $action_deadline_at = null,
+		public int $revision = 0,
+		public ?string $dispatch_key = null,
+		public ?int $workflow_revision = null,
 	) {}
 
 	/**
@@ -97,14 +109,14 @@ readonly class Job {
 			status: JobStatus::from( is_int( $status_value ) || is_string( $status_value ) ? $status_value : '' ),
 			attempts: self::row_int( $row, 'attempts' ),
 			max_attempts: self::row_int( $row, 'max_attempts' ),
-			available_at: new \DateTimeImmutable( self::row_string( $row, 'available_at' ) ),
+			available_at: new \DateTimeImmutable( self::row_string( $row, 'available_at' ), new \DateTimeZone( 'UTC' ) ),
 			reserved_at: self::row_datetime( $row, 'reserved_at' ),
 			completed_at: self::row_datetime( $row, 'completed_at' ),
 			failed_at: self::row_datetime( $row, 'failed_at' ),
 			error_message: is_string( $error_message ) ? $error_message : null,
 			workflow_id: self::row_nullable_int( $row, 'workflow_id' ),
 			step_index: self::row_nullable_int( $row, 'step_index' ),
-			created_at: new \DateTimeImmutable( self::row_string( $row, 'created_at' ) ),
+			created_at: new \DateTimeImmutable( self::row_string( $row, 'created_at' ), new \DateTimeZone( 'UTC' ) ),
 			payload_hash: is_string( $payload_hash ) ? $payload_hash : null,
 			depends_on: self::row_nullable_int( $row, 'depends_on' ),
 			batch_id: self::row_nullable_int( $row, 'batch_id' ),
@@ -112,6 +124,12 @@ readonly class Job {
 			concurrency_group: self::row_nullable_string( $row, 'concurrency_group' ),
 			concurrency_limit: self::row_nullable_int( $row, 'concurrency_limit' ),
 			cost_units: array_key_exists( 'cost_units', $row ) ? max( 0, self::row_int( $row, 'cost_units' ) ) : 1,
+			claim_token: self::row_nullable_string( $row, 'claim_token' ),
+			lease_expires_at: self::row_datetime( $row, 'lease_expires_at' ),
+			action_deadline_at: self::row_datetime( $row, 'action_deadline_at' ),
+			revision: self::row_int( $row, 'revision' ),
+			dispatch_key: self::row_nullable_string( $row, 'dispatch_key' ),
+			workflow_revision: self::row_nullable_int( $row, 'workflow_revision' ),
 		);
 	}
 
@@ -176,7 +194,7 @@ readonly class Job {
 		if ( ! is_string( $value ) || '' === $value ) {
 			return null;
 		}
-		return new \DateTimeImmutable( $value );
+		return new \DateTimeImmutable( $value, new \DateTimeZone( 'UTC' ) );
 	}
 
 	/**

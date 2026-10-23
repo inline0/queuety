@@ -26,12 +26,7 @@ class DispatchableTest extends TestCase {
 		parent::setUp();
 
 		try {
-			$dsn = sprintf(
-				'mysql:host=%s;dbname=%s;charset=utf8mb4',
-				QUEUETY_TEST_DB_HOST,
-				QUEUETY_TEST_DB_NAME
-			);
-			new \PDO( $dsn, QUEUETY_TEST_DB_USER, QUEUETY_TEST_DB_PASS );
+			( new Connection( QUEUETY_TEST_DB_HOST, QUEUETY_TEST_DB_NAME, QUEUETY_TEST_DB_USER, QUEUETY_TEST_DB_PASS ) )->pdo();
 
 			$conn = new Connection(
 				host: QUEUETY_TEST_DB_HOST,
@@ -42,8 +37,8 @@ class DispatchableTest extends TestCase {
 			);
 
 			Queuety::reset();
-			Queuety::init( $conn );
 			\Queuety\Schema::install( $conn );
+			Queuety::init( $conn );
 			$this->has_db = true;
 		} catch ( \PDOException $e ) {
 			// No database.
@@ -119,7 +114,7 @@ class DispatchableTest extends TestCase {
 		$this->assertNotNull( $job );
 		$this->assertSame( $first_id, $job->id );
 		$this->assertSame( 'first', $job->payload['label'] );
-		Queuety::queue()->complete( $job->id );
+		Queuety::queue()->complete( $job->id, $job->claim_token );
 		$next = Queuety::queue()->claim();
 		$this->assertNotNull( $next );
 		$this->assertSame( 'step1', $next->payload['label'] );

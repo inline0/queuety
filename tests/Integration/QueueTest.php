@@ -109,8 +109,8 @@ class QueueTest extends IntegrationTestCase {
 
 	public function test_complete_sets_status_and_completed_at(): void {
 		$id = $this->queue->dispatch( 'h' );
-		$this->queue->claim();
-		$this->queue->complete( $id );
+		$claim = $this->queue->claim();
+		$this->queue->complete( $id, $claim->claim_token );
 
 		$job = $this->queue->find( $id );
 
@@ -122,8 +122,8 @@ class QueueTest extends IntegrationTestCase {
 
 	public function test_fail_sets_status_failed_at_and_error_message(): void {
 		$id = $this->queue->dispatch( 'h' );
-		$this->queue->claim();
-		$this->queue->fail( $id, 'Something went wrong' );
+		$claim = $this->queue->claim();
+		$this->queue->fail( $id, 'Something went wrong', $claim->claim_token );
 
 		$job = $this->queue->find( $id );
 
@@ -136,8 +136,8 @@ class QueueTest extends IntegrationTestCase {
 
 	public function test_bury_sets_status_to_buried(): void {
 		$id = $this->queue->dispatch( 'h' );
-		$this->queue->claim();
-		$this->queue->bury( $id, 'Dead letter' );
+		$claim = $this->queue->claim();
+		$this->queue->bury( $id, 'Dead letter', $claim->claim_token );
 
 		$job = $this->queue->find( $id );
 
@@ -149,8 +149,8 @@ class QueueTest extends IntegrationTestCase {
 
 	public function test_retry_resets_to_pending_with_delay(): void {
 		$id = $this->queue->dispatch( 'h' );
-		$this->queue->claim();
-		$this->queue->fail( $id, 'err' );
+		$claim = $this->queue->claim();
+		$this->queue->fail( $id, 'err', $claim->claim_token );
 
 		$this->queue->retry( $id, 60 );
 
@@ -170,7 +170,7 @@ class QueueTest extends IntegrationTestCase {
 		$this->queue->claim();
 
 		$job_before = $this->queue->find( $id );
-		$this->queue->release( $id );
+		$this->queue->release( $id, $job_before->claim_token );
 
 		$job_after = $this->queue->find( $id );
 
@@ -297,10 +297,10 @@ class QueueTest extends IntegrationTestCase {
 		$id = $this->queue->dispatch( 'h' );
 		$this->queue->claim();
 
-		// Backdate reserved_at to make it stale.
+		// Expire ownership without relying on the old shared heartbeat timeout.
 		$this->raw_update(
 			'queuety_jobs',
-			array( 'reserved_at' => gmdate( 'Y-m-d H:i:s', time() - 700 ) ),
+			array( 'lease_expires_at' => gmdate( 'Y-m-d H:i:s', time() - 1 ) ),
 			array( 'id' => $id ),
 		);
 

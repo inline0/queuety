@@ -20,11 +20,7 @@ class CacheFactoryTest extends TestCase {
 		$this->assertInstanceOf( Cache::class, $cache );
 	}
 
-	public function test_create_returns_memory_cache_when_apcu_not_available(): void {
-		if ( function_exists( 'apcu_store' ) && apcu_enabled() ) {
-			$this->markTestSkipped( 'APCu is available; cannot test MemoryCache fallback.' );
-		}
-
+	public function test_create_defaults_to_process_local_memory_even_with_apcu(): void {
 		$cache = CacheFactory::create();
 		$this->assertInstanceOf( MemoryCache::class, $cache );
 	}
@@ -34,7 +30,7 @@ class CacheFactoryTest extends TestCase {
 			$this->markTestSkipped( 'APCu is not available.' );
 		}
 
-		$cache = CacheFactory::create();
+		$cache = CacheFactory::create( 'factory-shared-test' );
 		$this->assertInstanceOf( ApcuCache::class, $cache );
 	}
 

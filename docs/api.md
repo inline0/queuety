@@ -33,7 +33,7 @@ registration path still require WordPress.
 
 ### `Queuety::init( Connection $conn )`
 
-Initialize Queuety with a direct DB-backed connection.
+Initialize Queuety with a direct DB-backed connection and an already installed, compatible schema. This performs no migrations.
 
 ```php
 use Queuety\Connection;
@@ -66,16 +66,36 @@ $conn = new Connection(
 
 That resolves tables such as `queuety_jobs` to `wp_themequeue_jobs`.
 
-### `Queuety::ensure_schema()`
+### `Queuety::ensure_schema( ?Connection $conn = null )`
 
-Ensure the Queuety runtime tables exist for the active connection.
+Explicitly install or upgrade the runtime schema during deployment. Pass the connection before first initialization; omitting it uses the active connection. Workers must be drained before an upgrade.
 
 ```php
+Queuety::ensure_schema( $conn );
 Queuety::init( $conn );
-Queuety::ensure_schema();
 ```
 
 For the full model and the WordPress boundary, see [Standalone Use](/docs/features/standalone-use).
+
+### `Queuety::tick( string|array $queue_name = 'default', int $action_seconds = 20, int $lease_seconds = 30 ): ?Job`
+
+Attempt one admitted action without maintenance. Returns its original claim or
+null if no work was admitted. Read the durable job state for its outcome. The
+lease must exceed the positive action budget. Handlers apply
+`ExecutionContext::remaining_seconds()` to their transports.
+
+### `Queuety::maintenance_batch( int $limit = 100, int $cursor = 0 ): array`
+
+Run one maintenance phase over at most `limit` records (1 to 1000). Returns
+`['cursor' => $nextPhase, 'processed' => $count]`. Persist the cursor (0 to 4) and
+cycle it on subsequent wakeups. See [Standalone Use](/docs/features/standalone-use).
+
+### `ExecutionContext::on_completion( callable $callback ): void`
+
+Stage database-only writes within the fenced completion transaction. The callback
+receives the owning `Connection` and original claimed `Job`. Failure rolls back
+checkpoint, workflow state, completion and next dispatch. See
+[Workers](/docs/features/workers#atomic-application-checkpoints) for constraints.
 
 ## Jobs
 
@@ -981,7 +1001,7 @@ Default cache TTL in seconds (default: `5`). Set this constant in `wp-config.php
 define( 'QUEUETY_CACHE_TTL', 10 );
 ```
 
-See [Caching](/docs/features/caching) for details on backends and auto-detection.
+See [Caching](/docs/features/caching) for details on the memory default and scoped shared backends.
 
 ## State-machine event log
 
@@ -1311,7 +1331,7 @@ Static helper for sending activity heartbeats from inside step handlers and stre
 
 | Method | Description |
 |---|---|
-| `Heartbeat::init( int $job_id, Connection $conn )` | Set the job context. Called automatically by the worker. |
+| `Heartbeat::init( int $job_id, Connection $conn, ?string $claim_token = null, int $lease_seconds = 600 )` | Set the job context. Called automatically by the worker. |
 | `Heartbeat::beat( array $progress = [] )` | Send a heartbeat. Updates `reserved_at` and optionally stores progress data in `heartbeat_data`. |
 | `Heartbeat::clear()` | Clear the job context. Called automatically by the worker. |
 | `Heartbeat::current_job_id()` | Get the current job ID (for testing). |

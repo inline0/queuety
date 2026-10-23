@@ -200,7 +200,7 @@ class WorkerTest extends IntegrationTestCase {
 		// Backdate reserved_at to make it stale.
 		$this->raw_update(
 			'queuety_jobs',
-			array( 'reserved_at' => gmdate( 'Y-m-d H:i:s', time() - 700 ) ),
+			array( 'lease_expires_at' => gmdate( 'Y-m-d H:i:s', time() - 700 ) ),
 			array( 'id' => $id ),
 		);
 
@@ -219,7 +219,7 @@ class WorkerTest extends IntegrationTestCase {
 		// Backdate reserved_at.
 		$this->raw_update(
 			'queuety_jobs',
-			array( 'reserved_at' => gmdate( 'Y-m-d H:i:s', time() - 700 ) ),
+			array( 'lease_expires_at' => gmdate( 'Y-m-d H:i:s', time() - 700 ) ),
 			array( 'id' => $id ),
 		);
 

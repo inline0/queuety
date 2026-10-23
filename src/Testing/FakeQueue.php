@@ -57,6 +57,7 @@ class FakeQueue extends Queue {
 	 * @param string|null          $concurrency_group Shared worker admission group.
 	 * @param int|null             $concurrency_limit Maximum concurrent jobs in that group.
 	 * @param int                  $cost_units        Relative execution cost.
+	 * @param string|null          $dispatch_key      Durable idempotency key. Real database semantics require integration tests.
 	 * @return int
 	 */
 	public function dispatch(
@@ -74,8 +75,9 @@ class FakeQueue extends Queue {
 		?string $concurrency_group = null,
 		?int $concurrency_limit = null,
 		int $cost_units = 1,
+		?string $dispatch_key = null,
 	): int {
-		unset( $priority, $delay, $max_attempts, $workflow_id, $step_index, $unique, $depends_on, $batch_id, $concurrency_group, $concurrency_limit, $cost_units );
+		unset( $priority, $delay, $max_attempts, $workflow_id, $step_index, $unique, $depends_on, $batch_id, $concurrency_group, $concurrency_limit, $cost_units, $dispatch_key );
 
 		$this->fake->push( $handler, $payload, $queue );
 

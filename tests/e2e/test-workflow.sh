@@ -10,23 +10,24 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 DB_HOST="${QUEUETY_TEST_DB_HOST:-127.0.0.1}"
+DB_HOST_PDO="${DB_HOST/:/;port=}"
 DB_NAME="${QUEUETY_TEST_DB_NAME:-queuety_test}"
 DB_USER="${QUEUETY_TEST_DB_USER:-root}"
 DB_PASS="${QUEUETY_TEST_DB_PASS:-}"
 DB_PREFIX="${QUEUETY_TEST_DB_PREFIX:-e2e_}"
 
 # Check MySQL is available.
-if ! php -r "new PDO('mysql:host=${DB_HOST}', '${DB_USER}', '${DB_PASS}');" 2>/dev/null; then
+if ! php -d zend.assertions=1 -d assert.exception=1 -r "new PDO('mysql:host=${DB_HOST_PDO}', '${DB_USER}', '${DB_PASS}');" 2>/dev/null; then
     echo "SKIP: MySQL not available at ${DB_HOST}"
     exit 0
 fi
 
-php -r "
-    \$pdo = new PDO('mysql:host=${DB_HOST}', '${DB_USER}', '${DB_PASS}');
+php -d zend.assertions=1 -d assert.exception=1 -r "
+    \$pdo = new PDO('mysql:host=${DB_HOST_PDO}', '${DB_USER}', '${DB_PASS}');
     \$pdo->exec('CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`');
 "
 
-php -r "
+php -d zend.assertions=1 -d assert.exception=1 -r "
     require '${PROJECT_DIR}/vendor/autoload.php';
 
     use Queuety\Connection;
@@ -175,17 +176,16 @@ php -r "
         ->then(Step3::class)
         ->dispatch([]);
 
-    // Pause before step 0 completes so the current step can finish, but the next
-    // step is not enqueued until resume.
+    // Pausing revokes active claims and prevents pending steps from starting.
     Queuety::pause_workflow(\$wf_id2);
     \$status = Queuety::workflow_status(\$wf_id2);
     assert(\$status->status === WorkflowStatus::Paused, 'Should be paused');
 
-    // Process step 0 while paused. The workflow advances, but step 1 is not enqueued yet.
+    // A paused step cannot be claimed or advanced.
     \$worker->run('default', true);
     \$status = Queuety::workflow_status(\$wf_id2);
     assert(\$status->status === WorkflowStatus::Paused, 'Should remain paused');
-    assert(\$status->current_step === 1, 'Should have advanced to step 1 position');
+    assert(\$status->current_step === 0, 'Paused workflow must not advance');
     assert(\$queue_ops->claim('default') === null, 'Next step should not be enqueued while paused');
 
     // Resume.
@@ -193,7 +193,8 @@ php -r "
     \$status = Queuety::workflow_status(\$wf_id2);
     assert(\$status->status === WorkflowStatus::Running, 'Should be running again');
 
-    // Process remaining steps.
+    // Process all three steps after the pause.
+    \$worker->run('default', true);
     \$worker->run('default', true);
     \$worker->run('default', true);
     \$status = Queuety::workflow_status(\$wf_id2);

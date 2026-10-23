@@ -145,9 +145,9 @@ class StreamingStepTest extends IntegrationTestCase {
 
 		// Simulate a partial failure: manually insert 3 chunks as if the previous
 		// attempt persisted them before crashing.
-		$this->chunk_store->append_chunk( $job->id, 0, 'chunk_0', $job->workflow_id, $job->step_index );
-		$this->chunk_store->append_chunk( $job->id, 1, 'chunk_1', $job->workflow_id, $job->step_index );
-		$this->chunk_store->append_chunk( $job->id, 2, 'chunk_2', $job->workflow_id, $job->step_index );
+		$this->chunk_store->append_chunk( $job->id, 0, 'chunk_0', $job->workflow_id, $job->step_index, $job->claim_token );
+		$this->chunk_store->append_chunk( $job->id, 1, 'chunk_1', $job->workflow_id, $job->step_index, $job->claim_token );
+		$this->chunk_store->append_chunk( $job->id, 2, 'chunk_2', $job->workflow_id, $job->step_index, $job->claim_token );
 
 		// Process the job. ResumableStreamingStep skips existing chunks.
 		$this->worker->process_job( $job );
@@ -271,9 +271,9 @@ class StreamingStepTest extends IntegrationTestCase {
 		$this->assertSame( 0, $this->chunk_store->chunk_count( $job->id ) );
 
 		// Manually insert chunks to test chunk_count.
-		$this->chunk_store->append_chunk( $job->id, 0, 'a', $job->workflow_id, $job->step_index );
-		$this->chunk_store->append_chunk( $job->id, 1, 'b', $job->workflow_id, $job->step_index );
-		$this->chunk_store->append_chunk( $job->id, 2, 'c', $job->workflow_id, $job->step_index );
+		$this->chunk_store->append_chunk( $job->id, 0, 'a', $job->workflow_id, $job->step_index, $job->claim_token );
+		$this->chunk_store->append_chunk( $job->id, 1, 'b', $job->workflow_id, $job->step_index, $job->claim_token );
+		$this->chunk_store->append_chunk( $job->id, 2, 'c', $job->workflow_id, $job->step_index, $job->claim_token );
 
 		$this->assertSame( 3, $this->chunk_store->chunk_count( $job->id ) );
 

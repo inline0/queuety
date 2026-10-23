@@ -10,150 +10,119 @@ meta_description: "Use Neuron agents inside Queuety planner/executor workflows w
 
 # Neuron Planner / Executor
 
-This example uses Queuety for orchestration and Neuron for the actual agent execution.
+One Queuety workflow performs one specialist inference. A parent workflow plans tasks, starts the children, and waits for their durable results. Neuron supplies a provider adapter without running a second agent loop. This example uses the [pinned integration contract](/docs/examples).
 
-The pattern is straightforward. A Queuety planner step decides what work exists, `start_agents()` turns those tasks into independent top-level workflows, each child workflow runs a Neuron agent, and `wait_for_agents()` aggregates the results back into the parent workflow.
+## A provider with a bounded HTTP client
 
-## Why this split works well
-
-Neuron is good at switching providers with minimal code changes and encapsulating the prompt, tools, and memory for a specialist agent. Queuety is good at durable for-each and completion modes, retries, resumability, and the inspection or human-review surfaces around the run.
-
-## Step 1: create a provider-switchable Neuron agent
-
+<!-- executable: provider-factory -->
 ```php
 namespace App\Neuron;
 
-use NeuronAI\Agent\Agent;
+use NeuronAI\Agent\SystemPrompt;
+use NeuronAI\HttpClient\Curl\CurlHttpClient;
+use NeuronAI\HttpClient\HttpClientInterface;
 use NeuronAI\Providers\AIProviderInterface;
 use NeuronAI\Providers\Anthropic\Anthropic;
 use NeuronAI\Providers\Gemini\Gemini;
 use NeuronAI\Providers\OpenAI\Responses\OpenAIResponses;
-use NeuronAI\SystemPrompt;
+use Queuety\ExecutionContext;
 
-final class ResearchAgent extends Agent
+final class ProviderFactory
 {
-    public function __construct(
-        private readonly string $providerName = 'openai',
-    ) {}
-
-    protected function provider(): AIProviderInterface
-    {
-        return match ($this->providerName) {
-            'anthropic' => new Anthropic(
-                key: $_ENV['ANTHROPIC_API_KEY'],
-                model: $_ENV['ANTHROPIC_MODEL'],
-            ),
-            'gemini' => new Gemini(
-                key: $_ENV['GEMINI_API_KEY'],
-                model: $_ENV['GEMINI_MODEL'],
-            ),
-            default => new OpenAIResponses(
-                key: $_ENV['OPENAI_API_KEY'],
-                model: $_ENV['OPENAI_MODEL'],
-            ),
-        };
-    }
-
-    public function instructions(): string
-    {
-        return (string) new SystemPrompt(
-            background: [
-                'You are a research agent.',
-                'Return concise, source-aware summaries for the assigned topic.',
-            ],
+    public static function make(
+        string $name,
+        string $key,
+        string $model,
+        ?HttpClientInterface $http = null,
+    ): AIProviderInterface {
+        $remaining = ExecutionContext::remaining_seconds() ?? 20.0;
+        $timeout = min(12.0, $remaining - 2.0);
+        if ($timeout <= 0.0) {
+            throw new \RuntimeException('No provider budget remains.');
+        }
+        $http ??= new CurlHttpClient(
+            timeout: $timeout,
+            connectTimeout: min(2.0, $timeout),
         );
+        $provider = match ($name) {
+            'anthropic' => new Anthropic($key, $model, httpClient: $http),
+            'gemini' => new Gemini($key, $model, httpClient: $http),
+            'openai' => new OpenAIResponses($key, $model, httpClient: $http),
+            default => throw new \InvalidArgumentException('Unknown provider.'),
+        };
+        return $provider->systemPrompt((string) new SystemPrompt(
+            background: ['Return a concise summary of the assigned topic.'],
+        ));
     }
 }
 ```
 
-The useful part here is that the workflow can choose the provider at runtime by passing `provider` in workflow state.
+Create a fresh provider for each action. In production, the injected client must enforce the same remaining budget. A response that requests tools must be persisted and handed to Queuety's next action; the provider adapter does not execute the tool.
 
-## Step 2: run the Neuron agent inside a Queuety step
+## One inference step
 
 ```php
 namespace App\Workflow\Steps;
 
-use App\Neuron\ResearchAgent;
+use App\Ai\Credentials;
+use App\Neuron\ProviderFactory;
+use NeuronAI\Chat\Messages\ToolCallMessage;
 use NeuronAI\Chat\Messages\UserMessage;
+use Queuety\ExecutionContext;
 use Queuety\Step;
 
 final class ResearchTopicStep implements Step
 {
     public function handle(array $state): array
     {
-        $agent = new ResearchAgent(
-            providerName: $state['provider'] ?? 'openai',
+        $credential = Credentials::forRun($state['credential_reference']);
+        $provider = ProviderFactory::make(
+            $credential->provider,
+            $credential->key,
+            $credential->model,
         );
-
-        $message = $agent->chat(
-            new UserMessage(sprintf(
-                "Research the topic '%s' for brief %d. Return a compact bullet summary.",
-                $state['topic'],
-                $state['brief_id'],
-            ))
-        )->getMessage();
-
-        return [
-            'summary' => $message->getContent(),
-        ];
+        ExecutionContext::assert_active();
+        $response = $provider->chat(new UserMessage(
+            sprintf('Research %s for brief %d.', $state['topic'], $state['brief_id'])
+        ));
+        ExecutionContext::assert_active();
+        $message = $response->message();
+        if ($message instanceof ToolCallMessage) {
+            throw new \RuntimeException('This text-only step does not accept tools.');
+        }
+        return ['summary' => $message->getContent()];
     }
 
     public function config(): array
     {
-        return [];
+        return ['max_attempts' => 1];
     }
 }
 ```
 
-This is the key integration point: Neuron handles the LLM call, but Queuety still owns the step boundary and persisted workflow state.
+A single attempt avoids silently reissuing an ambiguous paid request. The application can explicitly retry after reconciling its request record. Claim validation before and after the call fences the durable result; it cannot undo a provider request already sent.
 
-## Step 3: let the planner start agent runs
+## Dispatch independent specialist workflows
 
 ```php
 use Queuety\Enums\WaitMode;
 use Queuety\Queuety;
 
-$agent_workflow = Queuety::workflow('research_agent_run')
+$specialist = Queuety::workflow('research_agent_run')
     ->then(ResearchTopicStep::class);
 
 Queuety::workflow('brief_research')
-    ->version('brief-research.v1')
-    ->then(PlanResearchTasksStep::class) // writes $state['agent_tasks']
-    ->start_agents('agent_tasks', $agent_workflow)
+    ->version('brief-research.v2')
+    ->then(PlanResearchTasksStep::class)
+    ->start_agents('agent_tasks', $specialist)
     ->wait_for_agents(mode: WaitMode::All, result_key: 'agent_results')
     ->then(SynthesizeBriefStep::class)
     ->dispatch([
         'brief_id' => 42,
-        'provider' => 'anthropic',
+        'credential_reference' => 'research-service',
     ]);
 ```
 
-If `PlanResearchTasksStep` returns:
+`PlanResearchTasksStep` supplies `agent_tasks`, for example `[['topic' => 'pricing'], ['topic' => 'customer reviews']]`. Each task becomes an independently inspectable workflow. The parent resumes with completed child state under `agent_results`. Planning and synthesis classes are application steps; any model call in them follows the same one-request rule.
 
-```php
-[
-    'agent_tasks' => [
-        ['topic' => 'pricing'],
-        ['topic' => 'customer reviews'],
-        ['topic' => 'recent launches'],
-    ],
-]
-```
-
-Queuety will create one top-level workflow per task, wait until they are all complete, and then pass the finished child workflow state under `$state['agent_results']`.
-
-## Why not just call Neuron in a loop?
-
-You could do that, but you would lose the orchestration advantages:
-
-Each agent run would stop being individually inspectable, a partial crash would likely restart the whole batch, and there would be no clean completion point for later stages.
-
-This pattern keeps the agent code simple while letting Queuety own the durable orchestration.
-
-If the planner belongs to a longer-lived agent session, keep this workflow pattern for the execution layer and let a [state machine](/docs/state-machines) own the outer lifecycle.
-
-## Related docs
-
-- [Async Handoffs](/docs/workflows/async-handoffs)
-- [Agent Orchestration](/docs/workflows/agent-orchestration)
-- [State Machines](/docs/state-machines)
+See [agent orchestration](/docs/workflows/agent-orchestration) and [async handoffs](/docs/workflows/async-handoffs).

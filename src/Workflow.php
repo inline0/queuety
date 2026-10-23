@@ -18,6 +18,7 @@ use Queuety\Enums\Priority;
 use Queuety\Enums\WaitMode;
 use Queuety\Enums\WorkflowStatus;
 use Queuety\Exceptions\WorkflowConstraintViolationException;
+use Queuety\Exceptions\LostClaimException;
 
 /**
  * Workflow orchestration: step advancement, state accumulation, pause/resume/retry.
@@ -30,6 +31,36 @@ class Workflow {
 	 * @var int
 	 */
 	private const STATE_CACHE_TTL = 2;
+
+	/**
+	 * Claims locked by the current completion transaction.
+	 *
+	 * @var array<int, Job>
+	 */
+	private array $transition_claims = array();
+
+	/**
+	 * Deferred terminal job writes.
+	 *
+	 * @var array<int, array{status: string, error: string}>
+	 */
+	private array $terminal_jobs = array();
+
+	/**
+	 * Terminal dependencies whose waiters must transition before commit.
+	 *
+	 * @var array<int, true>
+	 */
+	private array $terminal_workflows = array();
+
+	/**
+	 * Compensation I/O deferred until the owning transaction commits.
+	 *
+	 * @var array<int, array<string, mixed>>
+	 */
+	private array $compensations_after_commit = array();
+
+
 
 	/**
 	 * Constructor.
@@ -49,6 +80,161 @@ class Workflow {
 		private readonly ?WorkflowEventLog $event_log = null,
 		private readonly ?ArtifactStore $artifacts = null,
 	) {}
+
+
+	/**
+	 * Start a transition with fresh dependency reads after acquiring parent locks.
+	 *
+	 * Repeatable-read snapshots could miss another child's committed completion
+	 * after waiting for the parent lock, leaving a satisfied wait parked forever.
+	 * This setting applies only to the next transaction on this connection.
+	 *
+	 * @param \PDO $pdo Connection not currently in a transaction.
+	 */
+	private function begin_transition( \PDO $pdo ): void {
+		$pdo->exec( 'SET TRANSACTION ISOLATION LEVEL READ COMMITTED' );
+		$pdo->beginTransaction();
+	}
+
+	/**
+	 * Discard staged effects even when the database already rolled back a deadlock.
+	 *
+	 * @param \PDO $pdo Failed transition connection.
+	 */
+	private function abort_transition( \PDO $pdo ): void {
+		try {
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+		} finally {
+			$this->transition_claims = array();
+			$this->terminal_jobs = array();
+			$this->terminal_workflows = array();
+			$this->compensations_after_commit = array();
+		}
+	}
+
+	/**
+	 * Validate the supplied attempt while holding the workflow and job locks.
+	 *
+	 * @param int      $workflow_id Workflow being changed.
+	 * @param int      $job_id      Originating job, or zero for an administrative transition.
+	 * @param Job|null $job         Explicit worker claim.
+	 * @throws LostClaimException When the attempt or workflow is no longer active.
+	 * @throws \RuntimeException When the workflow does not exist.
+	 * @param bool     $recover Whether to atomically recover an expired terminal attempt.
+	 */
+	private function guard_transition( int $workflow_id, int $job_id, ?Job $job, bool $recover = false ): void {
+		$job ??= ExecutionContext::job();
+		if ( null !== $job && $job->id !== $job_id ) {
+			throw new LostClaimException( $job_id );
+		}
+		if ( $job_id < 1 ) {
+			return;
+		}
+		$pdo = $this->conn->pdo();
+		$wf_table = $this->conn->table( Config::table_workflows() );
+		$job_table = $this->conn->table( Config::table_jobs() );
+		$stmt = $pdo->prepare( "SELECT status, current_step, revision FROM {$wf_table} WHERE id = :id FOR UPDATE" );
+		$stmt->execute( array( 'id' => $workflow_id ) );
+		$workflow = $this->as_row( $stmt->fetch() );
+		if ( null === $workflow ) {
+			throw new \RuntimeException( "Workflow {$workflow_id} not found." );
+		}
+		if ( $recover ) {
+			if ( null === $job || WorkflowStatus::Running->value !== $workflow['status']
+				|| $this->to_int( $workflow['current_step'] ) !== $job->step_index
+				|| ( null !== $job->workflow_revision && $this->to_int( $workflow['revision'] ) !== $job->workflow_revision )
+				|| ! $this->queue->recover( $job, bury: true ) ) {
+				throw new LostClaimException( $job_id );
+			}
+			return;
+		}
+		$stmt = $pdo->prepare( "SELECT * FROM {$job_table} WHERE id = :id FOR UPDATE" );
+		$stmt->execute( array( 'id' => $job_id ) );
+		$row = $this->as_row( $stmt->fetch() );
+		if ( null === $row || $this->to_int( $row['workflow_id'] ?? 0 ) !== $workflow_id ) {
+			throw new LostClaimException( $job_id );
+		}
+		if ( null === $job || null === $job->claim_token ) {
+			if ( ! empty( $row['claim_token'] ) || JobStatus::Processing->value === ( $row['status'] ?? null ) ) {
+				throw new LostClaimException( $job_id );
+			}
+			return;
+		}
+		$this->queue->assert_claim( $job_id, $job->claim_token, true );
+		if ( WorkflowStatus::Running->value !== $workflow['status']
+			|| $this->to_int( $workflow['current_step'] ) !== $job->step_index
+			|| ( null !== $job->workflow_revision && $this->to_int( $workflow['revision'] ) !== $job->workflow_revision ) ) {
+			throw new LostClaimException( $job_id );
+		}
+		$this->transition_claims[ $job_id ] = $job;
+	}
+
+	/**
+	 * Commit workflow state and staged receipt writes before completing each claim.
+	 *
+	 * @param \PDO $pdo Active transaction.
+	 */
+	private function commit_transition( \PDO $pdo ): void {
+		$reconciled = array();
+		while ( ! empty( $this->terminal_workflows ) ) {
+			$workflow_ids = array_keys( $this->terminal_workflows );
+			$this->terminal_workflows = array();
+			foreach ( $workflow_ids as $workflow_id ) {
+				if ( isset( $reconciled[ $workflow_id ] ) ) {
+					continue;
+				}
+				$reconciled[ $workflow_id ] = true;
+				$this->reconcile_waiting_for_workflows_for_dependency( $workflow_id );
+			}
+		}
+
+		foreach ( $this->transition_claims as $claim ) {
+			if ( null !== $claim->claim_token ) {
+				$this->queue->assert_claim( $claim->id, $claim->claim_token, true );
+			}
+		}
+		foreach ( $this->terminal_jobs as $job_id => $terminal ) {
+			$claim = $this->transition_claims[ $job_id ] ?? null;
+			if ( null === $claim ) {
+				continue;
+			}
+			if ( JobStatus::Completed->value === $terminal['status'] ) {
+				ExecutionContext::flush_completion( $this->conn, $claim );
+				$this->queue->complete( $job_id, $claim->claim_token );
+			} else {
+				$this->queue->bury( $job_id, $terminal['error'], $claim->claim_token );
+			}
+		}
+		$compensations = $this->compensations_after_commit;
+		$pdo->commit();
+		$this->transition_claims = array();
+		$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
+		foreach ( $compensations as $workflow_id => $state ) {
+			$this->run_compensations( $workflow_id, $state, 'failure' );
+		}
+	}
+
+	/**
+	 * Stage a terminal failure until all workflow writes are ready to commit.
+	 *
+	 * @param \PDO   $pdo     Active transaction.
+	 * @param int    $job_id  Job being buried.
+	 * @param string $error   Failure message.
+	 */
+	private function bury_transition_job( \PDO $pdo, int $job_id, string $error ): void {
+		if ( isset( $this->transition_claims[ $job_id ] ) ) {
+			$this->terminal_jobs[ $job_id ] = array(
+				'status' => JobStatus::Buried->value,
+				'error' => $error,
+			);
+			return;
+		}
+		$this->queue->bury( $job_id, $error );
+	}
 
 	/**
 	 * Coerce a mixed scalar to int, defaulting to 0 for non-scalar values.
@@ -1344,8 +1530,9 @@ class Workflow {
 	 *
 	 * @param array<int, int> $workflow_ids Workflow IDs.
 	 * @return array<int, array<string, mixed>>
+	 * @param bool            $lock Lock dependencies while enrolling a wait.
 	 */
-	private function fetch_workflow_rows_by_id( array $workflow_ids ): array {
+	private function fetch_workflow_rows_by_id( array $workflow_ids, bool $lock = false ): array {
 		if ( empty( $workflow_ids ) ) {
 			return array();
 		}
@@ -1363,7 +1550,7 @@ class Workflow {
 		$stmt = $this->conn->pdo()->prepare(
 			"SELECT id, status, state
 			FROM {$wf_tbl}
-			WHERE id IN (" . implode( ', ', $placeholders ) . ')'
+			WHERE id IN (" . implode( ', ', $placeholders ) . ')' . ( $lock ? ' ORDER BY id ASC FOR UPDATE' : '' )
 		);
 		$stmt->execute( $params );
 
@@ -1850,8 +2037,39 @@ class Workflow {
 	 * @param array<string, mixed> $state       Workflow state.
 	 * @param string               $reason      Reason for running compensation.
 	 * @return array<string, mixed> Updated workflow state.
+	 * @throws \Throwable When the transaction cannot commit.
 	 */
 	private function run_compensations( int $workflow_id, array $state, string $reason ): array {
+		$pdo = $this->conn->pdo();
+		$table = $this->conn->table( Config::table_workflows() );
+		$owner = bin2hex( random_bytes( 16 ) );
+		$this->begin_transition( $pdo );
+		try {
+			$stmt = $pdo->prepare( "SELECT status, state, revision FROM {$table} WHERE id = :id FOR UPDATE" );
+			$stmt->execute( array( 'id' => $workflow_id ) );
+			$row = $this->as_row( $stmt->fetch() );
+			if ( null === $row ) {
+				$pdo->commit();
+				return $state;
+			}
+			$state = $this->decode_state_column( $row['state'] );
+			if ( ! in_array( $row['status'], array( 'failed', 'cancelled' ), true ) || ! empty( $state['_compensated'] ) || ! empty( $state['_compensation_owner'] ) ) {
+				$pdo->commit();
+				return $state;
+			}
+			$revision = $this->to_int( $row['revision'] );
+			$state['_compensation_owner'] = $owner;
+			$state['_compensation_pending'] = true;
+			$this->persist_internal_state( $workflow_id, $state );
+			$pdo->commit();
+		} catch ( \Throwable $e ) {
+			$this->abort_transition( $pdo );
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+			throw $e;
+		}
+
 		if ( ! empty( $state['_compensated'] ) ) {
 			return $state;
 		}
@@ -1860,6 +2078,7 @@ class Workflow {
 		if ( ! is_array( $stack ) || empty( $stack ) ) {
 			$state['_compensated']        = true;
 			$state['_compensation_cause'] = $reason;
+			$this->persist_compensation( $workflow_id, $state, $revision, $owner );
 			return $state;
 		}
 
@@ -1876,11 +2095,19 @@ class Workflow {
 				continue;
 			}
 
+			$check = $pdo->prepare( "SELECT revision, state FROM {$table} WHERE id = :id" );
+			$check->execute( array( 'id' => $workflow_id ) );
+			$current = $this->as_row( $check->fetch() );
+			$current_state = $this->decode_state_column( $current['state'] ?? null );
+			if ( null === $current || $revision !== $this->to_int( $current['revision'] ) || ( $current_state['_compensation_owner'] ?? null ) !== $owner ) {
+				return $current_state;
+			}
+
 			try {
 				$instance = new $handler_class();
 
 				if ( $instance instanceof Compensation || method_exists( $instance, 'handle' ) ) {
-					$this->call_handler_method( $instance, 'handle', array( $snapshot ), $payload );
+					ExecutionContext::without_claim( fn() => $this->call_handler_method( $instance, 'handle', array( $snapshot ), $payload ) );
 				}
 			} catch ( \Throwable $e ) {
 				$this->logger->log(
@@ -1901,7 +2128,30 @@ class Workflow {
 		$state['_compensated']        = true;
 		$state['_compensation_cause'] = $reason;
 
+		$this->persist_compensation( $workflow_id, $state, $revision, $owner );
 		return $state;
+	}
+
+	/**
+	 * Publish a compensation result only while its administrative generation owns it.
+	 *
+	 * @param int                  $workflow_id Workflow ID.
+	 * @param array<string, mixed> $state       Compensation result.
+	 * @param int                  $revision    Claimed workflow revision.
+	 * @param string               $owner       Compensation ownership nonce.
+	 */
+	private function persist_compensation( int $workflow_id, array $state, int $revision, string $owner ): void {
+		$state['_compensation_pending'] = false;
+		$table = $this->conn->table( Config::table_workflows() );
+		$stmt = $this->conn->pdo()->prepare( "UPDATE {$table} SET state = :state WHERE id = :id AND revision = :revision AND JSON_UNQUOTE(JSON_EXTRACT(state, '$._compensation_owner')) = :owner" );
+		$stmt->execute(
+			array(
+				'state' => json_encode( $state, JSON_THROW_ON_ERROR ),
+				'id' => $workflow_id,
+				'revision' => $revision,
+				'owner' => $owner,
+			)
+		);
 	}
 
 	/**
@@ -1982,6 +2232,13 @@ class Workflow {
 	 * @param int  $job_id Job ID.
 	 */
 	private function mark_workflow_job_completed( \PDO $pdo, int $job_id ): void {
+		if ( isset( $this->transition_claims[ $job_id ] ) ) {
+			$this->terminal_jobs[ $job_id ] = array(
+				'status' => JobStatus::Completed->value,
+				'error' => '',
+			);
+			return;
+		}
 		$jb_tbl = $this->conn->table( Config::table_jobs() );
 		$stmt   = $pdo->prepare(
 			"UPDATE {$jb_tbl}
@@ -2338,9 +2595,14 @@ class Workflow {
 			default_cost_units: $default_cost,
 		);
 
+		$options['payload']['__workflow_dispatch'] = array(
+			'workflow_id' => $workflow_id,
+			'step_index' => $step_index,
+		);
 		$this->queue->dispatch(
 			handler: $handler,
 			payload: $options['payload'],
+			unique: true,
 			queue: $options['queue'],
 			priority: $options['priority'],
 			delay: null === $delay ? $options['delay'] : $delay,
@@ -2375,13 +2637,20 @@ class Workflow {
 
 		if ( 'parallel' === $type ) {
 			$parallel_step = is_array( $step_def ) ? $step_def : array();
-			foreach ( StepDispatchOptions::parallel_branches( $parallel_step ) as $branch ) {
+			$parallel_group = bin2hex( random_bytes( 16 ) );
+			foreach ( StepDispatchOptions::parallel_branches( $parallel_step ) as $branch_index => $branch ) {
 				$branch_def = StepDispatchOptions::merge_parallel_branch( $parallel_step, $branch );
 				$handler    = StepDispatchOptions::branch_handler( $branch_def );
 				$this->dispatch_step_job(
 					$branch_def,
 					$handler,
-					StepDispatchOptions::payload( $branch_def ),
+					array_merge(
+						StepDispatchOptions::payload( $branch_def ),
+						array(
+							'__parallel_branch' => $branch_index,
+							'__parallel_group' => $parallel_group,
+						)
+					),
 					$workflow_id,
 					$step_index,
 					$queue_name,
@@ -2501,20 +2770,30 @@ class Workflow {
 	 * @param int                  $workflow_id Workflow ID.
 	 * @param int                  $step_index  Step index.
 	 * @throws \Throwable If the database transaction fails.
+	 * @param Job|null             $job Current worker claim.
 	 */
-	private function enqueue_signal_step( array $step_def, int $workflow_id, int $step_index ): void {
+	private function enqueue_signal_step( array $step_def, int $workflow_id, int $step_index, ?Job $job = null ): void {
+		$job ??= ExecutionContext::job();
 		$pdo           = $this->conn->pdo();
 		$wf_tbl        = $this->conn->table( Config::table_workflows() );
 		$completed_ids = array();
 
-		$pdo->beginTransaction();
+		$this->begin_transition( $pdo );
 		try {
+			$this->guard_transition( $workflow_id, $job->id ?? 0, $job );
+			if ( null !== $job ) {
+				$this->mark_workflow_job_completed( $pdo, $job->id );
+			}
 			$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$wf_stmt->execute( array( 'id' => $workflow_id ) );
 			$wf_row = $this->as_row( $wf_stmt->fetch() );
 
 			if ( ! $wf_row ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 				return;
 			}
 
@@ -2528,7 +2807,7 @@ class Workflow {
 				$current_step !== $step_index
 				|| ! in_array( $status, array( WorkflowStatus::Running, WorkflowStatus::Paused, WorkflowStatus::WaitingForSignal ), true )
 			) {
-				$pdo->commit();
+				$this->commit_transition( $pdo );
 				return;
 			}
 
@@ -2594,11 +2873,16 @@ class Workflow {
 				}
 			}
 
-			$pdo->commit();
+			$this->commit_transition( $pdo );
 			$this->invalidate_workflow_cache( $workflow_id );
 		} catch ( \Throwable $e ) {
+			$this->abort_transition( $pdo );
 			if ( $pdo->inTransaction() ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 			}
 			throw $e;
 		}
@@ -2619,8 +2903,9 @@ class Workflow {
 	 * @throws WorkflowConstraintViolationException If the workflow exceeds a configured guardrail.
 	 * @throws \RuntimeException If the for-each step definition or source state is invalid.
 	 * @throws \Throwable If the database transaction fails.
+	 * @param Job|null             $job Current worker claim.
 	 */
-	public function handle_for_each_step( int $workflow_id, int $job_id, int $step_index, array $workflow_state ): bool {
+	public function handle_for_each_step( int $workflow_id, int $job_id, int $step_index, array $workflow_state, ?Job $job = null ): bool {
 		$pdo                   = $this->conn->pdo();
 		$wf_tbl                = $this->conn->table( Config::table_workflows() );
 		$jb_tbl                = $this->conn->table( Config::table_jobs() );
@@ -2629,14 +2914,19 @@ class Workflow {
 		$should_compensate     = false;
 		$terminal_ids          = array();
 
-		$pdo->beginTransaction();
+		$this->begin_transition( $pdo );
 		try {
+			$this->guard_transition( $workflow_id, $job_id, $job );
 			$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$wf_stmt->execute( array( 'id' => $workflow_id ) );
 			$wf_row = $this->as_row( $wf_stmt->fetch() );
 
 			if ( ! $wf_row ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 				return false;
 			}
 
@@ -2654,22 +2944,14 @@ class Workflow {
 			$job_row = $this->as_row( $job_stmt->fetch() );
 
 			if ( ! $job_row || JobStatus::Processing->value !== $job_row['status'] ) {
-				$pdo->commit();
+				$this->commit_transition( $pdo );
 				return false;
 			}
 
 			$current_step = $this->to_int( $wf_row['current_step'] ?? 0 );
 			if ( $current_step !== $step_index || ! in_array( $wf_row['status'], array( WorkflowStatus::Running->value, WorkflowStatus::Paused->value ), true ) ) {
-				$mark = $pdo->prepare(
-					"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
-				);
-				$mark->execute(
-					array(
-						'status' => JobStatus::Completed->value,
-						'id'     => $job_id,
-					)
-				);
-				$pdo->commit();
+				$this->mark_workflow_job_completed( $pdo, $job_id );
+				$this->commit_transition( $pdo );
 				return true;
 			}
 
@@ -2746,10 +3028,9 @@ class Workflow {
 					$should_log_completion = true;
 				}
 
-				$pdo->commit();
+				$this->commit_transition( $pdo );
 				if ( $should_compensate ) {
 					$state = $this->run_compensations( $workflow_id, $state, 'failure' );
-					$this->persist_internal_state( $workflow_id, $state );
 				}
 				$this->invalidate_workflow_cache( $workflow_id );
 
@@ -2785,12 +3066,17 @@ class Workflow {
 			$this->mark_workflow_job_completed( $pdo, $job_id );
 			$should_log_completion = true;
 
-			$pdo->commit();
+			$this->commit_transition( $pdo );
 			$this->invalidate_workflow_cache( $workflow_id );
 			return $should_log_completion;
 		} catch ( \Throwable $e ) {
+			$this->abort_transition( $pdo );
 			if ( $pdo->inTransaction() ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 			}
 			throw $e;
 		}
@@ -2799,13 +3085,15 @@ class Workflow {
 	/**
 	 * Record a terminal for-each branch failure and decide whether the workflow should fail.
 	 *
-	 * @param int    $workflow_id   Workflow ID.
-	 * @param int    $failed_job_id Failed branch job ID.
-	 * @param string $error_message Error message.
+	 * @param int      $workflow_id   Workflow ID.
+	 * @param int      $failed_job_id Failed branch job ID.
+	 * @param string   $error_message Error message.
 	 * @return bool True when the workflow failed as a result.
 	 * @throws \Throwable If the database transaction fails.
+	 * @param Job|null $job Current worker claim.
+	 * @param bool     $recover Whether to atomically recover an expired terminal attempt.
 	 */
-	public function handle_for_each_terminal_failure( int $workflow_id, int $failed_job_id, string $error_message ): bool {
+	public function handle_for_each_terminal_failure( int $workflow_id, int $failed_job_id, string $error_message, ?Job $job = null, bool $recover = false ): bool {
 		$pdo               = $this->conn->pdo();
 		$wf_tbl            = $this->conn->table( Config::table_workflows() );
 		$jb_tbl            = $this->conn->table( Config::table_jobs() );
@@ -2813,8 +3101,9 @@ class Workflow {
 		$should_compensate = false;
 		$workflow_failed   = false;
 
-		$pdo->beginTransaction();
+		$this->begin_transition( $pdo );
 		try {
+			$this->guard_transition( $workflow_id, $failed_job_id, $job, $recover );
 			$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$wf_stmt->execute( array( 'id' => $workflow_id ) );
 			$wf_row = $this->as_row( $wf_stmt->fetch() );
@@ -2824,27 +3113,16 @@ class Workflow {
 			$job_row = $this->as_row( $job_stmt->fetch() );
 
 			if ( ! $wf_row || ! $job_row ) {
-				$pdo->commit();
+				$this->commit_transition( $pdo );
 				return false;
 			}
 
-			if ( ! in_array( $job_row['status'], array( JobStatus::Pending->value, JobStatus::Processing->value ), true ) ) {
-				$pdo->commit();
+			if ( ! $recover && ! in_array( $job_row['status'], array( JobStatus::Pending->value, JobStatus::Processing->value ), true ) ) {
+				$this->commit_transition( $pdo );
 				return false;
 			}
 
-			$bury_stmt = $pdo->prepare(
-				"UPDATE {$jb_tbl}
-				SET status = :status, failed_at = NOW(), error_message = :error
-				WHERE id = :id"
-			);
-			$bury_stmt->execute(
-				array(
-					'status' => JobStatus::Buried->value,
-					'error'  => $error_message,
-					'id'     => $failed_job_id,
-				)
-			);
+			$this->bury_transition_job( $pdo, $failed_job_id, $error_message );
 
 			$state        = $this->decode_state_column( $wf_row['state'] ?? null );
 			$current_step = $this->to_int( $wf_row['current_step'] ?? 0 );
@@ -2855,14 +3133,14 @@ class Workflow {
 				|| $step_index !== $current_step
 				|| ! in_array( $wf_row['status'], array( WorkflowStatus::Running->value, WorkflowStatus::Paused->value ), true )
 			) {
-				$pdo->commit();
+				$this->commit_transition( $pdo );
 				return false;
 			}
 
 			$steps    = $this->as_steps( $state['_steps'] ?? array() );
 			$step_def = $steps[ $step_index ] ?? null;
 			if ( ! is_array( $step_def ) || 'for_each' !== ( $step_def['type'] ?? '' ) ) {
-				$pdo->commit();
+				$this->commit_transition( $pdo );
 				return false;
 			}
 
@@ -2904,7 +3182,7 @@ class Workflow {
 
 			if ( ! $this->for_each_completion_impossible( $step_def, $runtime ) ) {
 				$this->persist_internal_state( $workflow_id, $state );
-				$pdo->commit();
+				$this->commit_transition( $pdo );
 				$this->invalidate_workflow_cache( $workflow_id );
 				return false;
 			}
@@ -2913,20 +3191,25 @@ class Workflow {
 				$should_compensate = ! empty( $state['_compensate_on_failure'] );
 				$workflow_failed   = true;
 
-				$pdo->commit();
+				$this->commit_transition( $pdo );
 		} catch ( \Throwable $e ) {
+			$this->abort_transition( $pdo );
 			if ( $pdo->inTransaction() ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 			}
 			throw $e;
 		}
 
 		if ( $should_compensate ) {
 			$state = $this->run_compensations( $workflow_id, $state, 'failure' );
-			$this->persist_internal_state( $workflow_id, $state );
 		}
 
 		$this->invalidate_workflow_cache( $workflow_id );
+		$this->reconcile_waiting_for_workflows_for_dependency( $workflow_id );
 		return $workflow_failed;
 	}
 
@@ -2939,9 +3222,10 @@ class Workflow {
 	 * @param int                  $workflow_id The workflow ID.
 	 * @param array<string, mixed> $step_def    The signal step definition.
 	 * @param int                  $step_index  The step index.
+	 * @param Job|null             $job Current worker claim.
 	 */
-	public function handle_signal_step( int $workflow_id, array $step_def, int $step_index ): void {
-		$this->enqueue_signal_step( $step_def, $workflow_id, $step_index );
+	public function handle_signal_step( int $workflow_id, array $step_def, int $step_index, ?Job $job = null ): void {
+		$this->enqueue_signal_step( $step_def, $workflow_id, $step_index, $job );
 	}
 
 	/**
@@ -2952,8 +3236,10 @@ class Workflow {
 	 * @param int                  $step_index     Step index.
 	 * @param array<string, mixed> $workflow_state Current workflow state.
 	 * @throws \Throwable If the database transaction fails.
+	 * @param Job|null             $job Current worker claim.
 	 */
-	public function handle_wait_for_workflows_step( int $workflow_id, array $step_def, int $step_index, array $workflow_state ): void {
+	public function handle_wait_for_workflows_step( int $workflow_id, array $step_def, int $step_index, array $workflow_state, ?Job $job = null ): void {
+		$job ??= ExecutionContext::job();
 		$pdo               = $this->conn->pdo();
 		$wf_tbl            = $this->conn->table( Config::table_workflows() );
 		$should_compensate = false;
@@ -2961,14 +3247,22 @@ class Workflow {
 		$completed_ids     = array();
 		$terminal_ids      = array();
 
-		$pdo->beginTransaction();
+		$this->begin_transition( $pdo );
 		try {
+			$this->guard_transition( $workflow_id, $job->id ?? 0, $job );
+			if ( null !== $job ) {
+				$this->mark_workflow_job_completed( $pdo, $job->id );
+			}
 			$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$wf_stmt->execute( array( 'id' => $workflow_id ) );
 			$wf_row = $this->as_row( $wf_stmt->fetch() );
 
 			if ( ! $wf_row ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 				return;
 			}
 
@@ -2982,12 +3276,12 @@ class Workflow {
 				$current_step !== $step_index
 				|| ! in_array( $status, array( WorkflowStatus::Running, WorkflowStatus::Paused, WorkflowStatus::WaitingForWorkflows ), true )
 			) {
-				$pdo->commit();
+				$this->commit_transition( $pdo );
 				return;
 			}
 
 			$workflow_ids  = $this->resolve_wait_for_workflows_ids( $step_def, $state );
-			$workflow_rows = $this->fetch_workflow_rows_by_id( $workflow_ids );
+			$workflow_rows = $this->fetch_workflow_rows_by_id( $workflow_ids, true );
 			$evaluation    = $this->evaluate_wait_for_workflows_state( $step_def, $workflow_ids, $workflow_rows );
 
 			if ( 'satisfied' === $evaluation ) {
@@ -3059,17 +3353,21 @@ class Workflow {
 				$terminal_ids      = array( $workflow_id );
 			}
 
-			$pdo->commit();
+			$this->commit_transition( $pdo );
 		} catch ( \Throwable $e ) {
+			$this->abort_transition( $pdo );
 			if ( $pdo->inTransaction() ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 			}
 			throw $e;
 		}
 
 		if ( $should_compensate ) {
 			$state = $this->run_compensations( $workflow_id, $state, 'failure' );
-			$this->persist_internal_state( $workflow_id, $state );
 		}
 
 		$this->invalidate_workflow_cache( $workflow_id );
@@ -3161,8 +3459,11 @@ class Workflow {
 		$state_changed = false;
 		$completed_ids = array();
 
-		$pdo->beginTransaction();
+		$this->begin_transition( $pdo );
 		try {
+			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+			$stmt->execute( array( 'id' => $workflow_id ) );
+			$wf_row = $this->as_row( $stmt->fetch() );
 			// Signals are persisted even when the workflow is not waiting yet.
 			$ins = $pdo->prepare(
 				"INSERT INTO {$sig_tbl} (workflow_id, signal_name, payload)
@@ -3176,12 +3477,8 @@ class Workflow {
 				)
 			);
 
-			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
-			$stmt->execute( array( 'id' => $workflow_id ) );
-			$wf_row = $this->as_row( $stmt->fetch() );
-
 			if ( ! $wf_row ) {
-				$pdo->commit();
+				$this->commit_transition( $pdo );
 				return;
 			}
 
@@ -3210,10 +3507,15 @@ class Workflow {
 				}
 			}
 
-			$pdo->commit();
+			$this->commit_transition( $pdo );
 		} catch ( \Throwable $e ) {
+			$this->abort_transition( $pdo );
 			if ( $pdo->inTransaction() ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 			}
 			throw $e;
 		}
@@ -3234,6 +3536,15 @@ class Workflow {
 	 * @throws \Throwable If a dependent workflow reconciliation transaction fails.
 	 */
 	private function reconcile_waiting_for_workflows_for_dependency( int $dependency_workflow_id ): void {
+		if ( null !== ExecutionContext::job() && ! $this->conn->pdo()->inTransaction() ) {
+			ExecutionContext::without_claim(
+				function () use ( $dependency_workflow_id ): void {
+					$this->reconcile_waiting_for_workflows_for_dependency( $dependency_workflow_id );
+				}
+			);
+			return;
+		}
+
 		$pdo     = $this->conn->pdo();
 		$dep_tbl = $this->conn->table( Config::table_workflow_dependencies() );
 		$wf_tbl  = $this->conn->table( Config::table_workflows() );
@@ -3268,8 +3579,23 @@ class Workflow {
 			$should_compensate   = false;
 			$state               = array();
 
-			$pdo->beginTransaction();
+			$owns_transaction = ! $pdo->inTransaction();
+			if ( $owns_transaction ) {
+				$this->begin_transition( $pdo );
+			}
 			try {
+				$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+				$wf_stmt->execute( array( 'id' => $waiting_workflow_id ) );
+				$wf_row = $this->as_row( $wf_stmt->fetch() );
+
+				if ( ! $wf_row ) {
+					$this->clear_workflow_dependencies( $waiting_workflow_id, $step_index );
+					if ( $owns_transaction ) {
+						$this->commit_transition( $pdo );
+					}
+					continue;
+				}
+
 				if ( WorkflowStatus::Completed === $dependency_status ) {
 					$mark = $pdo->prepare(
 						"UPDATE {$dep_tbl}
@@ -3288,23 +3614,15 @@ class Workflow {
 					);
 				}
 
-				$wf_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
-				$wf_stmt->execute( array( 'id' => $waiting_workflow_id ) );
-				$wf_row = $this->as_row( $wf_stmt->fetch() );
-
-				if ( ! $wf_row ) {
-					$this->clear_workflow_dependencies( $waiting_workflow_id, $step_index );
-					$pdo->commit();
-					continue;
-				}
-
 				$state = $this->decode_state_column( $wf_row['state'] ?? null );
 				if (
 					WorkflowStatus::WaitingForWorkflows->value !== $wf_row['status']
 					|| $this->to_int( $wf_row['current_step'] ?? 0 ) !== $step_index
 				) {
 					$this->clear_workflow_dependencies( $waiting_workflow_id, $step_index );
-					$pdo->commit();
+					if ( $owns_transaction ) {
+						$this->commit_transition( $pdo );
+					}
 					$this->invalidate_workflow_cache( $waiting_workflow_id );
 					continue;
 				}
@@ -3325,7 +3643,9 @@ class Workflow {
 						)
 					);
 
-					$pdo->commit();
+					if ( $owns_transaction ) {
+						$this->commit_transition( $pdo );
+					}
 					$this->invalidate_workflow_cache( $waiting_workflow_id );
 					continue;
 				}
@@ -3353,22 +3673,32 @@ class Workflow {
 					$terminal_ids      = array( $waiting_workflow_id );
 				}
 
-				$pdo->commit();
+				if ( $owns_transaction ) {
+					$this->commit_transition( $pdo );
+				}
 			} catch ( \Throwable $e ) {
-				if ( $pdo->inTransaction() ) {
+				$this->abort_transition( $pdo );
+				if ( $owns_transaction && $pdo->inTransaction() ) {
 					$pdo->rollBack();
+					$this->transition_claims = array();
+					$this->terminal_jobs = array();
+					$this->terminal_workflows = array();
+					$this->compensations_after_commit = array();
 				}
 				throw $e;
 			}
 
 			if ( $should_compensate ) {
-				$state = $this->run_compensations( $waiting_workflow_id, $state, 'failure' );
-				$this->persist_internal_state( $waiting_workflow_id, $state );
+				if ( $owns_transaction ) {
+					$state = $this->run_compensations( $waiting_workflow_id, $state, 'failure' );
+				} else {
+					$this->compensations_after_commit[ $waiting_workflow_id ] = $state;
+				}
 			}
 
 			$this->invalidate_workflow_cache( $waiting_workflow_id );
 
-			foreach ( array_values( array_unique( $terminal_ids ) ) as $terminal_workflow_id ) {
+			foreach ( $owns_transaction ? array_values( array_unique( $terminal_ids ) ) : array() as $terminal_workflow_id ) {
 				if ( $terminal_workflow_id !== $dependency_workflow_id ) {
 					$this->reconcile_waiting_for_workflows_for_dependency( $terminal_workflow_id );
 				}
@@ -3379,23 +3709,26 @@ class Workflow {
 	/**
 	 * Count completed jobs for a specific workflow step.
 	 *
-	 * @param int $workflow_id Workflow ID.
-	 * @param int $step_index  Step index.
+	 * @param int         $workflow_id Workflow ID.
+	 * @param int         $step_index  Step index.
 	 * @return int Number of completed jobs.
+	 * @param string|null $parallel_group Current parallel occurrence, or legacy jobs.
 	 */
-	private function count_completed_jobs_for_step( int $workflow_id, int $step_index ): int {
+	private function count_completed_jobs_for_step( int $workflow_id, int $step_index, ?string $parallel_group ): int {
 		$jb_tbl = $this->conn->table( Config::table_jobs() );
 		$stmt   = $this->conn->pdo()->prepare(
 			"SELECT COUNT(*) AS cnt FROM {$jb_tbl}
 			WHERE workflow_id = :workflow_id
 				AND step_index = :step_index
-				AND status = :status"
+				AND status = :status
+				AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.__parallel_group')) <=> :parallel_group"
 		);
 		$stmt->execute(
 			array(
 				'workflow_id' => $workflow_id,
 				'step_index'  => $step_index,
 				'status'      => JobStatus::Completed->value,
+				'parallel_group' => $parallel_group,
 			)
 		);
 		$row = $this->as_row( $stmt->fetch() );
@@ -3415,15 +3748,20 @@ class Workflow {
 	 * @param int                  $duration_ms      Step execution duration in milliseconds.
 	 * @throws \RuntimeException If the workflow is not found or if _next_step target is invalid.
 	 * @throws \Throwable If the database transaction fails.
+	 * @param Job|null             $job Current worker claim.
 	 */
-	public function advance_step( int $workflow_id, int $completed_job_id, array $step_output, int $duration_ms = 0 ): void {
+	public function advance_step( int $workflow_id, int $completed_job_id, array $step_output, int $duration_ms = 0, ?Job $job = null ): void {
 		$pdo          = $this->conn->pdo();
 		$wf_tbl       = $this->conn->table( Config::table_workflows() );
 		$jb_tbl       = $this->conn->table( Config::table_jobs() );
 		$terminal_ids = array();
 
-		$pdo->beginTransaction();
+		$owns_transaction = ! $pdo->inTransaction();
+		if ( $owns_transaction ) {
+			$this->begin_transition( $pdo );
+		}
 		try {
+			$this->guard_transition( $workflow_id, $completed_job_id, $job );
 			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$stmt->execute( array( 'id' => $workflow_id ) );
 			$wf_row = $this->as_row( $stmt->fetch() );
@@ -3442,25 +3780,18 @@ class Workflow {
 
 			if ( ! in_array( $wf_row['status'], array( WorkflowStatus::Running->value, WorkflowStatus::Paused->value ), true ) ) {
 				if ( $this->is_completable_workflow_job_status( $this->to_string( $job_row['status'] ?? '' ) ) ) {
-					$stmt = $pdo->prepare(
-						"UPDATE {$jb_tbl}
-							SET status = :status, failed_at = NOW(), error_message = :error
-							WHERE id = :id"
-					);
-					$stmt->execute(
-						array(
-							'status' => JobStatus::Buried->value,
-							'error'  => 'Workflow advanced before job completion.',
-							'id'     => $completed_job_id,
-						)
-					);
+					$this->bury_transition_job( $pdo, $completed_job_id, 'Workflow advanced before job completion.' );
 				}
-				$pdo->commit();
+				if ( $owns_transaction ) {
+					$this->commit_transition( $pdo );
+				}
 				return;
 			}
 
 			if ( ! $this->is_completable_workflow_job_status( $this->to_string( $job_row['status'] ?? '' ) ) ) {
-				$pdo->commit();
+				if ( $owns_transaction ) {
+					$this->commit_transition( $pdo );
+				}
 				return;
 			}
 
@@ -3470,19 +3801,10 @@ class Workflow {
 				$steps        = $this->as_steps( $state['_steps'] ?? array() );
 
 			if ( $job_row['step_index'] !== null && $this->to_int( $job_row['step_index'] ?? 0 ) !== $current_step ) {
-				$stmt = $pdo->prepare(
-					"UPDATE {$jb_tbl}
-						SET status = :status, failed_at = NOW(), error_message = :error
-						WHERE id = :id"
-				);
-				$stmt->execute(
-					array(
-						'status' => JobStatus::Buried->value,
-						'error'  => 'Workflow advanced before job completion.',
-						'id'     => $completed_job_id,
-					)
-				);
-				$pdo->commit();
+				$this->bury_transition_job( $pdo, $completed_job_id, 'Workflow advanced before job completion.' );
+				if ( $owns_transaction ) {
+					$this->commit_transition( $pdo );
+				}
 				return;
 			}
 
@@ -3507,19 +3829,10 @@ class Workflow {
 				$runtime = $this->normalize_for_each_runtime( $runtime );
 
 				if ( ! empty( $runtime['settled'] ) ) {
-					$stmt = $pdo->prepare(
-						"UPDATE {$jb_tbl}
-							SET status = :status, failed_at = NOW(), error_message = :error
-							WHERE id = :id"
-					);
-					$stmt->execute(
-						array(
-							'status' => JobStatus::Buried->value,
-							'error'  => 'For-each step already settled.',
-							'id'     => $completed_job_id,
-						)
-					);
-					$pdo->commit();
+					$this->bury_transition_job( $pdo, $completed_job_id, 'For-each step already settled.' );
+					if ( $owns_transaction ) {
+						$this->commit_transition( $pdo );
+					}
 					return;
 				}
 
@@ -3600,7 +3913,9 @@ class Workflow {
 						);
 					}
 
-					$pdo->commit();
+					if ( $owns_transaction ) {
+						$this->commit_transition( $pdo );
+					}
 					$this->invalidate_workflow_cache( $workflow_id );
 					return;
 				}
@@ -3660,9 +3975,11 @@ class Workflow {
 					$duration_ms,
 				);
 
-				$pdo->commit();
+				if ( $owns_transaction ) {
+					$this->commit_transition( $pdo );
+				}
 				$this->invalidate_workflow_cache( $workflow_id );
-				foreach ( array_values( array_unique( $terminal_ids ) ) as $terminal_workflow_id ) {
+				foreach ( $owns_transaction ? array_values( array_unique( $terminal_ids ) ) : array() as $terminal_workflow_id ) {
 					$this->reconcile_waiting_for_workflows_for_dependency( $terminal_workflow_id );
 				}
 				return;
@@ -3678,17 +3995,14 @@ class Workflow {
 					: 0;
 
 				// Parallel branches can finish out of order, so count only after this branch is marked complete.
-				$mark_stmt = $pdo->prepare(
-					"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
-				);
-				$mark_stmt->execute(
-					array(
-						'status' => JobStatus::Completed->value,
-						'id'     => $completed_job_id,
-					)
-				);
+				$this->mark_workflow_job_completed( $pdo, $completed_job_id );
 
-				$completed_count = $this->count_completed_jobs_for_step( $workflow_id, $current_step );
+				$job_payload = $this->decode_payload_column( $job_row['payload'] ?? null );
+				$parallel_group = $job_payload['__parallel_group'] ?? null;
+				$completed_count = $this->count_completed_jobs_for_step( $workflow_id, $current_step, is_string( $parallel_group ) ? $parallel_group : null );
+				if ( isset( $this->terminal_jobs[ $completed_job_id ] ) ) {
+					++$completed_count;
+				}
 
 				$state_stmt = $pdo->prepare(
 					"UPDATE {$wf_tbl} SET state = :state WHERE id = :id"
@@ -3741,7 +4055,9 @@ class Workflow {
 				}
 
 				if ( $completed_count < $total_handlers ) {
-					$pdo->commit();
+					if ( $owns_transaction ) {
+						$this->commit_transition( $pdo );
+					}
 					return;
 				}
 
@@ -3831,9 +4147,11 @@ class Workflow {
 					);
 				}
 
-				$pdo->commit();
+				if ( $owns_transaction ) {
+					$this->commit_transition( $pdo );
+				}
 				$this->invalidate_workflow_cache( $workflow_id );
-				foreach ( array_values( array_unique( $terminal_ids ) ) as $terminal_workflow_id ) {
+				foreach ( $owns_transaction ? array_values( array_unique( $terminal_ids ) ) : array() as $terminal_workflow_id ) {
 					$this->reconcile_waiting_for_workflows_for_dependency( $terminal_workflow_id );
 				}
 				return;
@@ -3853,14 +4171,21 @@ class Workflow {
 					$duration_ms,
 				);
 
-				$pdo->commit();
+			if ( $owns_transaction ) {
+				$this->commit_transition( $pdo );
+			}
 				$this->invalidate_workflow_cache( $workflow_id );
-			foreach ( array_values( array_unique( $terminal_ids ) ) as $terminal_workflow_id ) {
+			foreach ( $owns_transaction ? array_values( array_unique( $terminal_ids ) ) : array() as $terminal_workflow_id ) {
 				$this->reconcile_waiting_for_workflows_for_dependency( $terminal_workflow_id );
 			}
 		} catch ( \Throwable $e ) {
-			if ( $pdo->inTransaction() ) {
+			$this->abort_transition( $pdo );
+			if ( $owns_transaction && $pdo->inTransaction() ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 			}
 			throw $e;
 		}
@@ -3877,6 +4202,7 @@ class Workflow {
 	 * @return array<int, int> Completed workflow IDs that may unblock dependent waits.
 	 */
 	private function on_workflow_completed( int $workflow_id, array $state, \PDO $pdo ): array {
+		$this->terminal_workflows[ $workflow_id ] = true;
 		$wf_tbl        = $this->conn->table( Config::table_workflows() );
 		$completed_ids = array( $workflow_id );
 
@@ -3901,7 +4227,21 @@ class Workflow {
 			return $completed_ids;
 		}
 
+		if ( WorkflowStatus::Running->value !== $parent_row['status']
+			|| $this->to_int( $parent_row['current_step'] ) !== $parent_step ) {
+			return $completed_ids;
+		}
+
 		$parent_state = $this->decode_state_column( $parent_row['state'] ?? null );
+		$active_child = $parent_state['_active_child_workflow_id'] ?? null;
+		if ( null !== $active_child && $this->to_int( $active_child ) !== $workflow_id ) {
+			return $completed_ids;
+		}
+		if ( null === $active_child && ! empty( $parent_state['_child_receipt_required'] ) ) {
+			return $completed_ids;
+		}
+		unset( $parent_state['_active_child_workflow_id'] );
+		$parent_state['_child_receipt_required'] = true;
 
 		foreach ( $state as $key => $value ) {
 			if ( ! str_starts_with( $key, '_' ) ) {
@@ -4121,12 +4461,17 @@ class Workflow {
 			? trim( $definition['name'] )
 			: 'workflow';
 
-		$pdo->beginTransaction();
+		$owns_transaction = ! $pdo->inTransaction();
+		if ( $owns_transaction ) {
+			$this->begin_transition( $pdo );
+		}
 		try {
 			if ( null !== $idempotency_key ) {
 				$existing_workflow_id = $this->find_existing_workflow_id_for_key( $idempotency_key, $pdo );
 				if ( null !== $existing_workflow_id ) {
-					$pdo->commit();
+					if ( $owns_transaction ) {
+						$this->commit_transition( $pdo );
+					}
 					return $existing_workflow_id;
 				}
 			}
@@ -4182,14 +4527,21 @@ class Workflow {
 				)
 			);
 
-			$pdo->commit();
+			if ( $owns_transaction ) {
+				$this->commit_transition( $pdo );
+			}
 			return $workflow_id;
 		} catch ( \PDOException $e ) {
-			if ( $pdo->inTransaction() ) {
+			$this->abort_transition( $pdo );
+			if ( $owns_transaction && $pdo->inTransaction() ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 			}
 
-			if ( null !== $idempotency_key && $this->is_duplicate_key_error( $e ) ) {
+			if ( $owns_transaction && null !== $idempotency_key && $this->is_duplicate_key_error( $e ) ) {
 				$existing_workflow_id = $this->find_existing_workflow_id_for_key( $idempotency_key );
 				if ( null !== $existing_workflow_id ) {
 					return $existing_workflow_id;
@@ -4198,8 +4550,13 @@ class Workflow {
 
 			throw $e;
 		} catch ( \Throwable $e ) {
-			if ( $pdo->inTransaction() ) {
+			$this->abort_transition( $pdo );
+			if ( $owns_transaction && $pdo->inTransaction() ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 			}
 
 			throw $e;
@@ -4271,51 +4628,64 @@ class Workflow {
 	 * @param int                  $step_index     The step index.
 	 * @param array<string, mixed> $workflow_state The parent workflow's current state.
 	 * @throws \RuntimeException If the step definition is not a run_workflow.
+	 * @param Job|null             $job Current worker claim.
+	 * @throws \Throwable When the transaction cannot commit.
 	 */
-	public function handle_run_workflow_step( int $workflow_id, int $job_id, int $step_index, array $workflow_state ): void {
-		$jb_tbl = $this->conn->table( Config::table_jobs() );
-		$steps  = $this->as_steps( $workflow_state['_steps'] ?? array() );
+	public function handle_run_workflow_step( int $workflow_id, int $job_id, int $step_index, array $workflow_state, ?Job $job = null ): void {
+		$job ??= ExecutionContext::job();
+		$pdo = $this->conn->pdo();
+		$this->begin_transition( $pdo );
+		try {
+			$this->guard_transition( $workflow_id, $job_id, $job );
+			$workflow_state = $this->get_state_uncached( $workflow_id ) ?? $workflow_state;
+			$jb_tbl = $this->conn->table( Config::table_jobs() );
+			$steps  = $this->as_steps( $workflow_state['_steps'] ?? array() );
 
-		$step_def = $steps[ $step_index ] ?? null;
-		if ( ! $step_def || ! is_array( $step_def ) || 'run_workflow' !== ( $step_def['type'] ?? '' ) ) {
-			throw new \RuntimeException( "Step {$step_index} is not a run_workflow definition." );
-		}
-
-		$workflow_steps    = $this->as_steps( $step_def['workflow_steps'] ?? array() );
-		$workflow_name     = $this->to_string( $step_def['workflow_name'] ?? 'run_workflow' );
-		$workflow_queue    = $this->to_string( $step_def['workflow_queue'] ?? ( $workflow_state['_queue'] ?? 'default' ) );
-		$workflow_priority = $this->to_int( $step_def['workflow_priority'] ?? ( $workflow_state['_priority'] ?? 0 ) );
-		$sub_max           = $this->to_int( $step_def['workflow_max_attempts'] ?? ( $workflow_state['_max_attempts'] ?? 3 ) );
-
-		$initial_state = array();
-		foreach ( $workflow_state as $key => $value ) {
-			if ( ! str_starts_with( $key, '_' ) ) {
-				$initial_state[ $key ] = $value;
+			$step_def = $steps[ $step_index ] ?? null;
+			if ( ! $step_def || ! is_array( $step_def ) || 'run_workflow' !== ( $step_def['type'] ?? '' ) ) {
+				throw new \RuntimeException( "Step {$step_index} is not a run_workflow definition." );
 			}
+
+			$workflow_steps    = $this->as_steps( $step_def['workflow_steps'] ?? array() );
+			$workflow_name     = $this->to_string( $step_def['workflow_name'] ?? 'run_workflow' );
+			$workflow_queue    = $this->to_string( $step_def['workflow_queue'] ?? ( $workflow_state['_queue'] ?? 'default' ) );
+			$workflow_priority = $this->to_int( $step_def['workflow_priority'] ?? ( $workflow_state['_priority'] ?? 0 ) );
+			$sub_max           = $this->to_int( $step_def['workflow_max_attempts'] ?? ( $workflow_state['_max_attempts'] ?? 3 ) );
+
+			$initial_state = array();
+			foreach ( $workflow_state as $key => $value ) {
+				if ( ! str_starts_with( $key, '_' ) ) {
+					$initial_state[ $key ] = $value;
+				}
+			}
+
+			$child_id = $this->dispatch_run_workflow(
+				parent_workflow_id: $workflow_id,
+				parent_step_index: $step_index,
+				name: $workflow_name,
+				steps: $workflow_steps,
+				initial_state: $initial_state,
+				queue_name: '' === $workflow_queue ? 'default' : $workflow_queue,
+				priority_value: $workflow_priority,
+				max_attempts: $sub_max > 0 ? $sub_max : 3,
+			);
+
+			$workflow_state['_active_child_workflow_id'] = $child_id;
+			$workflow_state['_child_receipt_required'] = true;
+			$this->persist_internal_state( $workflow_id, $workflow_state );
+			$this->mark_workflow_job_completed( $pdo, $job_id );
+			$this->commit_transition( $pdo );
+		} catch ( \Throwable $e ) {
+			$this->abort_transition( $pdo );
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
+			}
+			throw $e;
 		}
-
-		$this->dispatch_run_workflow(
-			parent_workflow_id: $workflow_id,
-			parent_step_index: $step_index,
-			name: $workflow_name,
-			steps: $workflow_steps,
-			initial_state: $initial_state,
-			queue_name: '' === $workflow_queue ? 'default' : $workflow_queue,
-			priority_value: $workflow_priority,
-			max_attempts: $sub_max > 0 ? $sub_max : 3,
-		);
-
-		$stmt = $this->conn->pdo()->prepare(
-			"UPDATE {$jb_tbl} SET status = :status, completed_at = NOW() WHERE id = :id"
-		);
-		$stmt->execute(
-			array(
-				'status' => JobStatus::Completed->value,
-				'id'     => $job_id,
-			)
-		);
-
-		// The parent must stay parked on this step until the child reports completion.
 	}
 
 	/**
@@ -4327,95 +4697,122 @@ class Workflow {
 	 * @return array<string, mixed> Step output containing the started workflow IDs.
 	 * @throws \RuntimeException If the step definition or source payloads are invalid.
 	 * @throws WorkflowConstraintViolationException If the step would exceed the configured start budget.
+	 * @param Job|null             $job Current worker claim.
+	 * @throws \Throwable When the transaction cannot commit.
 	 */
-	public function handle_start_workflows_step( int $workflow_id, int $step_index, array $workflow_state ): array {
-		$steps    = $this->as_steps( $workflow_state['_steps'] ?? array() );
-		$step_def = $steps[ $step_index ] ?? null;
+	public function handle_start_workflows_step( int $workflow_id, int $step_index, array $workflow_state, ?Job $job = null ): array {
+		$job ??= ExecutionContext::job();
+		$pdo = $this->conn->pdo();
+		$this->begin_transition( $pdo );
+		try {
+			if ( null !== $job ) {
+				$this->guard_transition( $workflow_id, $job->id, $job );
+				$workflow_state = $this->get_state_uncached( $workflow_id ) ?? $workflow_state;
+			}
+			$steps    = $this->as_steps( $workflow_state['_steps'] ?? array() );
+			$step_def = $steps[ $step_index ] ?? null;
 
-		if ( ! is_array( $step_def ) || 'start_workflows' !== ( $step_def['type'] ?? '' ) ) {
-			throw new \RuntimeException( "Step {$step_index} is not a start_workflows definition." );
-		}
-
-		$items_key = trim( $this->to_string( $step_def['items_key'] ?? '' ) );
-		$items     = '' === $items_key ? array() : ( $workflow_state[ $items_key ] ?? array() );
-		$step_name = $this->to_string( $step_def['name'] ?? '' );
-		if ( ! is_array( $items ) ) {
-			throw new \RuntimeException( "Start step '{$step_name}' requires state['{$items_key}'] to be an array." );
-		}
-
-		$definition_raw = $step_def['workflow_definition'] ?? null;
-		if ( ! is_array( $definition_raw ) || ! is_array( $definition_raw['steps'] ?? null ) ) {
-			throw new \RuntimeException( "Start step '{$step_name}' is missing a valid workflow definition." );
-		}
-		$definition = $this->as_array( $definition_raw );
-
-		$result_key     = trim( $this->to_string( $step_def['result_key'] ?? 'started_workflow_ids' ) );
-		$payload_key    = trim( $this->to_string( $step_def['payload_key'] ?? 'item' ) );
-		$group_key      = trim( $this->to_string( $step_def['group_key'] ?? '' ) );
-		$inherit_state  = ! empty( $step_def['inherit_state'] );
-		$base_state     = $inherit_state ? $this->public_state( $workflow_state ) : array();
-		$start_count    = count( $items );
-		$budget_limits  = $this->workflow_budget_limits( $workflow_state );
-		$counters       = $this->as_array( $workflow_state['_workflow_counters'] ?? array() );
-		$started_so_far = $this->to_int( $counters['started_workflows'] ?? 0 );
-
-		unset( $base_state[ $items_key ], $base_state[ $result_key ] );
-
-		if (
-			isset( $budget_limits['max_started_workflows'] )
-			&& $started_so_far + $start_count > $budget_limits['max_started_workflows']
-		) {
-			throw new WorkflowConstraintViolationException(
-				sprintf(
-					"Start step '%s' would exceed max_started_workflows budget of %d.",
-					'' === $step_name ? (string) $step_index : $step_name,
-					$budget_limits['max_started_workflows']
-				)
-			);
-		}
-
-		$started_ids = array();
-		foreach ( array_values( $items ) as $index => $item ) {
-			$child_state = $base_state;
-
-			if ( is_array( $item ) ) {
-				foreach ( $item as $key => $value ) {
-					if ( is_string( $key ) && ! str_starts_with( $key, '_' ) ) {
-						$child_state[ $key ] = $value;
-					}
-				}
-			} else {
-				$child_state[ $payload_key ] = $item;
+			if ( ! is_array( $step_def ) || 'start_workflows' !== ( $step_def['type'] ?? '' ) ) {
+				throw new \RuntimeException( "Step {$step_index} is not a start_workflows definition." );
 			}
 
-			$child_state['start_item_index'] = $index;
+			$items_key = trim( $this->to_string( $step_def['items_key'] ?? '' ) );
+			$items     = '' === $items_key ? array() : ( $workflow_state[ $items_key ] ?? array() );
+			$step_name = $this->to_string( $step_def['name'] ?? '' );
+			if ( ! is_array( $items ) ) {
+				throw new \RuntimeException( "Start step '{$step_name}' requires state['{$items_key}'] to be an array." );
+			}
 
-			$started_ids[] = $this->dispatch_defined_workflow(
-				$definition,
-				$child_state,
-				null,
-				null,
-				$workflow_id,
-				$step_index,
-			);
+			$definition_raw = $step_def['workflow_definition'] ?? null;
+			if ( ! is_array( $definition_raw ) || ! is_array( $definition_raw['steps'] ?? null ) ) {
+				throw new \RuntimeException( "Start step '{$step_name}' is missing a valid workflow definition." );
+			}
+			$definition = $this->as_array( $definition_raw );
+
+			$result_key     = trim( $this->to_string( $step_def['result_key'] ?? 'started_workflow_ids' ) );
+			$payload_key    = trim( $this->to_string( $step_def['payload_key'] ?? 'item' ) );
+			$group_key      = trim( $this->to_string( $step_def['group_key'] ?? '' ) );
+			$inherit_state  = ! empty( $step_def['inherit_state'] );
+			$base_state     = $inherit_state ? $this->public_state( $workflow_state ) : array();
+			$start_count    = count( $items );
+			$budget_limits  = $this->workflow_budget_limits( $workflow_state );
+			$counters       = $this->as_array( $workflow_state['_workflow_counters'] ?? array() );
+			$started_so_far = $this->to_int( $counters['started_workflows'] ?? 0 );
+
+			unset( $base_state[ $items_key ], $base_state[ $result_key ] );
+
+			if (
+			isset( $budget_limits['max_started_workflows'] )
+			&& $started_so_far + $start_count > $budget_limits['max_started_workflows']
+			) {
+				throw new WorkflowConstraintViolationException(
+					sprintf(
+						"Start step '%s' would exceed max_started_workflows budget of %d.",
+						'' === $step_name ? (string) $step_index : $step_name,
+						$budget_limits['max_started_workflows']
+					)
+				);
+			}
+
+			$started_ids = array();
+			foreach ( array_values( $items ) as $index => $item ) {
+				$child_state = $base_state;
+
+				if ( is_array( $item ) ) {
+					foreach ( $item as $key => $value ) {
+						if ( is_string( $key ) && ! str_starts_with( $key, '_' ) ) {
+							$child_state[ $key ] = $value;
+						}
+					}
+				} else {
+					$child_state[ $payload_key ] = $item;
+				}
+
+				$child_state['start_item_index'] = $index;
+
+				$started_ids[] = $this->dispatch_defined_workflow(
+					$definition,
+					$child_state,
+					null,
+					null,
+					$workflow_id,
+					$step_index,
+				);
+			}
+
+			$output = array( $result_key => $started_ids );
+
+			if ( '' !== $group_key ) {
+				$groups                     = $workflow_state['_workflow_groups'] ?? array();
+				$groups                     = is_array( $groups ) ? $groups : array();
+				$groups[ $group_key ]       = $started_ids;
+				$output['_workflow_groups'] = $groups;
+			}
+
+			if ( ! empty( $started_ids ) ) {
+				$output['_workflow_budget_delta'] = array(
+					'started_workflows' => count( $started_ids ),
+				);
+			}
+
+			if ( null !== $job ) {
+				$this->advance_step( $workflow_id, $job->id, $output, job: $job );
+			}
+			$this->commit_transition( $pdo );
+			$this->invalidate_workflow_cache( $workflow_id );
+			$this->reconcile_waiting_for_workflows_for_dependency( $workflow_id );
+			return $output;
+		} catch ( \Throwable $e ) {
+			$this->abort_transition( $pdo );
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
+			}
+			throw $e;
 		}
-
-		$output = array( $result_key => $started_ids );
-
-		if ( '' !== $group_key ) {
-			$groups                     = $workflow_state['_workflow_groups'] ?? array();
-			$groups                     = is_array( $groups ) ? $groups : array();
-			$groups[ $group_key ]       = $started_ids;
-			$output['_workflow_groups'] = $groups;
-		}
-
-		if ( ! empty( $started_ids ) ) {
-			$output['_workflow_budget_delta'] = array(
-				'started_workflows' => count( $started_ids ),
-			);
-		}
-
-		return $output;
 	}
 
 	/**
@@ -4434,7 +4831,7 @@ class Workflow {
 		$state             = array();
 		$should_compensate = false;
 
-		$pdo->beginTransaction();
+		$this->begin_transition( $pdo );
 		try {
 			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$stmt->execute( array( 'id' => $workflow_id ) );
@@ -4442,6 +4839,10 @@ class Workflow {
 
 			if ( ! $wf_row ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 				throw new \RuntimeException( "Workflow {$workflow_id} not found." );
 			}
 
@@ -4449,6 +4850,10 @@ class Workflow {
 
 			if ( in_array( $current_status, array( 'completed', 'cancelled' ), true ) ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 				throw new \RuntimeException(
 					"Workflow {$workflow_id} is already {$current_status}."
 				);
@@ -4458,16 +4863,18 @@ class Workflow {
 
 			$upd = $pdo->prepare(
 				"UPDATE {$wf_tbl}
-				SET status = :status, completed_at = NOW()
-				WHERE id = :id"
+				SET status = :status, completed_at = NOW(), revision = revision + 1
+				WHERE id = :id AND revision = :revision"
 			);
 			$upd->execute(
 				array(
 					'status' => WorkflowStatus::Cancelled->value,
 					'id'     => $workflow_id,
+					'revision' => $wf_row['revision'],
 				)
 			);
 
+			$this->terminal_workflows[ $workflow_id ] = true;
 			$this->bury_active_jobs_for_workflow( $workflow_id, 'Workflow cancelled' );
 
 			$this->logger->log(
@@ -4479,23 +4886,27 @@ class Workflow {
 				)
 			);
 
-			$pdo->commit();
+			$this->commit_transition( $pdo );
 		} catch ( \Throwable $e ) {
+			$this->abort_transition( $pdo );
 			if ( $pdo->inTransaction() ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 			}
 			throw $e;
 		}
 
 		$state = $this->run_compensations( $workflow_id, $state, 'cancel' );
-		$this->persist_internal_state( $workflow_id, $state );
 
 		$cancel_handler = $state['_on_cancel'] ?? null;
 		$handler_def    = $this->handler_definition( $cancel_handler );
 		if ( null !== $handler_def && class_exists( $handler_def['class'] ) ) {
 			try {
 				$handler_instance = new $handler_def['class']();
-				$this->call_handler_method( $handler_instance, 'handle', array( $this->public_state( $state ) ), $handler_def['payload'] );
+				ExecutionContext::without_claim( fn() => $this->call_handler_method( $handler_instance, 'handle', array( $this->public_state( $state ) ), $handler_def['payload'] ) );
 			} catch ( \Throwable $e ) {
 				$this->logger->log(
 					LogEvent::Debug,
@@ -4516,24 +4927,31 @@ class Workflow {
 	/**
 	 * Mark a workflow as failed.
 	 *
-	 * @param int    $workflow_id   The workflow ID.
-	 * @param int    $failed_job_id The job that caused the failure.
-	 * @param string $error_message Error description.
+	 * @param int      $workflow_id   The workflow ID.
+	 * @param int      $failed_job_id The job that caused the failure.
+	 * @param string   $error_message Error description.
 	 * @throws \Throwable If the database transaction fails.
+	 * @param Job|null $job Current worker claim.
+	 * @param bool     $recover Whether to atomically recover an expired terminal attempt.
 	 */
-	public function fail( int $workflow_id, int $failed_job_id, string $error_message ): void {
+	public function fail( int $workflow_id, int $failed_job_id, string $error_message, ?Job $job = null, bool $recover = false ): void {
 		$pdo    = $this->conn->pdo();
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
 		$state  = array();
 
-		$pdo->beginTransaction();
+		$this->begin_transition( $pdo );
 		try {
+			$this->guard_transition( $workflow_id, $failed_job_id, $job, $recover );
 			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$stmt->execute( array( 'id' => $workflow_id ) );
 			$wf_row = $this->as_row( $stmt->fetch() );
 
 			if ( ! $wf_row ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 				return;
 			}
 
@@ -4548,17 +4966,24 @@ class Workflow {
 				true
 			);
 			$state             = $this->mark_workflow_failed_locked( $pdo, $wf_row, $workflow_id, $failed_job_id, $error_message );
-			$pdo->commit();
+			if ( $failed_job_id > 0 ) {
+				$this->bury_transition_job( $pdo, $failed_job_id, $error_message );
+			}
+			$this->commit_transition( $pdo );
 		} catch ( \Throwable $e ) {
+			$this->abort_transition( $pdo );
 			if ( $pdo->inTransaction() ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 			}
 			throw $e;
 		}
 
 		if ( $should_compensate && ! empty( $state['_compensate_on_failure'] ) ) {
 			$state = $this->run_compensations( $workflow_id, $state, 'failure' );
-			$this->persist_internal_state( $workflow_id, $state );
 		}
 
 		$this->invalidate_workflow_cache( $workflow_id );
@@ -4670,38 +5095,44 @@ class Workflow {
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
 		$pdo    = $this->conn->pdo();
 
-		$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id" );
-		$stmt->execute( array( 'id' => $workflow_id ) );
-		$row = $this->as_row( $stmt->fetch() );
-
-		if ( ! $row ) {
-			throw new \RuntimeException( "Workflow {$workflow_id} not found." );
-		}
-
-		if ( WorkflowStatus::Failed->value !== $row['status'] ) {
-			throw new \RuntimeException( "Workflow {$workflow_id} is not in failed state." );
-		}
-
-		$state        = $this->decode_state_column( $row['state'] ?? null );
-		$current_step = $this->to_int( $row['current_step'] ?? 0 );
-		$steps        = $this->as_steps( $state['_steps'] ?? array() );
-
-		if ( ! empty( $state['_compensated'] ) ) {
-			throw new \RuntimeException( "Workflow {$workflow_id} has already been compensated and cannot be retried." );
-		}
-
-		if ( ! isset( $steps[ $current_step ] ) ) {
-			throw new \RuntimeException( "No step handler found for step {$current_step}." );
-		}
-
-		$pdo->beginTransaction();
+		$this->begin_transition( $pdo );
 		try {
+			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+			$stmt->execute( array( 'id' => $workflow_id ) );
+			$row = $this->as_row( $stmt->fetch() );
+
+			if ( ! $row ) {
+				throw new \RuntimeException( "Workflow {$workflow_id} not found." );
+			}
+
+			if ( WorkflowStatus::Failed->value !== $row['status'] ) {
+				throw new \RuntimeException( "Workflow {$workflow_id} is not in failed state." );
+			}
+
+			$state        = $this->decode_state_column( $row['state'] ?? null );
+			unset( $state['_active_child_workflow_id'] );
+			$current_step = $this->to_int( $row['current_step'] ?? 0 );
+			$steps        = $this->as_steps( $state['_steps'] ?? array() );
+
+			if ( ! empty( $state['_compensated'] ) || ! empty( $state['_compensation_pending'] ) || ! empty( $state['_compensation_owner'] ) ) {
+				throw new \RuntimeException( "Workflow {$workflow_id} has already been compensated and cannot be retried." );
+			}
+
+			if ( ! isset( $steps[ $current_step ] ) ) {
+				throw new \RuntimeException( "No step handler found for step {$current_step}." );
+			}
+
 			$stmt = $pdo->prepare(
 				"UPDATE {$wf_tbl}
-				SET status = 'running', failed_at = NULL, error_message = NULL
-				WHERE id = :id"
+				SET status = 'running', failed_at = NULL, error_message = NULL, revision = revision + 1
+				WHERE id = :id AND revision = :revision"
 			);
-				$stmt->execute( array( 'id' => $workflow_id ) );
+				$stmt->execute(
+					array(
+						'id' => $workflow_id,
+						'revision' => $row['revision'],
+					)
+				);
 
 			if ( is_array( $steps[ $current_step ] ) && 'for_each' === ( $steps[ $current_step ]['type'] ?? '' ) ) {
 				$for_each_steps = $this->as_array( $state['_for_each_steps'] ?? array() );
@@ -4715,6 +5146,7 @@ class Workflow {
 				}
 			}
 
+			$this->persist_internal_state( $workflow_id, $state );
 			$this->enqueue_step_def(
 				$steps[ $current_step ],
 				$workflow_id,
@@ -4724,35 +5156,59 @@ class Workflow {
 				$this->state_max_attempts( $state ),
 			);
 
-			$pdo->commit();
+			$this->commit_transition( $pdo );
 			$this->invalidate_workflow_cache( $workflow_id );
 		} catch ( \Throwable $e ) {
 			$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 			throw $e;
 		}
 	}
 
 	/**
-	 * Pause a running workflow. The current step finishes, but the next step is not enqueued.
+	 * Pause a workflow and revoke active attempts before they can publish results.
 	 *
 	 * @param int $workflow_id The workflow ID.
+	 * @throws \Throwable When the transaction cannot commit.
 	 */
 	public function pause( int $workflow_id ): void {
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
-
-		$stmt = $this->conn->pdo()->prepare(
-			"UPDATE {$wf_tbl} SET status = 'paused' WHERE id = :id AND status = 'running'"
-		);
-		$stmt->execute( array( 'id' => $workflow_id ) );
-
-		$this->logger->log(
-			LogEvent::WorkflowPaused,
-			array(
-				'workflow_id' => $workflow_id,
-				'handler'     => '',
-			)
-		);
-
+		$pdo = $this->conn->pdo();
+		$this->begin_transition( $pdo );
+		try {
+			$stmt = $pdo->prepare( "SELECT status, revision FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
+			$stmt->execute( array( 'id' => $workflow_id ) );
+			$row = $this->as_row( $stmt->fetch() );
+			if ( null === $row || ! in_array( $row['status'], array( 'running', 'waiting_for_signal', 'waiting_for_workflows' ), true ) ) {
+				$this->commit_transition( $pdo );
+				return;
+			}
+			$stmt = $pdo->prepare( "UPDATE {$wf_tbl} SET status = 'paused', revision = revision + 1 WHERE id = :id AND revision = :revision" );
+			$stmt->execute(
+				array(
+					'id' => $workflow_id,
+					'revision' => $row['revision'],
+				)
+			);
+			$this->queue->invalidate_workflow( $workflow_id );
+			$this->logger->log(
+				LogEvent::WorkflowPaused,
+				array(
+					'workflow_id' => $workflow_id,
+					'handler' => '',
+				)
+			);
+			$this->commit_transition( $pdo );
+		} catch ( \Throwable $e ) {
+			$this->abort_transition( $pdo );
+			if ( $pdo->inTransaction() ) {
+				$pdo->rollBack();
+			}
+			throw $e;
+		}
 		$this->invalidate_workflow_cache( $workflow_id );
 	}
 
@@ -4767,38 +5223,68 @@ class Workflow {
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
 		$pdo    = $this->conn->pdo();
 
-		$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id" );
-		$stmt->execute( array( 'id' => $workflow_id ) );
-		$row = $this->as_row( $stmt->fetch() );
-
-		if ( ! $row || WorkflowStatus::Paused->value !== $row['status'] ) {
-			throw new \RuntimeException( "Workflow {$workflow_id} is not paused." );
-		}
-
-		$state        = $this->decode_state_column( $row['state'] ?? null );
-		$current_step = $this->to_int( $row['current_step'] ?? 0 );
-		$total_steps  = $this->to_int( $row['total_steps'] ?? 0 );
-		$steps        = $this->as_steps( $state['_steps'] ?? array() );
-
-		if ( $current_step >= $total_steps ) {
-			throw new \RuntimeException( "Workflow {$workflow_id} has no more steps." );
-		}
-
-		$pdo->beginTransaction();
+		$this->begin_transition( $pdo );
 		try {
-			$stmt = $pdo->prepare(
-				"UPDATE {$wf_tbl} SET status = 'running' WHERE id = :id"
-			);
+			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$stmt->execute( array( 'id' => $workflow_id ) );
+			$row = $this->as_row( $stmt->fetch() );
 
-			$this->enqueue_step_def(
-				$steps[ $current_step ],
-				$workflow_id,
-				$current_step,
-				$this->state_queue( $state ),
-				$this->state_priority( $state ),
-				$this->state_max_attempts( $state ),
+			if ( ! $row || WorkflowStatus::Paused->value !== $row['status'] ) {
+				throw new \RuntimeException( "Workflow {$workflow_id} is not paused." );
+			}
+
+			$state        = $this->decode_state_column( $row['state'] ?? null );
+			$current_step = $this->to_int( $row['current_step'] ?? 0 );
+			$total_steps  = $this->to_int( $row['total_steps'] ?? 0 );
+			$steps        = $this->as_steps( $state['_steps'] ?? array() );
+
+			if ( $current_step >= $total_steps ) {
+				throw new \RuntimeException( "Workflow {$workflow_id} has no more steps." );
+			}
+
+			$stmt = $pdo->prepare(
+				"UPDATE {$wf_tbl} SET status = 'running', revision = revision + 1 WHERE id = :id AND revision = :revision"
 			);
+			$stmt->execute(
+				array(
+					'id' => $workflow_id,
+					'revision' => $row['revision'],
+				)
+			);
+
+			$jobs_table = $this->conn->table( Config::table_jobs() );
+			$active = $pdo->prepare( "SELECT id FROM {$jobs_table} WHERE workflow_id = :id AND step_index = :step AND status IN ('pending', 'processing') LIMIT 1" );
+			$active->execute(
+				array(
+					'id' => $workflow_id,
+					'step' => $current_step,
+				)
+			);
+			$child = $pdo->prepare( "SELECT id, status, state FROM {$wf_tbl} WHERE parent_workflow_id = :id AND parent_step_index = :step ORDER BY id DESC LIMIT 1" );
+			$child->execute(
+				array(
+					'id' => $workflow_id,
+					'step' => $current_step,
+				)
+			);
+			$child_row = $this->as_row( $child->fetch() );
+			if ( ! empty( $state['_child_receipt_required'] ) && $this->to_int( $state['_active_child_workflow_id'] ?? 0 ) !== $this->to_int( $child_row['id'] ?? 0 ) ) {
+				$child_row = null;
+			}
+			if ( null !== $child_row && WorkflowStatus::Completed->value === $child_row['status'] ) {
+				$this->on_workflow_completed( $this->to_int( $child_row['id'] ), $this->decode_state_column( $child_row['state'] ), $pdo );
+			} elseif ( false === $active->fetch() && null === $child_row ) {
+
+				$this->enqueue_step_def(
+					$steps[ $current_step ],
+					$workflow_id,
+					$current_step,
+					$this->state_queue( $state ),
+					$this->state_priority( $state ),
+					$this->state_max_attempts( $state ),
+				);
+
+			}
 
 			$this->logger->log(
 				LogEvent::WorkflowResumed,
@@ -4808,10 +5294,14 @@ class Workflow {
 				)
 			);
 
-			$pdo->commit();
+			$this->commit_transition( $pdo );
 			$this->invalidate_workflow_cache( $workflow_id );
 		} catch ( \Throwable $e ) {
 			$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 			throw $e;
 		}
 	}
@@ -4930,6 +5420,20 @@ class Workflow {
 	}
 
 	/**
+	 * Read persisted internal state without allowing a cache to authorize work.
+	 *
+	 * @param int $workflow_id Workflow ID.
+	 * @return array<string, mixed>|null Current internal state.
+	 */
+	public function get_state_uncached( int $workflow_id ): ?array {
+		$table = $this->conn->table( Config::table_workflows() );
+		$stmt = $this->conn->pdo()->prepare( "SELECT state FROM {$table} WHERE id = :id" );
+		$stmt->execute( array( 'id' => $workflow_id ) );
+		$row = $this->as_row( $stmt->fetch() );
+		return null === $row ? null : $this->decode_state_column( $row['state'] ?? null );
+	}
+
+	/**
 	 * Rewind a workflow to a previous step's state and re-run from there.
 	 *
 	 * Loads state_after from the event log at the given step,
@@ -4957,7 +5461,7 @@ class Workflow {
 		$pdo    = $this->conn->pdo();
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
 
-		$pdo->beginTransaction();
+		$this->begin_transition( $pdo );
 		try {
 			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$stmt->execute( array( 'id' => $workflow_id ) );
@@ -4965,6 +5469,10 @@ class Workflow {
 
 			if ( ! $wf_row ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 				throw new \RuntimeException( "Workflow {$workflow_id} not found." );
 			}
 
@@ -4988,11 +5496,12 @@ class Workflow {
 				}
 			}
 
+			unset( $new_state['_active_child_workflow_id'] );
 			$next_step = $to_step + 1;
 
 			$upd = $pdo->prepare(
 				"UPDATE {$wf_tbl}
-				SET state = :state, current_step = :step, status = 'running',
+				SET state = :state, current_step = :step, status = 'running', revision = revision + 1,
 					error_message = NULL, failed_at = NULL
 				WHERE id = :id"
 			);
@@ -5036,11 +5545,16 @@ class Workflow {
 				)
 			);
 
-			$pdo->commit();
+			$this->commit_transition( $pdo );
 			$this->invalidate_workflow_cache( $workflow_id );
 		} catch ( \Throwable $e ) {
+			$this->abort_transition( $pdo );
 			if ( $pdo->inTransaction() ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 			}
 			throw $e;
 		}
@@ -5062,7 +5576,7 @@ class Workflow {
 		$pdo    = $this->conn->pdo();
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
 
-		$pdo->beginTransaction();
+		$this->begin_transition( $pdo );
 		try {
 			$stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 			$stmt->execute( array( 'id' => $workflow_id ) );
@@ -5070,6 +5584,10 @@ class Workflow {
 
 			if ( ! $wf_row ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 				throw new \RuntimeException( "Workflow {$workflow_id} not found." );
 			}
 
@@ -5128,11 +5646,16 @@ class Workflow {
 				)
 			);
 
-			$pdo->commit();
+			$this->commit_transition( $pdo );
 			return $forked_id;
 		} catch ( \Throwable $e ) {
+			$this->abort_transition( $pdo );
 			if ( $pdo->inTransaction() ) {
 				$pdo->rollBack();
+				$this->transition_claims = array();
+				$this->terminal_jobs = array();
+				$this->terminal_workflows = array();
+				$this->compensations_after_commit = array();
 			}
 			throw $e;
 		}
@@ -5147,19 +5670,22 @@ class Workflow {
 	 *
 	 * @return int Number of workflows that exceeded their deadline.
 	 * @throws \Throwable If a deadline workflow transaction fails.
+	 * @param int $limit Maximum workflows to inspect.
+	 * @param int $after_id Resume after this workflow ID.
 	 */
-	public function check_deadlines(): int {
+	public function check_deadlines( int $limit = 100, int $after_id = 0 ): int {
 		$pdo    = $this->conn->pdo();
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
 		$count  = 0;
+		$limit = max( 1, $limit );
 
 		$stmt = $pdo->prepare(
 			"SELECT * FROM {$wf_tbl}
 			WHERE status = 'running'
 				AND deadline_at IS NOT NULL
-				AND deadline_at <= NOW()"
+				AND deadline_at <= NOW() AND id > :after_id ORDER BY id ASC LIMIT {$limit}"
 		);
-		$stmt->execute();
+		$stmt->execute( array( 'after_id' => $after_id ) );
 		$rows = $stmt->fetchAll();
 
 		foreach ( $rows as $raw_wf_row ) {
@@ -5170,23 +5696,8 @@ class Workflow {
 			$state         = $this->decode_state_column( $wf_row['state'] ?? null );
 			$handler_def   = $this->handler_definition( $state['_on_deadline'] ?? null );
 
-			if ( null !== $handler_def && class_exists( $handler_def['class'] ) ) {
-				$public_state = array_filter(
-					$state,
-					fn( string $key ) => ! str_starts_with( $key, '_' ),
-					ARRAY_FILTER_USE_KEY
-				);
-
-				try {
-					$handler_instance = new $handler_def['class']();
-					$this->call_handler_method( $handler_instance, 'handle', array( $public_state ), $handler_def['payload'] );
-				} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Deadline handler failure should not prevent marking as failed.
-					unset( $e );
-				}
-			}
-
 			$workflow_id = $this->to_int( $wf_row['id'] ?? 0 );
-			$pdo->beginTransaction();
+			$this->begin_transition( $pdo );
 			try {
 				$lock_stmt = $pdo->prepare( "SELECT * FROM {$wf_tbl} WHERE id = :id FOR UPDATE" );
 				$lock_stmt->execute( array( 'id' => $workflow_id ) );
@@ -5194,6 +5705,10 @@ class Workflow {
 
 				if ( ! $locked_row || WorkflowStatus::Running->value !== $locked_row['status'] ) {
 					$pdo->rollBack();
+					$this->transition_claims = array();
+					$this->terminal_jobs = array();
+					$this->terminal_workflows = array();
+					$this->compensations_after_commit = array();
 					continue;
 				}
 
@@ -5208,17 +5723,36 @@ class Workflow {
 					)
 				);
 
-				$pdo->commit();
+				$this->commit_transition( $pdo );
 			} catch ( \Throwable $e ) {
+				$this->abort_transition( $pdo );
 				if ( $pdo->inTransaction() ) {
 					$pdo->rollBack();
+					$this->transition_claims = array();
+					$this->terminal_jobs = array();
+					$this->terminal_workflows = array();
+					$this->compensations_after_commit = array();
 				}
 				throw $e;
 			}
 
+			if ( null !== $handler_def && class_exists( $handler_def['class'] ) ) {
+				$public_state = array_filter(
+					$state,
+					fn( string $key ) => ! str_starts_with( $key, '_' ),
+					ARRAY_FILTER_USE_KEY
+				);
+
+				try {
+					$handler_instance = new $handler_def['class']();
+					ExecutionContext::without_claim( fn() => $this->call_handler_method( $handler_instance, 'handle', array( $public_state ), $handler_def['payload'] ) );
+				} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Deadline handler failure should not prevent marking as failed.
+					unset( $e );
+				}
+			}
+
 			if ( ! empty( $state['_compensate_on_failure'] ) ) {
 				$state = $this->run_compensations( $workflow_id, $state, 'deadline' );
-				$this->persist_internal_state( $workflow_id, $state );
 			}
 
 			$this->invalidate_workflow_cache( $workflow_id );
@@ -5240,7 +5774,8 @@ class Workflow {
 		$jb_tbl = $this->conn->table( Config::table_jobs() );
 
 		$sql = "UPDATE {$jb_tbl}
-			SET status = :status, failed_at = NOW(), error_message = :message
+			SET status = :status, failed_at = NOW(), error_message = :message,
+				claim_token = NULL, lease_expires_at = NULL, action_deadline_at = NULL, revision = revision + 1
 			WHERE workflow_id = :workflow_id
 				AND status IN (:pending, :processing)";
 
@@ -5273,7 +5808,8 @@ class Workflow {
 		$jb_tbl = $this->conn->table( Config::table_jobs() );
 
 		$sql = "UPDATE {$jb_tbl}
-			SET status = :status, failed_at = NOW(), error_message = :message
+			SET status = :status, failed_at = NOW(), error_message = :message,
+				claim_token = NULL, lease_expires_at = NULL, action_deadline_at = NULL, revision = revision + 1
 			WHERE workflow_id = :workflow_id
 				AND step_index = :step_index
 				AND status IN (:pending, :processing)";
@@ -5310,6 +5846,9 @@ class Workflow {
 	private function mark_workflow_failed_locked( \PDO $pdo, array $wf_row, int $workflow_id, int $failed_job_id, string $error_message, ?array $state_override = null ): array {
 		$wf_tbl = $this->conn->table( Config::table_workflows() );
 		$state  = $state_override ?? ( $this->decode_state_column( $wf_row['state'] ?? null ) );
+		if ( ! empty( $state['_compensate_on_failure'] ) ) {
+			$state['_compensation_pending'] = true;
+		}
 
 		$stmt = $pdo->prepare(
 			"UPDATE {$wf_tbl}
@@ -5333,6 +5872,7 @@ class Workflow {
 			return $state;
 		}
 
+		$this->terminal_workflows[ $workflow_id ] = true;
 		$this->logger->log(
 			LogEvent::WorkflowFailed,
 			array(
@@ -5344,6 +5884,9 @@ class Workflow {
 		);
 
 		$this->bury_active_jobs_for_workflow( $workflow_id, $error_message, $failed_job_id );
+		if ( isset( $this->transition_claims[ $failed_job_id ] ) ) {
+			$this->bury_transition_job( $pdo, $failed_job_id, $error_message );
+		}
 
 		return $state;
 	}

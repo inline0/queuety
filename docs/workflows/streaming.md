@@ -38,15 +38,15 @@ interface StreamingStep {
 
 Every time your generator yields a value, Queuety calls `ChunkStore::append_chunk()` to write it to the `queuety_chunks` table. There is no batching or buffering. One yield equals one INSERT.
 
-The chunk row stores the `job_id`, `workflow_id`, `step_index`, `chunk_index` (zero-based), and the string `content`.
+The chunk row stores the `job_id`, `workflow_id`, `step_index`, `claim_token`, `chunk_index` (zero-based), and string `content`. Every write checks live ownership; a superseded attempt cannot overwrite another attempt.
 
 ## Resumability
 
-When a streaming step is retried after a failure, the worker loads all previously persisted chunks and passes them as the `$existing_chunks` parameter. Your implementation decides how to resume:
+When a streaming step is retried after a failure, the worker copies the latest resumable attempt into the new claim and loads that attempt's chunks and passes them as the `$existing_chunks` parameter. Your implementation decides how to resume:
 
 - **Skip already-processed items** by checking the count of existing chunks
 - **Offset into a paginated API** using the chunk count as the page offset
-- **Restart from scratch** by ignoring `$existing_chunks` entirely (chunks from the previous attempt are still in the DB and will be prepended)
+- **Restart non-resumable inference** as a new logical action. Ignoring saved chunks would prepend partial output to a new response and must not be treated as a completed result.
 
 ```php
 public function stream( array $state, array $existing_chunks = [] ): \Generator {
@@ -79,62 +79,21 @@ See [Heartbeats](/docs/features/heartbeats) for details on the Heartbeat API.
 
 ## Chunk cleanup
 
-When the stream completes successfully and `on_complete()` returns, the worker calls `ChunkStore::clear_chunks()` to delete all chunks for the job. The merged result from `on_complete()` is the durable record. Chunks are temporary by design.
+Only after the fenced workflow completion transaction commits does the worker clear that successful attempt's chunks. If next-step dispatch or a checkpoint fails, its chunks remain. Successful cleanup also prunes older attempt data. Its row boundary and token scope preserve a newer replacement attempt. The committed `on_complete()` output is the final result.
 
 If the step fails and is retried, chunks are not deleted. They are passed back via `$existing_chunks` on the next attempt.
 
-## Full example: LLM streaming
+## LLM streams are not automatically resumable
 
-```php
-use Queuety\Contracts\StreamingStep;
-use Queuety\Heartbeat;
+A saved prefix of tokens does not establish that a model finished. Do not return
+success merely because `$existing_chunks` is non-empty. Most provider streams
+cannot resume inference from a token offset. Keep partial output marked as
+partial; retry through a new logical request with its own operation identity, or
+use a provider protocol that explicitly supports resumption and completion.
 
-class StreamLLMResponse implements StreamingStep {
-
-    public function stream( array $state, array $existing_chunks = [] ): \Generator {
-        // If we have existing chunks from a previous attempt, we can skip
-        // re-requesting. The on_complete method will concatenate everything.
-        if ( ! empty( $existing_chunks ) ) {
-            return;
-        }
-
-        $response = OpenAI::chat()->createStreamed( [
-            'model'    => 'gpt-4',
-            'messages' => $state['messages'],
-        ] );
-
-        foreach ( $response as $i => $chunk ) {
-            $text = $chunk->choices[0]->delta->content ?? '';
-            if ( '' !== $text ) {
-                Heartbeat::beat( [ 'tokens' => $i ] );
-                yield $text;
-            }
-        }
-    }
-
-    public function on_complete( array $chunks, array $state ): array {
-        return [
-            'llm_response' => implode( '', $chunks ),
-        ];
-    }
-
-    public function config(): array {
-        return [ 'max_attempts' => 5 ];
-    }
-}
-```
-
-Use it in a workflow like any other step:
-
-```php
-use Queuety\Queuety;
-
-Queuety::workflow( 'ai_chat' )
-    ->then( BuildPromptHandler::class )
-    ->then( StreamLLMResponse::class )
-    ->then( SaveResponseHandler::class )
-    ->dispatch( [ 'user_input' => $input ] );
-```
+The [Neuron streaming example](/docs/examples/neuron-streaming-step) describes
+this boundary. Queuety guarantees attempt ownership and transactional publication;
+it cannot synthesize a missing provider completion receipt.
 
 ## Full example: file processing
 
@@ -197,9 +156,9 @@ $store = Queuety::chunk_store();
 
 | Method | Returns | Description |
 |---|---|---|
-| `get_chunks( int $job_id )` | `string[]` | Fetch all chunks for a job, ordered by chunk index |
+| `get_chunks( int $job_id, ?string $claim_token = null )` | `string[]` | Fetch all chunks for a job, ordered by chunk index |
 | `append_chunk( int $job_id, int $chunk_index, string $content, ?int $workflow_id, ?int $step_index )` | `void` | Append a single chunk |
-| `clear_chunks( int $job_id )` | `void` | Delete all chunks for a job |
+| `clear_chunks( int $job_id, ?string $claim_token = null )` | `void` | Delete the selected attempt; contextless administrative omission selects all attempts |
 | `chunk_count( int $job_id )` | `int` | Count the number of chunks for a job |
 | `get_accumulated( int $job_id )` | `string` | Concatenate all chunks into one string |
 

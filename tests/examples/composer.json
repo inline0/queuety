@@ -1,0 +1,20 @@
+{
+    "name": "inline0/queuety-neuron-examples",
+    "description": "Pinned optional Neuron adapter contract tests for Queuety documentation.",
+    "type": "project",
+    "license": "GPL-2.0-or-later",
+    "require": {
+        "php": ">=8.2",
+        "neuron-core/neuron-ai": "4.1.13",
+        "symfony/polyfill-mbstring": "1.43.0"
+    },
+    "config": {
+        "platform": {
+            "php": "8.2.0"
+        },
+        "allow-plugins": false
+    },
+    "scripts": {
+        "test": "php check-neuron.php"
+    }
+}

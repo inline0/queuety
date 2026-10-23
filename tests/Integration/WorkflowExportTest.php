@@ -48,11 +48,11 @@ class WorkflowExportTest extends IntegrationTestCase {
 
 		// Advance step 0.
 		$job0 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ), 10 );
+		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ), 10 , job: $job0);
 
 		// Advance step 1 (completes workflow).
 		$job1 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job1->id, array( 'step1_result' => 'b' ), 20 );
+		$this->workflow->advance_step( $wf_id, $job1->id, array( 'step1_result' => 'b' ), 20 , job: $job1);
 
 		return $wf_id;
 	}
@@ -66,17 +66,17 @@ class WorkflowExportTest extends IntegrationTestCase {
 		$wf_id = $builder->dispatch( array( 'input' => 'data' ) );
 
 		$job0 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ), 10 );
+		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ), 10 , job: $job0);
 
 		$state = $this->workflow->get_state( $wf_id );
 		$this->assertIsArray( $state );
 		$job1 = $this->queue->claim();
 		$this->assertNotNull( $job1 );
-		$this->queue->complete( $job1->id );
 		$this->workflow->handle_signal_step(
 			$wf_id,
 			$state['_steps'][1],
 			1,
+			job: $job1,
 		);
 
 		return $wf_id;
@@ -84,24 +84,29 @@ class WorkflowExportTest extends IntegrationTestCase {
 
 	private function create_waiting_for_workflows_dependency(): array {
 		$dependency_id = ( new WorkflowBuilder( 'dependency_export', $this->conn, $this->queue, $this->logger ) )
+			->on_queue( 'export_dependencies' )
 			->then( 'StepA' )
 			->dispatch();
 
 		$parent_id = ( new WorkflowBuilder( 'parent_export', $this->conn, $this->queue, $this->logger ) )
+			->on_queue( 'export_dependencies' )
 			->wait_for_workflow( $dependency_id, 'dependency' )
 			->then( 'StepB' )
 			->dispatch();
 
 		$state = $this->workflow->get_state( $parent_id );
 		$this->assertIsArray( $state );
-		$job = $this->queue->claim();
+		$job = $this->queue->claim( 'export_dependencies' );
 		$this->assertNotNull( $job );
-		$this->queue->complete( $job->id );
+		$this->queue->complete( $job->id, $job->claim_token );
+		$parent_job = $this->queue->claim( 'export_dependencies' );
+		$this->assertNotNull( $parent_job );
 		$this->workflow->handle_wait_for_workflows_step(
 			$parent_id,
 			$state['_steps'][0],
 			0,
 			$state,
+			job: $parent_job,
 		);
 
 		return array( $parent_id, $dependency_id );
@@ -267,13 +272,13 @@ class WorkflowExportTest extends IntegrationTestCase {
 		$wf_id = $builder->dispatch( array( 'input' => 'data' ) );
 
 		$job0 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ), 10 );
+		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ), 10 , job: $job0);
 
 		// Drain the queue of the existing step 1 job.
 		$existing_job = $this->queue->claim();
 		$this->assertNotNull( $existing_job );
 		// Mark it as completed to clear it.
-		$this->queue->complete( $existing_job->id );
+		$this->queue->complete( $existing_job->id, $existing_job->claim_token );
 
 		// Export while running at step 1.
 		$data = WorkflowExporter::export( $wf_id, $this->conn );
@@ -316,11 +321,11 @@ class WorkflowExportTest extends IntegrationTestCase {
 			->dispatch();
 		$first = $this->queue->claim();
 		$this->assertNotNull( $first );
-		$this->workflow->advance_step( $id, $first->id, array( 'counter' => 1 ) );
+		$this->workflow->advance_step( $id, $first->id, array( 'counter' => 1 ) , job: $first);
 		$export = WorkflowExporter::export( $id, $this->conn );
 		$source = $this->queue->claim();
 		$this->assertNotNull( $source );
-		$this->queue->complete( $source->id );
+		$this->queue->complete( $source->id, $source->claim_token );
 		$new_id = WorkflowReplayer::replay( $export, $this->conn );
 		$job = $this->queue->claim();
 		$this->assertNotNull( $job );
@@ -339,7 +344,7 @@ class WorkflowExportTest extends IntegrationTestCase {
 		$export = WorkflowExporter::export( $id, $this->conn );
 		$source = $this->queue->claim();
 		$this->assertNotNull( $source );
-		$this->queue->complete( $source->id );
+		$this->queue->complete( $source->id, $source->claim_token );
 		$new_id = WorkflowReplayer::replay( $export, $this->conn );
 		$job = $this->queue->claim();
 		$this->assertNotNull( $job );

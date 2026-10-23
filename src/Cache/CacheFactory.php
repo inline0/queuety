@@ -10,21 +10,19 @@ namespace Queuety\Cache;
 use Queuety\Contracts\Cache;
 
 /**
- * Factory that creates the best available cache backend.
- *
- * Prefers APCu when available (shared across processes), falls back
- * to an in-memory array cache (per-process only).
+ * Creates isolated local caches or explicitly scoped shared caches.
  */
 class CacheFactory {
 
 	/**
-	 * Create a cache instance using the best available backend.
+	 * Create a local cache, or opt into APCu with an installation namespace.
 	 *
+	 * @param string|null $namespace Stable installation identity for shared caching.
 	 * @return Cache
 	 */
-	public static function create(): Cache {
-		if ( function_exists( 'apcu_store' ) && apcu_enabled() ) {
-			return new ApcuCache();
+	public static function create( ?string $namespace = null ): Cache {
+		if ( null !== $namespace && function_exists( 'apcu_store' ) && apcu_enabled() ) {
+			return new ApcuCache( $namespace );
 		}
 
 		return new MemoryCache();

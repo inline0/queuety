@@ -7,6 +7,8 @@
 
 namespace Queuety;
 
+use Queuety\Exceptions\TimeoutException;
+
 /**
  * Fires HTTP webhooks on job/workflow events.
  */
@@ -90,18 +92,22 @@ class WebhookNotifier {
 	/**
 	 * Send POST notifications to all webhooks registered for a given event.
 	 *
-	 * This is non-blocking (fire-and-forget). Failures are silently ignored.
+	 * Each request uses at most one second and the action's remaining budget.
+	 * Ordinary delivery failures are ignored; an exhausted action budget stops
+	 * delivery. Post-commit notifications do not require an active job claim.
 	 *
 	 * @param string               $event Event name.
 	 * @param array<string, mixed> $data  Payload data to send as JSON.
 	 */
 	public function notify( string $event, array $data ): void {
+		$this->request_timeout();
 		$table = $this->conn->table( Config::table_webhooks() );
 		$stmt  = $this->conn->pdo()->prepare(
 			"SELECT url FROM {$table} WHERE event = :event"
 		);
 		$stmt->execute( array( 'event' => $event ) );
 		$urls = array_column( $stmt->fetchAll(), 'url' );
+		$this->request_timeout();
 
 		if ( empty( $urls ) ) {
 			return;
@@ -118,21 +124,35 @@ class WebhookNotifier {
 
 		foreach ( $urls as $url ) {
 			if ( is_string( $url ) ) {
-				$this->fire_and_forget( $url, $json );
+				$this->send_request( $url, $json, $this->request_timeout() );
+				$this->request_timeout();
 			}
 		}
 	}
 
 	/**
-	 * Send a non-blocking HTTP POST request.
+	 * Calculate a transport timeout without checking a completed job's claim.
 	 *
-	 * Uses a very short timeout so the worker is not blocked.
-	 * Catches and ignores all failures.
+	 * @return float Maximum seconds for the next request.
+	 * @throws TimeoutException When the action's remaining budget is exhausted.
+	 */
+	private function request_timeout(): float {
+		$remaining = ExecutionContext::remaining_seconds();
+		if ( null !== $remaining && $remaining <= 0.0 ) {
+			throw new TimeoutException( 0 );
+		}
+		return null === $remaining ? 1.0 : min( 1.0, $remaining );
+	}
+
+	/**
+	 * Send one best-effort HTTP POST within the supplied transport timeout.
 	 *
 	 * @param string $url  Target URL.
 	 * @param string $json JSON body.
+	 * @param float  $timeout Remaining per-request budget in seconds.
+	 * @throws TimeoutException When a scoped alarm expires during delivery.
 	 */
-	private function fire_and_forget( string $url, string $json ): void {
+	private function send_request( string $url, string $json, float $timeout ): void {
 		try {
 			$context = stream_context_create(
 				array(
@@ -140,12 +160,14 @@ class WebhookNotifier {
 						'method'  => 'POST',
 						'header'  => "Content-Type: application/json\r\nContent-Length: " . strlen( $json ) . "\r\n",
 						'content' => $json,
-						'timeout' => 1,
+						'timeout' => $timeout,
 					),
 				)
 			);
-			@file_get_contents( $url, false, $context ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Best-effort webhook dispatch uses a one-second local stream timeout and must never block the worker on HTTP API overhead.
-		} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Webhook delivery is best-effort and must not block the worker.
+			@file_get_contents( $url, false, $context ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Direct stream delivery applies the remaining transport budget without requiring WordPress.
+		} catch ( TimeoutException $error ) {
+			throw $error;
+		} catch ( \Throwable $error ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- Ordinary webhook delivery failures remain best-effort; action deadlines propagate above.
 		}
 	}
 }

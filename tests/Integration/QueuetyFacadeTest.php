@@ -83,8 +83,8 @@ class QueuetyFacadeTest extends IntegrationTestCase {
 	public function test_retry_job(): void {
 		$id = Queuety::dispatch( 'handler' )->id();
 
-		Queuety::queue()->claim();
-		Queuety::queue()->fail( $id, 'error' );
+		$claim = Queuety::queue()->claim();
+		Queuety::queue()->fail( $id, 'error', claim_token: $claim->claim_token );
 
 		Queuety::retry( $id );
 
@@ -130,7 +130,7 @@ class QueuetyFacadeTest extends IntegrationTestCase {
 			->dispatch();
 
 		$job = Queuety::queue()->claim();
-		Queuety::workflow_manager()->fail( $wf_id, $job->id, 'error' );
+		Queuety::workflow_manager()->fail( $wf_id, $job->id, 'error' , job: $job);
 
 		Queuety::retry_workflow( $wf_id );
 
@@ -149,9 +149,6 @@ class QueuetyFacadeTest extends IntegrationTestCase {
 		$status = Queuety::workflow_status( $wf_id );
 		$this->assertSame( WorkflowStatus::Paused, $status->status );
 
-		// Complete step 0; next step should not be enqueued.
-		$job = Queuety::queue()->claim();
-		Queuety::workflow_manager()->advance_step( $wf_id, $job->id, array() );
 		$this->assertNull( Queuety::queue()->claim() );
 
 		Queuety::resume_workflow( $wf_id );
@@ -161,6 +158,7 @@ class QueuetyFacadeTest extends IntegrationTestCase {
 
 		$next = Queuety::queue()->claim();
 		$this->assertNotNull( $next );
+		$this->assertSame( 0, $next->step_index );
 	}
 
 	// -- stats --------------------------------------------------------------

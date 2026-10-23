@@ -48,12 +48,12 @@ class WorkflowRewindTest extends IntegrationTestCase {
 		// Advance through step 0.
 		$job0 = $this->queue->claim();
 		$this->assertNotNull( $job0 );
-		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ), 10 );
+		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ), 10 , job: $job0);
 
 		// Advance through step 1.
 		$job1 = $this->queue->claim();
 		$this->assertNotNull( $job1 );
-		$this->workflow->advance_step( $wf_id, $job1->id, array( 'step1_result' => 'b' ), 20 );
+		$this->workflow->advance_step( $wf_id, $job1->id, array( 'step1_result' => 'b' ), 20 , job: $job1);
 
 		// Verify step 0 snapshot exists.
 		$snapshot_0 = $this->event_log->get_state_at_step( $wf_id, 0 );
@@ -84,15 +84,15 @@ class WorkflowRewindTest extends IntegrationTestCase {
 
 		// Advance through step 0.
 		$job0 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ), 10 );
+		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ), 10 , job: $job0);
 
 		// Advance through step 1.
 		$job1 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job1->id, array( 'step1_result' => 'b' ), 20 );
+		$this->workflow->advance_step( $wf_id, $job1->id, array( 'step1_result' => 'b' ), 20 , job: $job1);
 
 		// Fail the workflow at step 2.
 		$job2 = $this->queue->claim();
-		$this->workflow->fail( $wf_id, $job2->id, 'Something went wrong' );
+		$this->workflow->fail( $wf_id, $job2->id, 'Something went wrong' , job: $job2);
 
 		$status = $this->workflow->status( $wf_id );
 		$this->assertSame( WorkflowStatus::Failed, $status->status );
@@ -113,7 +113,7 @@ class WorkflowRewindTest extends IntegrationTestCase {
 
 		// Advance through step 0.
 		$job0 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ), 10 );
+		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ), 10 , job: $job0);
 
 		// Try to rewind to step 5 (doesn't exist).
 		$this->expectException( \RuntimeException::class );

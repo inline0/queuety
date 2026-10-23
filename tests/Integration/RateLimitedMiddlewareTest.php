@@ -107,12 +107,7 @@ class RateLimitedMiddlewareTest extends TestCase {
 
 	private function skip_if_no_database(): void {
 		try {
-			$dsn = sprintf(
-				'mysql:host=%s;dbname=%s;charset=utf8mb4',
-				QUEUETY_TEST_DB_HOST,
-				QUEUETY_TEST_DB_NAME
-			);
-			new \PDO( $dsn, QUEUETY_TEST_DB_USER, QUEUETY_TEST_DB_PASS );
+			( new Connection( QUEUETY_TEST_DB_HOST, QUEUETY_TEST_DB_NAME, QUEUETY_TEST_DB_USER, QUEUETY_TEST_DB_PASS ) )->pdo();
 		} catch ( \PDOException $e ) {
 			$this->markTestSkipped( 'MySQL is not available: ' . $e->getMessage() );
 		}

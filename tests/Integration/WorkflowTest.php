@@ -51,7 +51,7 @@ class WorkflowTest extends IntegrationTestCase {
 		$this->assertSame( $wf_id, $job0->workflow_id );
 		$this->assertSame( 0, $job0->step_index );
 
-		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ) );
+		$this->workflow->advance_step( $wf_id, $job0->id, array( 'step0_result' => 'a' ) , job: $job0);
 
 		$status = $this->workflow->status( $wf_id );
 		$this->assertSame( WorkflowStatus::Running, $status->status );
@@ -62,7 +62,7 @@ class WorkflowTest extends IntegrationTestCase {
 		$this->assertNotNull( $job1 );
 		$this->assertSame( 1, $job1->step_index );
 
-		$this->workflow->advance_step( $wf_id, $job1->id, array( 'step1_result' => 'b' ) );
+		$this->workflow->advance_step( $wf_id, $job1->id, array( 'step1_result' => 'b' ) , job: $job1);
 
 		$status = $this->workflow->status( $wf_id );
 		$this->assertSame( 2, $status->current_step );
@@ -72,7 +72,7 @@ class WorkflowTest extends IntegrationTestCase {
 		$this->assertNotNull( $job2 );
 		$this->assertSame( 2, $job2->step_index );
 
-		$this->workflow->advance_step( $wf_id, $job2->id, array( 'step2_result' => 'c' ) );
+		$this->workflow->advance_step( $wf_id, $job2->id, array( 'step2_result' => 'c' ) , job: $job2);
 
 		$status = $this->workflow->status( $wf_id );
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
@@ -88,14 +88,14 @@ class WorkflowTest extends IntegrationTestCase {
 		);
 
 		$job0 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job0->id, array( 'from_step0' => 'alpha' ) );
+		$this->workflow->advance_step( $wf_id, $job0->id, array( 'from_step0' => 'alpha' ) , job: $job0);
 
 		$state = $this->workflow->get_state( $wf_id );
 		$this->assertSame( 'value', $state['initial'] );
 		$this->assertSame( 'alpha', $state['from_step0'] );
 
 		$job1 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job1->id, array( 'from_step1' => 'beta' ) );
+		$this->workflow->advance_step( $wf_id, $job1->id, array( 'from_step1' => 'beta' ) , job: $job1);
 
 		$state = $this->workflow->get_state( $wf_id );
 		$this->assertSame( 'value', $state['initial'] );
@@ -110,7 +110,7 @@ class WorkflowTest extends IntegrationTestCase {
 		$this->workflow->advance_step( $wf_id, $job0->id, array(
 			'public_key'  => 'visible',
 			'_private_key' => 'should_not_merge',
-		) );
+		) , job: $job0);
 
 		$status = $this->workflow->status( $wf_id );
 		$this->assertSame( 'visible', $status->state['public_key'] );
@@ -123,7 +123,7 @@ class WorkflowTest extends IntegrationTestCase {
 		$wf_id = $this->create_workflow( array( 'StepA', 'StepB', 'StepC' ) );
 
 		$job0 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job0->id, array() );
+		$this->workflow->advance_step( $wf_id, $job0->id, array() , job: $job0);
 
 		// Next job should be step 1.
 		$job1 = $this->queue->claim();
@@ -137,7 +137,7 @@ class WorkflowTest extends IntegrationTestCase {
 		$wf_id = $this->create_workflow( array( 'StepA' ) );
 
 		$job0 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job0->id, array( 'result' => 'done' ) );
+		$this->workflow->advance_step( $wf_id, $job0->id, array( 'result' => 'done' ) , job: $job0);
 
 		$status = $this->workflow->status( $wf_id );
 		$this->assertSame( WorkflowStatus::Completed, $status->status );
@@ -148,7 +148,7 @@ class WorkflowTest extends IntegrationTestCase {
 		$wf_id = $this->create_workflow( array( 'StepA', 'StepB' ) );
 
 		$job0 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job0->id, array() );
+		$this->workflow->advance_step( $wf_id, $job0->id, array() , job: $job0);
 
 		$completed_job = $this->queue->find( $job0->id );
 		$this->assertSame( JobStatus::Completed, $completed_job->status );
@@ -160,7 +160,7 @@ class WorkflowTest extends IntegrationTestCase {
 		$wf_id = $this->create_workflow( array( 'StepA', 'StepB' ) );
 
 		$job0 = $this->queue->claim();
-		$this->workflow->fail( $wf_id, $job0->id, 'Step handler threw exception' );
+		$this->workflow->fail( $wf_id, $job0->id, 'Step handler threw exception' , job: $job0);
 
 		$status = $this->workflow->status( $wf_id );
 		$this->assertSame( WorkflowStatus::Failed, $status->status );
@@ -172,7 +172,7 @@ class WorkflowTest extends IntegrationTestCase {
 		$wf_id = $this->create_workflow( array( 'StepA', 'StepB' ) );
 
 		$job0 = $this->queue->claim();
-		$this->workflow->fail( $wf_id, $job0->id, 'error' );
+		$this->workflow->fail( $wf_id, $job0->id, 'error' , job: $job0);
 
 		$this->workflow->retry( $wf_id );
 
@@ -203,39 +203,29 @@ class WorkflowTest extends IntegrationTestCase {
 
 	// -- pause / resume -----------------------------------------------------
 
-	public function test_pause_prevents_next_step_from_being_enqueued(): void {
+	public function test_pause_revokes_current_attempt_and_blocks_queued_work(): void {
 		$wf_id = $this->create_workflow( array( 'StepA', 'StepB', 'StepC' ) );
-
-		// Pause before step 0 completes.
-		$this->workflow->pause( $wf_id );
-
 		$job0 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job0->id, array( 'r' => 'v' ) );
-
-		// No next job should be enqueued.
-		$next = $this->queue->claim();
-		$this->assertNull( $next );
-
-		$status = $this->workflow->status( $wf_id );
-		// After advance_step with paused status, step advances but no job created.
-		$this->assertSame( 1, $status->current_step );
+		$this->workflow->pause( $wf_id );
+		$this->assertNull( $this->queue->claim() );
+		try {
+			$this->workflow->advance_step( $wf_id, $job0->id, array( 'r' => 'v' ), job: $job0 );
+			$this->fail( 'A paused attempt cannot publish its result.' );
+		} catch ( \Queuety\Exceptions\LostClaimException ) {
+			$this->assertSame( 0, $this->workflow->status( $wf_id )->current_step );
+			$this->assertArrayNotHasKey( 'r', $this->workflow->get_state( $wf_id ) );
+		}
 	}
 
-	public function test_resume_after_pause_enqueues_next_step(): void {
+	public function test_resume_after_pause_reclaims_current_step_without_duplicate(): void {
 		$wf_id = $this->create_workflow( array( 'StepA', 'StepB', 'StepC' ) );
-
-		$this->workflow->pause( $wf_id );
-
 		$job0 = $this->queue->claim();
-		$this->workflow->advance_step( $wf_id, $job0->id, array() );
-
-		// Resume the paused workflow.
+		$this->workflow->pause( $wf_id );
 		$this->workflow->resume( $wf_id );
-
-		$status = $this->workflow->status( $wf_id );
-		$this->assertSame( WorkflowStatus::Running, $status->status );
-
-		// The next step job should now be available.
+		$this->assertSame( WorkflowStatus::Running, $this->workflow->status( $wf_id )->status );
+		$resumed = $this->queue->claim();
+		$this->assertSame( $job0->id, $resumed->id );
+		$this->workflow->advance_step( $wf_id, $resumed->id, array(), job: $resumed );
 		$next = $this->queue->claim();
 		$this->assertNotNull( $next );
 		$this->assertSame( 'StepB', $next->handler );
@@ -295,7 +285,7 @@ class WorkflowTest extends IntegrationTestCase {
 
 		// Complete wf1.
 		$job = $this->queue->claim();
-		$this->workflow->advance_step( $wf1, $job->id, array() );
+		$this->workflow->advance_step( $wf1, $job->id, array() , job: $job);
 
 		$running   = $this->workflow->list( WorkflowStatus::Running );
 		$completed = $this->workflow->list( WorkflowStatus::Completed );
@@ -314,10 +304,10 @@ class WorkflowTest extends IntegrationTestCase {
 
 		// Complete both.
 		$job1 = $this->queue->claim();
-		$this->workflow->advance_step( $wf1, $job1->id, array() );
+		$this->workflow->advance_step( $wf1, $job1->id, array() , job: $job1);
 
 		$job2 = $this->queue->claim();
-		$this->workflow->advance_step( $wf2, $job2->id, array() );
+		$this->workflow->advance_step( $wf2, $job2->id, array() , job: $job2);
 
 		// Backdate wf1.
 		$this->raw_update(

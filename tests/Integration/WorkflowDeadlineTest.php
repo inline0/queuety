@@ -105,7 +105,7 @@ class WorkflowDeadlineTest extends IntegrationTestCase {
 		// Complete the workflow.
 		$job0 = $this->queue->claim();
 		$this->assertNotNull( $job0 );
-		$this->workflow->advance_step( $wf_id, $job0->id, array( 'result' => 'done' ) );
+		$this->workflow->advance_step( $wf_id, $job0->id, array( 'result' => 'done' ) , job: $job0);
 
 		$status = $this->workflow->status( $wf_id );
 		$this->assertSame( WorkflowStatus::Completed, $status->status );

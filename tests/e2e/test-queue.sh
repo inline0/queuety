@@ -10,25 +10,26 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 DB_HOST="${QUEUETY_TEST_DB_HOST:-127.0.0.1}"
+DB_HOST_PDO="${DB_HOST/:/;port=}"
 DB_NAME="${QUEUETY_TEST_DB_NAME:-queuety_test}"
 DB_USER="${QUEUETY_TEST_DB_USER:-root}"
 DB_PASS="${QUEUETY_TEST_DB_PASS:-}"
 DB_PREFIX="${QUEUETY_TEST_DB_PREFIX:-e2e_}"
 
 # Check MySQL is available.
-if ! php -r "new PDO('mysql:host=${DB_HOST}', '${DB_USER}', '${DB_PASS}');" 2>/dev/null; then
+if ! php -d zend.assertions=1 -d assert.exception=1 -r "new PDO('mysql:host=${DB_HOST_PDO}', '${DB_USER}', '${DB_PASS}');" 2>/dev/null; then
     echo "SKIP: MySQL not available at ${DB_HOST}"
     exit 0
 fi
 
 # Create test database if needed.
-php -r "
-    \$pdo = new PDO('mysql:host=${DB_HOST}', '${DB_USER}', '${DB_PASS}');
+php -d zend.assertions=1 -d assert.exception=1 -r "
+    \$pdo = new PDO('mysql:host=${DB_HOST_PDO}', '${DB_USER}', '${DB_PASS}');
     \$pdo->exec('CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`');
 "
 
 # Run the test script.
-php -r "
+php -d zend.assertions=1 -d assert.exception=1 -r "
     require '${PROJECT_DIR}/vendor/autoload.php';
 
     use Queuety\Connection;
@@ -70,15 +71,15 @@ php -r "
     echo \"PASS: claim returns job with correct data\n\";
 
     // Test 4: Complete the job.
-    \$queue->complete(\$job->id);
+    \$queue->complete(\$job->id, claim_token: \$job->claim_token);
     \$completed = \$queue->find(\$job->id);
     assert(\$completed->status === JobStatus::Completed, 'Should be completed');
     echo \"PASS: complete\n\";
 
     // Test 5: Dispatch and bury.
     \$id2 = \$queue->dispatch('fail_handler', ['x' => 1]);
-    \$queue->claim('default');
-    \$queue->bury(\$id2, 'Test error');
+    \$job2 = \$queue->claim('default');
+    \$queue->bury(\$id2, 'Test error', claim_token: \$job2->claim_token);
     \$buried = Queuety::buried();
     assert(count(\$buried) === 1, 'Should have 1 buried job');
     echo \"PASS: bury and buried()\n\";
@@ -89,10 +90,10 @@ php -r "
     \$urgent = \$queue->dispatch('handler', priority: Priority::Urgent);
     \$claimed = \$queue->claim('default');
     assert(\$claimed->id === \$urgent, 'Urgent should be claimed first');
-    \$queue->complete(\$claimed->id);
+    \$queue->complete(\$claimed->id, claim_token: \$claimed->claim_token);
     \$claimed = \$queue->claim('default');
     assert(\$claimed->id === \$high, 'High should be claimed second');
-    \$queue->complete(\$claimed->id);
+    \$queue->complete(\$claimed->id, claim_token: \$claimed->claim_token);
     echo \"PASS: priority ordering\n\";
 
     // Cleanup.

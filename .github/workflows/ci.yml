@@ -45,6 +45,22 @@ jobs:
           node-version: "22"
       - run: node scripts/check-docs-content.mjs --root docs --expected-docs 55 --expected-nav 4
 
+  neuron-examples:
+    name: Neuron examples / PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php: ["8.2", "8.5"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, mbstring
+          tools: composer
+      - run: composer install --working-dir=tests/examples --no-interaction --no-plugins --no-scripts
+      - run: composer test --working-dir=tests/examples
+
   test-unit:
     name: Unit Tests
     runs-on: ubuntu-latest
@@ -53,7 +69,8 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.4"
-          extensions: mysqli, pdo_mysql
+          extensions: mysqli, pdo_mysql, apcu
+          ini-values: apc.enable_cli=1
           tools: composer
       - run: composer install --no-interaction
       - run: composer test:unit
@@ -61,9 +78,13 @@ jobs:
   test-integration:
     name: Integration Tests
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        database: ["mysql:8.0", "mariadb:10.6"]
     services:
       mysql:
-        image: mysql:8.0
+        image: ${{ matrix.database }}
         env:
           MYSQL_ROOT_PASSWORD: root
           MYSQL_DATABASE: queuety_test
@@ -89,6 +110,49 @@ jobs:
           QUEUETY_TEST_DB_USER: root
           QUEUETY_TEST_DB_PASS: root
           QUEUETY_TEST_DB_PREFIX: test_
+
+  standalone-runtime:
+    name: Standalone PHP ${{ matrix.php }} / ${{ matrix.database }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ["8.2", "8.5"]
+        database: ["mysql:8.0", "mariadb:10.6"]
+    services:
+      mysql:
+        image: ${{ matrix.database }}
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: queuety_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=6
+    steps:
+      - uses: actions/checkout@v5
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.5"
+          extensions: mysqli, pdo_mysql
+          tools: composer
+      # Resolve tooling on current PHP, but install only production requirements.
+      - run: composer install --no-dev --no-interaction
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mysqli, pdo_mysql
+      - name: Exercise runtime without WordPress, pcntl or process launching
+        run: php -d disable_functions=pcntl_alarm,pcntl_signal,pcntl_async_signals,pcntl_fork,proc_open,popen,exec,shell_exec,system,passthru tests/runtime/standalone.php
+        env:
+          QUEUETY_TEST_DB_HOST: 127.0.0.1
+          QUEUETY_TEST_DB_NAME: queuety_test
+          QUEUETY_TEST_DB_USER: root
+          QUEUETY_TEST_DB_PASS: root
+          QUEUETY_TEST_DB_PREFIX: runtime_
 
   test-e2e-core:
     name: Core E2E Tests

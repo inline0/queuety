@@ -2,6 +2,9 @@
 
 namespace Queuety\Tests\Integration;
 
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
+
 use Queuety\Config;
 use Queuety\Enums\JobStatus;
 use Queuety\Exceptions\TimeoutException;
@@ -13,6 +16,8 @@ use Queuety\Workflow;
 use Queuety\Tests\IntegrationTestCase;
 use Queuety\Tests\Integration\Fixtures\SlowHandler;
 
+#[RunTestsInSeparateProcesses]
+#[PreserveGlobalState(false)]
 class JobTimeoutTest extends IntegrationTestCase {
 
 	private Queue $queue;
@@ -72,12 +77,14 @@ class JobTimeoutTest extends IntegrationTestCase {
 			$job = $this->queue->claim();
 
 			$this->worker->process_job( $job );
+			$this->assertSame( JobStatus::Processing, $this->queue->find( $id )->status );
+			$this->assertSame( 1, $this->worker->recover_stale() );
 
 			$result = $this->queue->find( $id );
 
 			// The job should be buried since max_attempts=1 and it timed out.
 			$this->assertSame( JobStatus::Buried, $result->status );
-			$this->assertStringContainsString( 'maximum execution time', $result->error_message );
+			$this->assertStringContainsString( 'Stale:', $result->error_message );
 		} finally {
 			pcntl_async_signals( $prev_async );
 		}
@@ -102,6 +109,8 @@ class JobTimeoutTest extends IntegrationTestCase {
 			$job = $this->queue->claim();
 
 			$this->worker->process_job( $job );
+			$this->assertSame( JobStatus::Processing, $this->queue->find( $id )->status );
+			$this->assertSame( 1, $this->worker->recover_stale() );
 
 			$result = $this->queue->find( $id );
 

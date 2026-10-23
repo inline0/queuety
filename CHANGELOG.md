@@ -2,6 +2,45 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.23.0] - 2026-10-23
+
+### Added
+
+- opaque per-claim ownership tokens, database-time leases and fixed action deadlines; all worker mutations reject expired or superseded owners
+- `Queuety::tick()` for one finite standalone action and `maintenance_batch()` for bounded recovery, schedules, deadlines and retention with a phase cursor
+- cooperative execution deadlines, explicit wait/retry-at/terminal-failure exceptions, and `ExecutionContext::on_completion()` for transactional application checkpoints
+- durable database-enforced dispatch keys with conflict detection and active-job uniqueness for legacy unique dispatches
+- explicit versioned schema installation, draining and compatibility checks; ordinary worker initialization performs no migrations
+- optional database connect/read/row-lock/metadata-lock controls, capability reporting, connection discard and an explicit unknown-COMMIT exception
+- independent-process lease and resume race tests, transaction failure injection, PHP 8.2 standalone proofs without WordPress or process launching, and MySQL 8.0/MariaDB 10.6 CI coverage
+- executable Neuron 4.1.13 examples with deterministic fake providers on PHP 8.2 and current PHP
+
+### Fixed
+
+- stale workers can no longer heartbeat, complete, retry, release, enqueue or publish over a replacement claim, including after waiting for a database row lock
+- recovery compares the observed claim and cannot reopen completed or reclaimed jobs
+- workflow controllers, child dispatch and parent wakeups, parallel/for-each branches, terminal recovery and state-machine completion preserve job and state transitions in the same transaction
+- repeated parallel steps count only their current branches; wait enrollment and child completion cannot lose a parent wakeup
+- batch counters commit with job completion or terminal failure before best-effort callbacks and webhook delivery; notification fanout respects the remaining action budget
+- pause excludes pending actions from claims and revokes active results; concurrent resume schedules one next action
+- streaming chunks are isolated by attempt and retained until completion commits; delayed cleanup preserves newer attempts
+- handler artifact publication and application checkpoints roll back with workflow state, completion and next enqueue
+- embedded caches use installation namespaces, APCu flush preserves unrelated entries, and MemoryCache is always the default
+- standalone worker pools retain explicit transport options without WordPress constants; short-lived guarded connections close without waiting for cyclic garbage collection
+- legacy migration preserves logs and event data, and MySQL dispatch availability retains fractional timestamps without rounding immediate jobs into the future
+- local static-analysis script uses the canonical Composer command; database test probes support explicit host ports and WordPress E2E setup verifies actual installation
+
+### Upgrade notes
+
+- **Drain and stop old workers before upgrading.** Pre-0.23 processing rows must finish or be recovered with the old release. Then run `Schema::install($connection)` explicitly, initialize the matching runtime and restart workers. See [Standalone Use](docs/features/standalone-use.md#upgrading-an-existing-installation).
+- Retired pre-terminology unfinished workflow definitions require completion with their matching old release or an explicit definition migration; incompatible active data is preserved and refused, not silently reinterpreted.
+- Direct queue integrations must retain the returned Job and supply its original `claim_token` to worker mutations. Administrative facade operations use revision comparisons and invalidate old claims.
+- Pausing a workflow now rejects in-flight results; resume reclaims the current step. Handlers must use external idempotency or reconciliation for effects that SQL cannot roll back.
+- APCu caching now requires an explicit namespace. Independent embedded runtimes must have separate schema/table/cache identities and compatible production autoloaders.
+- Composer now declares the existing PDO base extension requirement, including when using the mysqli adapter; `pdo_mysql` remains optional.
+- Database timeouts and action budgets are cooperative. A hard cutoff requires an external watchdog. Failed COMMIT acknowledgements require durable-state reconciliation with a fresh connection before replay.
+- Saved stream chunks do not prove a model response completed or make a provider stream resumable. Neuron examples now use provider-level requests with Queuety as the durable orchestration owner.
+
 ## [0.22.1] - 2026-10-14
 
 ### Fixed

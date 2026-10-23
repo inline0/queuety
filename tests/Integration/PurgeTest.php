@@ -118,13 +118,13 @@ class PurgeTest extends IntegrationTestCase {
 
 		// Complete all.
 		$job1 = $this->queue->claim();
-		$this->workflow->advance_step( $wf1, $job1->id, array() );
+		$this->workflow->advance_step( $wf1, $job1->id, array() , job: $job1);
 
 		$job2 = $this->queue->claim();
-		$this->workflow->advance_step( $wf2, $job2->id, array() );
+		$this->workflow->advance_step( $wf2, $job2->id, array() , job: $job2);
 
 		$job3 = $this->queue->claim();
-		$this->workflow->advance_step( $wf3, $job3->id, array() );
+		$this->workflow->advance_step( $wf3, $job3->id, array() , job: $job3);
 
 		// Backdate wf1 and wf2.
 		$old_date = gmdate( 'Y-m-d H:i:s', time() - 86400 * 20 );

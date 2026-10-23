@@ -42,10 +42,10 @@ class StaleRecoveryTest extends IntegrationTestCase {
 		$id = $this->queue->dispatch( 'handler_a', max_attempts: 3 );
 		$this->queue->claim();
 
-		// Simulate a dead worker by backdating reserved_at.
+		// Simulate a dead worker by expiring the lease.
 		$this->raw_update(
 			'queuety_jobs',
-			array( 'reserved_at' => gmdate( 'Y-m-d H:i:s', time() - 1200 ) ),
+			array( 'lease_expires_at' => gmdate( 'Y-m-d H:i:s', time() - 1200 ) ),
 			array( 'id' => $id ),
 		);
 
@@ -69,7 +69,7 @@ class StaleRecoveryTest extends IntegrationTestCase {
 
 		$this->raw_update(
 			'queuety_jobs',
-			array( 'reserved_at' => gmdate( 'Y-m-d H:i:s', time() - 1200 ) ),
+			array( 'lease_expires_at' => gmdate( 'Y-m-d H:i:s', time() - 1200 ) ),
 			array( 'id' => $id ),
 		);
 
@@ -96,9 +96,9 @@ class StaleRecoveryTest extends IntegrationTestCase {
 		$this->queue->claim();
 
 		$stale_time = gmdate( 'Y-m-d H:i:s', time() - 900 );
-		$this->raw_update( 'queuety_jobs', array( 'reserved_at' => $stale_time ), array( 'id' => $id1 ) );
-		$this->raw_update( 'queuety_jobs', array( 'reserved_at' => $stale_time ), array( 'id' => $id2 ) );
-		$this->raw_update( 'queuety_jobs', array( 'reserved_at' => $stale_time ), array( 'id' => $id3 ) );
+		$this->raw_update( 'queuety_jobs', array( 'lease_expires_at' => $stale_time ), array( 'id' => $id1 ) );
+		$this->raw_update( 'queuety_jobs', array( 'lease_expires_at' => $stale_time ), array( 'id' => $id2 ) );
+		$this->raw_update( 'queuety_jobs', array( 'lease_expires_at' => $stale_time ), array( 'id' => $id3 ) );
 
 		$recovered = $this->worker->recover_stale();
 
@@ -116,7 +116,7 @@ class StaleRecoveryTest extends IntegrationTestCase {
 		$id = $this->queue->dispatch( 'h', max_attempts: 3 );
 		$this->queue->claim();
 
-		// reserved_at is recent, so it should not be stale.
+		// The recorded lease and action deadline are still live.
 		$recovered = $this->worker->recover_stale();
 
 		$this->assertSame( 0, $recovered );
@@ -135,7 +135,7 @@ class StaleRecoveryTest extends IntegrationTestCase {
 		// Simulate worker death.
 		$this->raw_update(
 			'queuety_jobs',
-			array( 'reserved_at' => gmdate( 'Y-m-d H:i:s', time() - 1200 ) ),
+			array( 'lease_expires_at' => gmdate( 'Y-m-d H:i:s', time() - 1200 ) ),
 			array( 'id' => $job->id ),
 		);
 
@@ -156,7 +156,7 @@ class StaleRecoveryTest extends IntegrationTestCase {
 
 		$this->raw_update(
 			'queuety_jobs',
-			array( 'reserved_at' => gmdate( 'Y-m-d H:i:s', time() - 1200 ) ),
+			array( 'lease_expires_at' => gmdate( 'Y-m-d H:i:s', time() - 1200 ) ),
 			array( 'id' => $job->id ),
 		);
 

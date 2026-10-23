@@ -178,16 +178,19 @@ class Logger {
 	/**
 	 * Purge log entries older than N days.
 	 *
-	 * @param int $older_than_days Delete entries older than this many days.
+	 * @param int      $older_than_days Delete entries older than this many days.
+	 * @param int|null $limit Maximum rows to delete, or null for explicit bulk purge.
 	 * @return int Number of rows deleted.
 	 */
-	public function purge( int $older_than_days ): int {
+	public function purge( int $older_than_days, ?int $limit = null ): int {
 		$table  = $this->conn->table( Config::table_logs() );
 		$cutoff = gmdate( 'Y-m-d H:i:s', time() - ( $older_than_days * 86400 ) );
 
-		$stmt = $this->conn->pdo()->prepare(
-			"DELETE FROM {$table} WHERE created_at < :cutoff"
-		);
+		$sql = "DELETE FROM {$table} WHERE created_at < :cutoff ORDER BY id";
+		if ( null !== $limit ) {
+			$sql .= ' LIMIT ' . max( 1, min( 1000, $limit ) );
+		}
+		$stmt = $this->conn->pdo()->prepare( $sql );
 		$stmt->execute( array( 'cutoff' => $cutoff ) );
 
 		return $stmt->rowCount();

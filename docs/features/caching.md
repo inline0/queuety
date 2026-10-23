@@ -23,27 +23,34 @@ All cache backends implement `Queuety\Contracts\Cache`:
 | `delete( string $key )` | `void` | Remove a value. |
 | `has( string $key )` | `bool` | Check if a key exists and is not expired. |
 | `add( string $key, mixed $value, int $ttl = 0 )` | `bool` | Set a value only if the key does not already exist (atomic). Returns `true` if the value was set. |
-| `flush()` | `void` | Remove all items from the cache. `ApcuCache::flush()` calls `apcu_clear_cache()`, which clears every APCu entry on the server, not only Queuety's. |
+| `flush()` | `void` | Remove entries in this cache namespace. APCu flush preserves other installations and unrelated entries. |
 
 ## Built-in backends
 
 ### MemoryCache (default)
 
-`Queuety\Cache\MemoryCache` is an array-backed, per-process cache. Items are stored in a PHP array and lost when the process exits. This is the default backend when APCu is not available.
+`Queuety\Cache\MemoryCache` is an array-backed, per-process cache. Items are stored in a PHP array and lost when the process exits. This is always the default backend, including when APCu is installed.
 
 It requires no extensions, works well for single-worker deployments, and keeps each worker process isolated from the others.
 
 ### ApcuCache
 
-`Queuety\Cache\ApcuCache` uses the APCu extension for shared memory across all PHP processes on the same server. All keys are automatically prefixed with `queuety:` to avoid collisions with other applications.
+`Queuety\Cache\ApcuCache` uses the APCu extension for shared memory across all PHP processes on the same server. Its constructor requires an installation namespace, normally `$connection->namespace()`. Keys are scoped by that identity. APCu memory is shared only by processes that actually share the same APCu segment; separately launched CLI processes need not share one.
 
 This backend requires the `php-apcu` extension, shares cache entries across workers on the same server, and makes `add()` truly atomic via `apcu_add()`.
 
-## Auto-detection
+## Choosing a shared cache
 
-`Queuety\Cache\CacheFactory` picks the best available backend automatically:
+`CacheFactory::create()` returns `MemoryCache`. Opt in to APCu before initialization:
 
-If `apcu_store()` exists and `apcu_enabled()` returns `true`, Queuety uses `ApcuCache`. Otherwise it falls back to `MemoryCache`. This happens inside `Queuety::init()`, so the default behavior needs no extra configuration.
+```php
+Queuety::set_cache( new \Queuety\Cache\ApcuCache( $connection->namespace() ) );
+Queuety::init( $connection );
+```
+
+Use a different namespace for each independent installation. Claim ownership,
+queue pause decisions and workflow transitions are checked against current
+SQL state, regardless of cached presentation data.
 
 ## What gets cached
 
@@ -51,7 +58,7 @@ The cache layer is used internally by several subsystems:
 
 | Data | Purpose |
 |---|---|
-| Queue pause state | Avoids a database query on every worker loop iteration |
+| Queue pause state | May be exposed for inspection; claim admission uses current database state |
 | Rate limit counters | Tracks execution counts in memory instead of the database |
 | Workflow state | Reduces reads during multi-step workflow advancement |
 | Lock state | Speeds up lock existence checks for unique jobs and mutex middleware |
@@ -88,7 +95,7 @@ Queuety::set_cache( new RedisCache() );
 Queuety::init( $connection );
 ```
 
-If `set_cache()` is called before `init()`, the factory auto-detection is skipped entirely and your custom backend is used.
+If `set_cache()` is called before `init()`, the default memory cache is replaced and your custom backend is used.
 
 ## Accessing the cache
 

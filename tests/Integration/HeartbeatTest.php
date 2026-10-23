@@ -44,7 +44,7 @@ class HeartbeatTest extends IntegrationTestCase {
 		);
 
 		// Initialize heartbeat and send a beat.
-		Heartbeat::init( $job->id, $this->conn );
+		Heartbeat::init( $job->id, $this->conn, $job->claim_token );
 		Heartbeat::beat();
 
 		// Verify reserved_at was updated to recent time.
@@ -71,7 +71,7 @@ class HeartbeatTest extends IntegrationTestCase {
 		$job = $this->queue->claim();
 		$this->assertNotNull( $job );
 
-		Heartbeat::init( $job->id, $this->conn );
+		Heartbeat::init( $job->id, $this->conn, $job->claim_token );
 		Heartbeat::beat( array( 'processed' => 50, 'total' => 100 ) );
 
 		// Verify heartbeat_data was stored.
@@ -97,7 +97,7 @@ class HeartbeatTest extends IntegrationTestCase {
 		$this->assertNotNull( $job );
 
 		// Send a heartbeat to refresh reserved_at.
-		Heartbeat::init( $job->id, $this->conn );
+		Heartbeat::init( $job->id, $this->conn, $job->claim_token );
 		Heartbeat::beat();
 
 		// Find stale jobs with a 600-second timeout.

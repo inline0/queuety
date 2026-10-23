@@ -19,7 +19,7 @@
 
 ## What is Queuety?
 
-Queuety is a WordPress plugin that provides a fast job queue, durable workflow engine, and durable state machine runtime. Workers claim jobs directly from MySQL and process them inside a long-running WP-CLI process.
+Queuety is a WordPress plugin that provides a fast job queue, durable workflow engine, and durable state machine runtime. Workers claim jobs directly from MySQL. The core also runs through Composer outside WordPress, using finite HTTP actions or dedicated CLI processes. See [Standalone Use](docs/features/standalone-use.md) for explicit migrations, isolated installations and hosting limits.
 
 **The problem:** WordPress has no real background job system. `wp_cron` only fires on page visits. Action Scheduler's default runner rides on WP-Cron and loopback HTTP requests, each working through batches for at most 30 seconds. An LLM API call that takes 60 seconds gets killed by PHP's 30-second timeout. There's no way to run multi-step processes that survive crashes and resume where they left off.
 
@@ -31,7 +31,7 @@ Queuety is a WordPress plugin that provides a fast job queue, durable workflow e
 
 ## Quick Start
 
-**Prerequisites:**
+**Prerequisites for the WordPress adapter:**
 - PHP 8.2+
 - WordPress 6.4+
 - MySQL 8.0+ or MariaDB 10.6+ (jobs are claimed with `SELECT ... FOR UPDATE SKIP LOCKED`)
@@ -314,7 +314,7 @@ wp queuety work --queue=providers --min-workers=2 --max-workers=6
 - **Resource-aware admission** -- concurrency groups, weighted queue and provider budgets, observed memory/time headroom, and optional container-awareness let workers defer expensive work instead of oversubscribing a process
 - **Step compensation** -- `compensate_with()` and `compensate_on_failure()` provide saga-style rollback hooks for completed steps
 - **Streaming steps** -- `StreamingStep` interface with `ChunkStore` for persisting streamed data chunk by chunk
-- **Cache layer** -- pluggable cache with `MemoryCache` and `ApcuCache` backends, auto-detected via `CacheFactory`
+- **Cache layer** -- isolated `MemoryCache` by default, with installation-scoped `ApcuCache` opt-in
 - **Heartbeats** -- long-running steps send heartbeats to prevent premature stale-job recovery
 - **Workflow cancellation** -- cancel running workflows and trigger registered cleanup handlers
 - **Workflow tracing** -- full timeline of step input, output, before/after state, context, artifacts, chunks, errors, and time-travel debugging

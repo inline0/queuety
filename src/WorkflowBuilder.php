@@ -1421,12 +1421,17 @@ class WorkflowBuilder {
 			$deadline_at = gmdate( 'Y-m-d H:i:s', time() + $this->deadline_seconds );
 		}
 
-		$pdo->beginTransaction();
+		$owns_transaction = ! $pdo->inTransaction();
+		if ( $owns_transaction ) {
+			$pdo->beginTransaction();
+		}
 		try {
 			if ( null !== $this->idempotency_key ) {
 				$existing_workflow_id = $this->find_existing_workflow_id_for_key( $this->idempotency_key, $pdo );
 				if ( null !== $existing_workflow_id ) {
-					$pdo->commit();
+					if ( $owns_transaction ) {
+						$pdo->commit();
+					}
 					return $existing_workflow_id;
 				}
 			}
@@ -1471,14 +1476,16 @@ class WorkflowBuilder {
 				)
 			);
 
-			$pdo->commit();
+			if ( $owns_transaction ) {
+				$pdo->commit();
+			}
 			return $workflow_id;
 		} catch ( \PDOException $e ) {
-			if ( $pdo->inTransaction() ) {
+			if ( $owns_transaction && $pdo->inTransaction() ) {
 				$pdo->rollBack();
 			}
 
-			if ( null !== $this->idempotency_key && $this->is_duplicate_key_error( $e ) ) {
+			if ( $owns_transaction && null !== $this->idempotency_key && $this->is_duplicate_key_error( $e ) ) {
 				$existing_workflow_id = $this->find_existing_workflow_id_for_key( $this->idempotency_key );
 				if ( null !== $existing_workflow_id ) {
 					return $existing_workflow_id;
@@ -1487,7 +1494,7 @@ class WorkflowBuilder {
 
 			throw $e;
 		} catch ( \Throwable $e ) {
-			if ( $pdo->inTransaction() ) {
+			if ( $owns_transaction && $pdo->inTransaction() ) {
 				$pdo->rollBack();
 			}
 			throw $e;
@@ -1581,13 +1588,20 @@ class WorkflowBuilder {
 	 */
 	private function enqueue_step( array $step_def, int $workflow_id, int $step_index ): void {
 		if ( 'parallel' === $step_def['type'] ) {
-			foreach ( StepDispatchOptions::parallel_branches( $step_def ) as $branch ) {
+			$parallel_group = bin2hex( random_bytes( 16 ) );
+			foreach ( StepDispatchOptions::parallel_branches( $step_def ) as $branch_index => $branch ) {
 				$branch_def = StepDispatchOptions::merge_parallel_branch( $step_def, $branch );
 				$handler    = StepDispatchOptions::branch_handler( $branch_def );
 				$this->dispatch_step_job(
 					$branch_def,
 					$handler,
-					StepDispatchOptions::payload( $branch_def ),
+					array_merge(
+						StepDispatchOptions::payload( $branch_def ),
+						array(
+							'__parallel_branch' => $branch_index,
+							'__parallel_group' => $parallel_group,
+						)
+					),
 					$workflow_id,
 					$step_index,
 				);

@@ -44,17 +44,13 @@ class CachedQueueTest extends IntegrationTestCase {
 		SuccessHandler::reset();
 	}
 
-	// -- is_queue_paused uses cache on second call ---------------------------
-
-	public function test_is_queue_paused_uses_cache_on_second_call(): void {
-		// First call: no cache, hits DB, returns false, caches the result.
+	public function test_pause_authority_is_read_from_database_even_with_a_cached_value(): void {
+		$this->cache->set( 'queuety:paused:default', true, 60 );
 		$this->assertFalse( $this->queue->is_queue_paused( 'default' ) );
-
-		// The value should now be in cache.
-		$this->assertTrue( $this->cache->has( 'queuety:paused:default' ) );
-
-		// Second call: should read from cache (value is false/not paused).
-		$this->assertFalse( $this->queue->is_queue_paused( 'default' ) );
+		$other_queue = new Queue( $this->conn );
+		$other_queue->pause_queue( 'default' );
+		$this->cache->set( 'queuety:paused:default', false, 60 );
+		$this->assertTrue( $this->queue->is_queue_paused( 'default' ) );
 	}
 
 	// -- pause_queue sets cache ----------------------------------------------
@@ -66,7 +62,7 @@ class CachedQueueTest extends IntegrationTestCase {
 		$this->assertTrue( $this->cache->has( 'queuety:paused:default' ) );
 		$this->assertTrue( (bool) $this->cache->get( 'queuety:paused:default' ) );
 
-		// is_queue_paused should use the cache.
+		// Current authority is checked in the database.
 		$this->assertTrue( $this->queue->is_queue_paused( 'default' ) );
 	}
 
@@ -100,8 +96,7 @@ class CachedQueueTest extends IntegrationTestCase {
 		// Cache is empty, so is_queue_paused should hit DB and find it paused.
 		$this->assertTrue( $this->queue->is_queue_paused( 'emails' ) );
 
-		// Now cached.
-		$this->assertTrue( $this->cache->has( 'queuety:paused:emails' ) );
+		$this->assertFalse( $this->cache->has( 'queuety:paused:emails' ) );
 	}
 
 	// -- worker still works correctly with cache enabled ---------------------
