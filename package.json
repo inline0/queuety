@@ -1,12 +1,26 @@
 {
-	"name": "queuety",
-	"private": true,
-	"scripts": {
-		"test:e2e": "bash tests/e2e/run-all.sh",
-		"test:e2e:core": "bash tests/e2e/run-core.sh",
-		"test:e2e:wp-env": "bash tests/e2e/test-wp-env.sh"
-	},
-	"devDependencies": {
-		"@wordpress/env": "^11.3.0"
-	}
+  "name": "queuety",
+  "private": true,
+  "scripts": {
+    "test:e2e": "node tests/e2e/run-all.ts",
+    "test:e2e:core": "node tests/e2e/run-core.ts",
+    "test:e2e:wp-env": "node tests/e2e/test-wp-env.ts",
+    "typecheck": "tsc --noEmit",
+    "test:scripts": "node --test \"scripts/**/*.test.ts\"",
+    "check:docs": "node scripts/check-docs-content.ts --root docs --expected-docs 55 --expected-nav 4",
+    "test:all": "node tests/run-all.ts"
+  },
+  "devDependencies": {
+    "@wordpress/env": "^11.3.0",
+    "effect": "4.0.5",
+    "@effect/platform-node": "4.0.5",
+    "@types/node": "26.6.5",
+    "typescript": "7.0.2"
+  },
+  "type": "module",
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": ">=26.12.0",
+    "pnpm": ">=12.14.0"
+  }
 }

@@ -33,10 +33,10 @@ composer test:unit
 composer test:integration
 
 # Run E2E tests (requires Docker for wp-env)
-bash tests/e2e/run-all.sh
+node tests/e2e/run-all.ts
 
 # Run wp-env E2E tests only
-bash tests/e2e/test-wp-env.sh
+node tests/e2e/test-wp-env.ts
 ```
 
 ## Project Structure
@@ -47,7 +47,7 @@ queuety/
 ├── phpunit.xml.dist     # PHPUnit configuration
 ├── phpcs.xml            # PHPCS configuration
 ├── .wp-env.json         # Docker-based wp-env config
-├── package.json         # npm config (just @wordpress/env)
+├── package.json         # pnpm development tooling
 ├── src/
 │   ├── Queuety.php        # Public API facade
 │   ├── Job.php            # Job model (readonly)
@@ -251,3 +251,14 @@ All constants are optional. Define them in `wp-config.php` or `queuety-config.ph
 ## Dependency Rule
 
 - Never edit vendor-prefixed, vendored, or generated dependency copies directly. Fix the upstream source first, then rebuild or update the embedded artifact.
+
+## Development tooling
+
+Use Node.js 26.12+ and pnpm 12.14. Install with `pnpm install --frozen-lockfile`.
+Repository scripts are TypeScript executed directly by Node. Effect 4 services
+own filesystem and scoped subprocess operations; test command orchestration by
+replacing the Command service. CLI tools support `--help`, `--json`, `--dry-run`
+and `--log-level`. Run `pnpm typecheck`, `pnpm test:scripts`, and
+`pnpm check:docs` after tooling changes. PHP remains the consumer runtime;
+Node and these dependencies are development-only. E2E runners skip unavailable
+Docker or MySQL and report failures from every available suite.

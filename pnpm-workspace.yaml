@@ -1,0 +1,5 @@
+strictPeerDependencies: true
+overrides:
+  "@effect/platform-node-shared": 4.0.5
+allowBuilds:
+  fs-ext-extra-prebuilt: true

@@ -34,6 +34,12 @@ jobs:
             --exclude='tests' \
             --exclude='docs' \
             --exclude='node_modules' \
+            --exclude='scripts' \
+            --exclude='package.json' \
+            --exclude='package-lock.json' \
+            --exclude='pnpm-*.yaml' \
+            --exclude='tsconfig*.json' \
+            --exclude='.nvmrc' \
             --exclude='AGENTS.md' \
             --exclude='CLAUDE.md' \
             --exclude='PRD.md' \

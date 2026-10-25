@@ -549,21 +549,21 @@ portion of the runtime table names, for example `wp_themequeue_jobs`.
 ```bash
 # Install dependencies
 composer install
-npm install
+pnpm install --frozen-lockfile
 
 # Run the full local validation suite
-bash tests/run-all.sh
+node tests/run-all.ts
 
 # Run individual categories when needed
 composer cs
 composer analyse
 composer test:unit
 composer test:integration
-bash tests/e2e/run-all.sh
-node scripts/check-docs-content.mjs
+node tests/e2e/run-all.ts
+node scripts/check-docs-content.ts
 
 # Run wp-env E2E directly when you only want the WordPress runtime pass
-npm run test:e2e:wp-env
+pnpm test:e2e:wp-env
 
 # Auto-fix coding standards
 composer cs:fix

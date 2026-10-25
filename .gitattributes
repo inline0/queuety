@@ -19,3 +19,7 @@
 /phpunit.xml.dist     export-ignore
 /scripts              export-ignore
 /tests                export-ignore
+/pnpm-lock.yaml       export-ignore
+/tsconfig.json        export-ignore
+/pnpm-workspace.yaml  export-ignore
+/.nvmrc               export-ignore
