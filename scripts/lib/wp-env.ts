@@ -42,7 +42,15 @@ export const wordpress = (root: string) => {
     shell(
       `RUDEL_ENVIRONMENT=${shellQuote(id)} wp ${args.map(shellQuote).join(" ")}`
     )
-  return { raw, wp, attempt, shell, selected }
+  // wp-env 10 always prompts; --force is ignored by its CLI.
+  const destroy = () =>
+    Command.run({
+      command: "pnpm",
+      args: ["exec", "wp-env", "destroy"],
+      cwd: root,
+      stdin: "y\n",
+    })
+  return { raw, wp, attempt, shell, selected, destroy }
 }
 export type WordPress = ReturnType<typeof wordpress>
 
@@ -102,9 +110,15 @@ export const withWordPress = <A, E, R>(
         )
       const wp = wordpress(root)
       yield* Effect.acquireRelease(Effect.succeed(wp), (site) =>
-        site
-          .raw(mode === "destroy" ? ["destroy", "--force"] : ["stop"], false)
-          .pipe(Effect.ignore)
+        (mode === "destroy" ? site.destroy() : site.raw(["stop"], false)).pipe(
+          Effect.timeout("60 seconds"),
+          Effect.catch(() =>
+            site
+              .raw(["stop"], false)
+              .pipe(Effect.timeout("30 seconds"), Effect.ignore)
+          ),
+          Effect.ignore
+        )
       )
       return yield* scenario(wp)
     })

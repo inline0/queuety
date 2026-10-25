@@ -181,6 +181,16 @@ test("WordPress scope cleans up after a scenario fails and dry-run provisions no
   assert.equal(calls[0].command, "docker")
   assert.deepEqual(calls.at(-1)?.args, ["exec", "wp-env", "stop"])
   calls.length = 0
+  const destroyProgram = withWordPress(root, "destroy", () =>
+    Effect.fail(new Error("scenario failed"))
+  ).pipe(
+    Effect.provide(NodeServices.layer),
+    Effect.provideService(Command.Command, fake)
+  )
+  await assert.rejects(Effect.runPromise(destroyProgram), /scenario failed/)
+  assert.deepEqual(calls.at(-1)?.args, ["exec", "wp-env", "destroy"])
+  assert.equal(calls.at(-1)?.stdin, "y\n")
+  calls.length = 0
   await Effect.runPromise(
     program.pipe(Effect.provideService(Command.DryRun, true))
   )
