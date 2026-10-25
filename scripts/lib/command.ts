@@ -60,7 +60,7 @@ export const layer = Layer.effect(
                 ...(call.env === undefined ? {} : { env: { ...call.env } }),
                 extendEnv: true,
                 // Own the process group so cleanup also stops descendants.
-          detached: true,
+                detached: true,
                 forceKillAfter: "2 seconds",
                 stdin: call.inherit
                   ? "inherit"
