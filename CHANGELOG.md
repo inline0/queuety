@@ -2,6 +2,13 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.23.2] - 2026-11-07
+
+### Fixed
+
+- the forked worker pool integration tests run again instead of being skipped: forked children no longer delete the parent's temporary test directory on exit, and the parent closes its database connection before forking
+- unit tests that configure no expectations use test stubs, so the unit suite finishes without PHPUnit notices
+
 ## [0.23.1] - 2026-11-07
 
 ### Changed
