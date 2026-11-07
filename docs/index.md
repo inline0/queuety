@@ -1,15 +1,17 @@
 ---
 title: "Introduction"
-description: "Welcome to the Queuety documentation."
+description: "What Queuety is, its core concepts (jobs, queues, workers, workflows, state machines), a minimal example and a map of the documentation."
 path: "."
 order: 0
-meta_title: "Introduction"
-meta_description: "Welcome to the Queuety documentation."
+meta_title: "Introduction to Queuety"
+meta_description: "Queuety is a MySQL-backed job queue, durable workflow engine and state machine runtime for WordPress and standalone PHP. Core concepts, example and docs map."
 ---
 
 # Introduction
 
 Queuety is a WordPress plugin that provides a fast job queue, durable workflow engine, and durable state machine runtime. Workers claim jobs directly from MySQL and process them inside a long-running WP-CLI process. The PHP runtime that loads WordPress and WP-CLI needs either `mysqli` or `pdo_mysql`.
+
+The same core also runs without WordPress. A standalone PHP application loads Composer's autoloader, creates a `Connection` and calls `Queuety::init()`, then runs workers as CLI processes or as finite actions with `Queuety::tick()`. See [Standalone Use](/docs/features/standalone-use).
 
 ## Why Queuety?
 
@@ -21,9 +23,113 @@ Queuety solves this with three primitives:
 2. **Workflows** for durable multi-step processes with persistent state
 3. **State machines** for long-lived, event-driven lifecycle state
 
-## Quick example
+## Core concepts
 
-Dispatch a job using the modern API:
+### Jobs and handlers
+
+A job is one unit of background work: a handler name, a JSON payload, a queue, a priority, and a retry budget, stored as a row in the jobs table. There are two ways to define the work:
+
+- A **handler** implements `Queuety\Handler` with `handle( array $payload ): void` and `config(): array`. You register it under a name with `Queuety::register( 'send_email', SendEmailHandler::class )` and dispatch it with `Queuety::dispatch( 'send_email', $payload )`.
+- A **job class** implements `Queuety\Contracts\Job` and uses the `Dispatchable` trait. Its constructor properties become the payload, and `SendEmailJob::dispatch( ... )` queues it without a separate registration.
+
+`Queuety::dispatch()` returns a `PendingJob`, so you can chain `on_queue()`, `with_priority()`, `delay()`, `max_attempts()`, `rate_limit()`, `unique()`, `with_dispatch_key()` and `after()` before the job is written. A job moves from `pending` to `processing` to `completed`. A failed attempt returns to `pending` after a backoff, and a job that exhausts its attempts (3 by default) is `buried` until you retry it. See [Jobs](/docs/jobs).
+
+### Queues and priorities
+
+Every job belongs to a named queue, `default` unless you choose another. Within a queue, workers claim higher priorities first: `Priority::Low`, `Normal`, `High` and `Urgent`. A worker can serve several queues in strict order, for example `--queue=high,default,low`. Queues can be paused and resumed. See [Queue Management](/docs/features/queue-management) and [Workers](/docs/features/workers#multi-queue-priorities).
+
+### Workers
+
+A worker is a long-running process that claims jobs with `SELECT ... FOR UPDATE SKIP LOCKED`, runs them, advances workflows, and sleeps when the queue is empty. Start one with `wp queuety work`, or a pool with `--workers=N` or `--min-workers` and `--max-workers`. Each claim carries an ownership token and a lease, so a stale worker cannot complete or retry a job that was recovered and claimed by another one.
+
+Without a dedicated worker, the plugin schedules a WordPress cron event every minute that processes the `default` queue for a 20-second budget, checked between jobs. See [Workers](/docs/features/workers) and the [CLI reference](/docs/cli).
+
+### Workflows and steps
+
+A workflow is an ordered list of steps built with `Queuety::workflow( $name )`. A step implements `Queuety\Step` with `handle( array $state ): array`: it receives the accumulated state and returns keys to merge into it. Each step boundary is one MySQL transaction that saves the new state, completes the current job and enqueues the next one, so a crash only repeats the step that was running.
+
+Beyond plain sequences, the builder adds parallel steps, `for_each()` fan-out, durable `delay()` steps, waits for signals, approvals, input and other workflows, repeats, child workflows, compensation, guardrails and artifacts. See [Workflows](/docs/workflows).
+
+### State machines
+
+A state machine, built with `Queuety::machine( $name )`, models something that lives for a long time and reacts to events: a chat session, a review, a ticket. It has named states, transitions declared with `on( $event, $target )`, optional guards, and queued `action()` jobs that run when a state is entered. Events arrive through `Queuety::machine_event()`. Use a workflow when the question is what work runs next, and a state machine when the question is which events are valid in the current state. See [State Machines](/docs/state-machines).
+
+### Schedules, batches and chains
+
+`Queuety::schedule( $handler )` creates recurring jobs with `every( '1 hour' )` or a five-field `cron( '0 3 * * *' )` expression and an overlap policy. `Queuety::create_batch()` dispatches a group of jobs with `then`, `catch` and `finally` callbacks and progress tracking. `Queuety::chain()` runs jobs one after another. See [Scheduling](/docs/features/scheduling), [Batching](/docs/features/batching) and [Sequential Chains](/docs/workflows/chains).
+
+### Storage and observability
+
+Everything lives in MySQL tables: jobs, workflows, state machines, signals, schedules, batches, streaming chunks, artifacts, locks and logs. There are no log files. Every job and workflow execution writes to the logs table, `Queuety::metrics()` reports throughput, latency and error rates per handler, workflow event logs record every step transition for inspection and time-travel debugging, and webhooks notify external services. See [Logging](/docs/features/logging), [Metrics](/docs/features/metrics), [Event Log](/docs/workflows/event-log) and [Webhooks](/docs/features/webhooks).
+
+## Minimal example
+
+A handler, a two-step workflow, and a worker that runs both. The Queuety plugin initializes itself on `plugins_loaded`, so call its API from `init` or a later hook. Handler names live in memory, so register them on every request, including the WP-CLI request that runs the worker. Step classes and dispatchable job classes are resolved by class name and need no registration.
+
+```php
+use Queuety\Handler;
+use Queuety\Queuety;
+use Queuety\Step;
+
+class SendEmailHandler implements Handler {
+    public function handle( array $payload ): void {
+        wp_mail( $payload['to'], $payload['subject'], $payload['body'] );
+    }
+
+    public function config(): array {
+        return [ 'max_attempts' => 5 ];
+    }
+}
+
+class LoadUserStep implements Step {
+    public function handle( array $state ): array {
+        $user = get_user_by( 'ID', $state['user_id'] );
+        return [ 'email' => $user->user_email ];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+
+class SendWelcomeStep implements Step {
+    public function handle( array $state ): array {
+        wp_mail( $state['email'], 'Welcome', 'Thanks for signing up.' );
+        return [ 'welcomed' => true ];
+    }
+
+    public function config(): array {
+        return [];
+    }
+}
+
+add_action( 'init', function () {
+    Queuety::register( 'send_email', SendEmailHandler::class );
+} );
+
+add_action( 'user_register', function ( int $user_id ) {
+    Queuety::dispatch( 'send_email', [
+        'to'      => get_option( 'admin_email' ),
+        'subject' => 'New user',
+        'body'    => "User {$user_id} signed up.",
+    ] );
+
+    Queuety::workflow( 'welcome_user' )
+        ->then( LoadUserStep::class )
+        ->then( SendWelcomeStep::class )
+        ->dispatch( [ 'user_id' => $user_id ] );
+} );
+```
+
+When a user registers, the request does not send anything. It queues the email job and the workflow's first step, both on the `default` queue. Run a worker to process them:
+
+```bash
+wp queuety work
+```
+
+The worker runs the email job and `LoadUserStep`. The `email` key that step returns is merged into the workflow state in the same transaction that enqueues `SendWelcomeStep`, which then reads it. The workflow builder's `dispatch()` returns the workflow ID; pass it to `Queuety::workflow_status()` or `wp queuety workflow status <id>` to check progress. [Getting Started](/docs/getting-started) walks through installation, configuration and these steps in more detail.
+
+The same job written as a dispatchable class:
 
 ```php
 use Queuety\Contracts\Job;
@@ -43,28 +149,10 @@ readonly class SendEmailJob implements Job {
     }
 }
 
-SendEmailJob::dispatch( 'user@example.com', 'Welcome', 'Hello from Queuety!' );
+SendEmailJob::dispatch( 'user@example.com', 'Welcome', 'Hello from Queuety.' );
 ```
 
-Or use the classic handler name approach:
-
-```php
-use Queuety\Queuety;
-
-Queuety::dispatch( 'send_email', [ 'to' => 'user@example.com' ] );
-```
-
-Run a durable workflow:
-
-```php
-Queuety::workflow( 'generate_report' )
-    ->then( FetchDataHandler::class )
-    ->then( CallLLMHandler::class )
-    ->then( FormatOutputHandler::class )
-    ->dispatch( [ 'user_id' => 42 ] );
-```
-
-Model a long-lived session with a state machine:
+A state machine for a long-lived session:
 
 ```php
 use Queuety\Enums\StateMachineStatus;
@@ -79,21 +167,31 @@ Queuety::machine( 'agent_session' )
     ->dispatch( [ 'thread_id' => 42 ] );
 ```
 
-Start a worker:
+## How it works
 
-```bash
-wp queuety work
+Workers run inside a long-lived WP-CLI process and claim jobs directly from MySQL. Queue rows, workflow state, logs, batches, signals, and streaming chunks all live in MySQL, so worker restarts do not lose orchestration state.
+
+Workflows break long-running work into steps. Each step persists its output to a shared state bag in the database. If PHP dies mid-step, the worker retries that step with all prior state intact. The step boundary is a single MySQL transaction: state update, job completion, and next step enqueue all happen atomically.
+
+```
+Workflow: generate_report (3 steps)
+
+Step 0: fetch_data     -> state: {user_data: {...}}
+Step 1: call_llm       -> PHP dies -> retry -> state: {user_data: {...}, llm_response: "..."}
+Step 2: format_output  -> state: {user_data: {...}, llm_response: "...", report_url: "/reports/42.pdf"}
+
+Workflow: completed
 ```
 
-If you are building an agent-style system, start with [Agent Orchestration](/docs/workflows/agent-orchestration). It shows how planner/executor flows, human review gates, and cross-workflow waits fit together.
+## How the docs are organized
 
-If the system is event-driven and long-lived, start with [State Machines](/docs/state-machines) alongside workflows.
-
-If you want end-to-end integration examples, see [Examples](/docs/examples), which now includes Neuron-based patterns for provider switching, streaming, memory-backed review repeats, and dependent workflows.
-
-If you want workflows to start from WordPress domain events like `save_post`, see [Action Triggers](/docs/features/action-triggers).
-
-If you want to use the DB-backed runtime outside WordPress, see [Standalone Use](/docs/features/standalone-use).
+- **[Getting Started](/docs/getting-started)** covers requirements, installation from the release zip, Composer or source, configuration constants, and a first job, workflow and worker.
+- **[Jobs](/docs/jobs)** is the complete guide to dispatching and handling jobs: handlers, priorities, delays, unique jobs, dependencies, retries and backoff, buried jobs, timeouts, dispatchable job classes, middleware, and durable dispatch keys.
+- **[Workflows](/docs/workflows)** starts with state accumulation, resumability and the workflow lifecycle, then has one page per building block: [Parallel Steps](/docs/workflows/parallel), [Dynamic For-Each](/docs/workflows/for-each), [Async Handoffs](/docs/workflows/async-handoffs), [Workflow Dependencies](/docs/workflows/dependencies), [Conditional Branching](/docs/workflows/conditional), [Repeats](/docs/workflows/repeats), [Durable Delays](/docs/workflows/delays), [Workflow Signals](/docs/workflows/signals), [Guardrails](/docs/workflows/guardrails), [Compensation](/docs/workflows/compensation), [Streaming Steps](/docs/workflows/streaming), [Cancellation](/docs/workflows/cancellation), and the inspection tools [Event Log](/docs/workflows/event-log), [Time Travel](/docs/workflows/time-travel), [Forking](/docs/workflows/forking) and [Export and Replay](/docs/workflows/export-replay). [Agent Orchestration](/docs/workflows/agent-orchestration) shows how planner and executor flows, review gates and cross-workflow waits fit together.
+- **[State Machines](/docs/state-machines)** explains the builder, the action and guard contracts, the inspection APIs, and when to choose a machine over a workflow.
+- **Features** covers the runtime around jobs and workflows: [Workers](/docs/features/workers), [Scheduling](/docs/features/scheduling), [Rate Limiting](/docs/features/rate-limiting), [Middleware](/docs/features/middleware), [Batching](/docs/features/batching), [Artifacts](/docs/features/artifacts), [Resource Management](/docs/features/resource-management), [Heartbeats](/docs/features/heartbeats), [Caching](/docs/features/caching), [Logging](/docs/features/logging), [Metrics](/docs/features/metrics), [Webhooks](/docs/features/webhooks), [Testing](/docs/features/testing) with `QueueFake`, [Action Triggers](/docs/features/action-triggers) for starting workflows from WordPress hooks, the [WP-Cron Replacement](/docs/features/wp-cron), and [Standalone Use](/docs/features/standalone-use) outside WordPress.
+- **[Examples](/docs/examples)** are end-to-end integrations with the Neuron AI framework: a planner and executor, a session state machine, a streaming step, a memory-backed review loop, and dependent workflows.
+- **Reference** lists every [WP-CLI command](/docs/cli) and every public method of the [PHP API](/docs/api).
 
 ## Key differentiators
 
@@ -128,22 +226,6 @@ If you want to use the DB-backed runtime outside WordPress, see [Standalone Use]
 - **Full observability.** Database logging, per-handler metrics, and event webhooks.
 - **Testing utilities.** `QueueFake` records dispatched jobs and batches for assertions in unit tests.
 - **PHP attributes.** `#[QueuetyHandler('name')]` for zero-config handler registration.
-
-## How it works
-
-Workers run inside a long-lived WP-CLI process and claim jobs directly from MySQL. Queue rows, workflow state, logs, batches, signals, and streaming chunks all live in MySQL, so worker restarts do not lose orchestration state.
-
-Workflows break long-running work into steps. Each step persists its output to a shared state bag in the database. If PHP dies mid-step, the worker retries that step with all prior state intact. The step boundary is a single MySQL transaction: state update, job completion, and next step enqueue all happen atomically.
-
-```
-Workflow: generate_report (3 steps)
-
-Step 0: fetch_data     -> state: {user_data: {...}}
-Step 1: call_llm       -> PHP dies -> retry -> state: {user_data: {...}, llm_response: "..."}
-Step 2: format_output  -> state: {user_data: {...}, llm_response: "...", report_url: "/reports/42.pdf"}
-
-Workflow: completed
-```
 
 ## Requirements
 
