@@ -2,6 +2,13 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.23.1] - 2026-11-07
+
+### Changed
+
+- the docs introduction explains the core concepts (jobs and handlers, queues and priorities, workers, workflows and steps, state machines, schedules, batches and chains, storage and observability), adds a minimal WordPress example with a handler, a two-step workflow and a worker, and maps every docs section
+- development tooling scripts are TypeScript run directly by Node with Effect services; the PHP runtime is unchanged
+
 ## [0.23.0] - 2026-10-23
 
 ### Added
