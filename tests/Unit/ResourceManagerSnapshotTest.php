@@ -63,9 +63,7 @@ class ResourceManagerSnapshotTest extends TestCase {
 	}
 
 	private function manager_with_files( array $files ): ResourceManager {
-		$conn = $this->getMockBuilder( Connection::class )
-			->disableOriginalConstructor()
-			->getMock();
+		$conn = $this->createStub( Connection::class );
 
 		return new class( $conn, $files ) extends ResourceManager {
 			public function __construct( Connection $conn, private array $files ) {

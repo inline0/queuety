@@ -11,9 +11,7 @@ use Queuety\StateMachineBuilder;
 class StateMachineBuilderTest extends TestCase {
 
 	private function make_builder( string $name = 'agent_session', ?StateMachine $machines = null ): StateMachineBuilder {
-		$machines ??= $this->getMockBuilder( StateMachine::class )
-			->disableOriginalConstructor()
-			->getMock();
+		$machines ??= $this->createStub( StateMachine::class );
 
 		return new StateMachineBuilder( $name, $machines );
 	}

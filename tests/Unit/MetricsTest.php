@@ -10,16 +10,16 @@ use Queuety\Metrics;
 class MetricsTest extends TestCase {
 
 	public function test_metrics_can_be_constructed(): void {
-		$conn = $this->createMock( Connection::class );
+		$conn = $this->createStub( Connection::class );
 		$metrics = new Metrics( $conn );
 		$this->assertInstanceOf( Metrics::class, $metrics );
 	}
 
 	public function test_throughput_returns_float(): void {
-		$pdo = $this->createMock( \PDO::class );
-		$stmt = $this->createMock( \PDOStatement::class );
+		$pdo = $this->createStub( \PDO::class );
+		$stmt = $this->createStub( \PDOStatement::class );
 
-		$conn = $this->createMock( Connection::class );
+		$conn = $this->createStub( Connection::class );
 		$conn->method( 'table' )->willReturn( 'test_queuety_logs' );
 		$conn->method( 'pdo' )->willReturn( $pdo );
 
@@ -34,10 +34,10 @@ class MetricsTest extends TestCase {
 	}
 
 	public function test_throughput_with_zero_minutes_returns_zero(): void {
-		$pdo = $this->createMock( \PDO::class );
-		$stmt = $this->createMock( \PDOStatement::class );
+		$pdo = $this->createStub( \PDO::class );
+		$stmt = $this->createStub( \PDOStatement::class );
 
-		$conn = $this->createMock( Connection::class );
+		$conn = $this->createStub( Connection::class );
 		$conn->method( 'table' )->willReturn( 'test_queuety_logs' );
 		$conn->method( 'pdo' )->willReturn( $pdo );
 
@@ -52,10 +52,10 @@ class MetricsTest extends TestCase {
 	}
 
 	public function test_average_duration_returns_float(): void {
-		$pdo = $this->createMock( \PDO::class );
-		$stmt = $this->createMock( \PDOStatement::class );
+		$pdo = $this->createStub( \PDO::class );
+		$stmt = $this->createStub( \PDOStatement::class );
 
-		$conn = $this->createMock( Connection::class );
+		$conn = $this->createStub( Connection::class );
 		$conn->method( 'table' )->willReturn( 'test_queuety_logs' );
 		$conn->method( 'pdo' )->willReturn( $pdo );
 
@@ -70,10 +70,10 @@ class MetricsTest extends TestCase {
 	}
 
 	public function test_average_duration_returns_zero_when_no_data(): void {
-		$pdo = $this->createMock( \PDO::class );
-		$stmt = $this->createMock( \PDOStatement::class );
+		$pdo = $this->createStub( \PDO::class );
+		$stmt = $this->createStub( \PDOStatement::class );
 
-		$conn = $this->createMock( Connection::class );
+		$conn = $this->createStub( Connection::class );
 		$conn->method( 'table' )->willReturn( 'test_queuety_logs' );
 		$conn->method( 'pdo' )->willReturn( $pdo );
 
@@ -88,10 +88,10 @@ class MetricsTest extends TestCase {
 	}
 
 	public function test_error_rate_calculation(): void {
-		$pdo = $this->createMock( \PDO::class );
-		$stmt = $this->createMock( \PDOStatement::class );
+		$pdo = $this->createStub( \PDO::class );
+		$stmt = $this->createStub( \PDOStatement::class );
 
-		$conn = $this->createMock( Connection::class );
+		$conn = $this->createStub( Connection::class );
 		$conn->method( 'table' )->willReturn( 'test_queuety_logs' );
 		$conn->method( 'pdo' )->willReturn( $pdo );
 
@@ -112,10 +112,10 @@ class MetricsTest extends TestCase {
 	}
 
 	public function test_error_rate_returns_zero_when_no_data(): void {
-		$pdo = $this->createMock( \PDO::class );
-		$stmt = $this->createMock( \PDOStatement::class );
+		$pdo = $this->createStub( \PDO::class );
+		$stmt = $this->createStub( \PDOStatement::class );
 
-		$conn = $this->createMock( Connection::class );
+		$conn = $this->createStub( Connection::class );
 		$conn->method( 'table' )->willReturn( 'test_queuety_logs' );
 		$conn->method( 'pdo' )->willReturn( $pdo );
 
@@ -130,10 +130,10 @@ class MetricsTest extends TestCase {
 	}
 
 	public function test_p95_duration_returns_zero_when_no_data(): void {
-		$pdo = $this->createMock( \PDO::class );
-		$stmt = $this->createMock( \PDOStatement::class );
+		$pdo = $this->createStub( \PDO::class );
+		$stmt = $this->createStub( \PDOStatement::class );
 
-		$conn = $this->createMock( Connection::class );
+		$conn = $this->createStub( Connection::class );
 		$conn->method( 'table' )->willReturn( 'test_queuety_logs' );
 		$conn->method( 'pdo' )->willReturn( $pdo );
 
