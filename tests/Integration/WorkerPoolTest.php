@@ -14,7 +14,6 @@ use Queuety\HandlerRegistry;
 use Queuety\Logger;
 use Queuety\Queue;
 use Queuety\Queuety;
-use Queuety\Schema;
 use Queuety\Worker;
 use Queuety\Workflow;
 use Queuety\WorkerPool;
@@ -89,7 +88,6 @@ class WorkerPoolTest extends IntegrationTestCase {
 	// -- Fork one worker and verify processing -------------------------------
 
 	public function test_fork_worker_processes_job(): void {
-		$this->markTestSkipped( 'Fork tests are unreliable in CI due to MySQL connection handling after fork.' );
 		// Register a handler that writes a marker file.
 		$marker_file = $this->tmp_dir . '/pool_marker_' . uniqid();
 		Queuety::register( 'pool_test_handler', WorkerPoolTestHandler::class );
@@ -98,33 +96,37 @@ class WorkerPoolTest extends IntegrationTestCase {
 		$queue = Queuety::queue();
 		$queue->dispatch( WorkerPoolTestHandler::class, array( 'marker' => $marker_file ) );
 
-		// Fork a single child worker that processes once.
+		$this->conn->disconnect();
 		$pid = pcntl_fork();
+		$this->assertNotSame( -1, $pid );
 
 		if ( 0 === $pid ) {
-			// Child process: create a fresh connection and run worker once.
-			$conn     = new Connection(
-				QUEUETY_TEST_DB_HOST,
-				QUEUETY_TEST_DB_NAME,
-				QUEUETY_TEST_DB_USER,
-				QUEUETY_TEST_DB_PASS,
-				QUEUETY_TEST_DB_PREFIX,
-			);
-			Schema::install( $conn );
-			$queue_op = new Queue( $conn );
-			$logger   = new Logger( $conn );
-			$workflow = new Workflow( $conn, $queue_op, $logger );
-			$registry = new HandlerRegistry();
-			$registry->register( WorkerPoolTestHandler::class, WorkerPoolTestHandler::class );
-			$worker = new Worker( $conn, $queue_op, $logger, $workflow, $registry, new Config() );
-			$worker->run( 'default', true );
-			exit( 0 );
+			try {
+				$conn     = new Connection(
+					QUEUETY_TEST_DB_HOST,
+					QUEUETY_TEST_DB_NAME,
+					QUEUETY_TEST_DB_USER,
+					QUEUETY_TEST_DB_PASS,
+					QUEUETY_TEST_DB_PREFIX,
+				);
+				$queue_op = new Queue( $conn );
+				$logger   = new Logger( $conn );
+				$workflow = new Workflow( $conn, $queue_op, $logger );
+				$registry = new HandlerRegistry();
+				$registry->register( WorkerPoolTestHandler::class, WorkerPoolTestHandler::class );
+				$worker = new Worker( $conn, $queue_op, $logger, $workflow, $registry, new Config() );
+				$worker->run( 'default', true );
+				exit( 0 );
+			} catch ( \Throwable $error ) {
+				fwrite( STDERR, $error->getMessage() . PHP_EOL );
+				exit( 1 );
+			}
 		}
 
-		// Parent: wait for child.
 		pcntl_waitpid( $pid, $status, 0 );
 
-		// Give the marker file a moment to be written.
+		$this->assertTrue( pcntl_wifexited( $status ) );
+		$this->assertSame( 0, pcntl_wexitstatus( $status ) );
 		$this->assertTrue(
 			file_exists( $marker_file ),
 			'Marker file should exist after worker processes the job.'
@@ -137,9 +139,9 @@ class WorkerPoolTest extends IntegrationTestCase {
 	// -- Graceful shutdown on SIGTERM ----------------------------------------
 
 	public function test_graceful_shutdown_on_sigterm(): void {
-		$this->markTestSkipped( 'Fork tests are unreliable in CI due to MySQL connection handling after fork.' );
-		// Fork a child that just installs a signal handler and sleeps.
+		$this->conn->disconnect();
 		$pid = pcntl_fork();
+		$this->assertNotSame( -1, $pid );
 
 		if ( 0 === $pid ) {
 			pcntl_async_signals( true );

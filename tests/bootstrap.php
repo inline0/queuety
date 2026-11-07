@@ -90,11 +90,15 @@ define( 'QUEUETY_TEST_DB_PASS', getenv( 'QUEUETY_TEST_DB_PASS' ) ?: '' );
 define( 'QUEUETY_TEST_DB_PREFIX', getenv( 'QUEUETY_TEST_DB_PREFIX' ) ?: 'test_' );
 
 // Queuety test constants.
-define( 'QUEUETY_TEST_TMPDIR', sys_get_temp_dir() . '/queuety-test-' . getmypid() );
+define( 'QUEUETY_TEST_PROCESS', getmypid() );
+define( 'QUEUETY_TEST_TMPDIR', sys_get_temp_dir() . '/queuety-test-' . QUEUETY_TEST_PROCESS );
 @mkdir( QUEUETY_TEST_TMPDIR, 0755, true );
 
 register_shutdown_function(
 	function () {
+		if ( getmypid() !== QUEUETY_TEST_PROCESS ) {
+			return;
+		}
 		$dir = QUEUETY_TEST_TMPDIR;
 		if ( is_dir( $dir ) ) {
 			$it    = new RecursiveDirectoryIterator( $dir, RecursiveDirectoryIterator::SKIP_DOTS );
