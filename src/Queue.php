@@ -1115,6 +1115,7 @@ class Queue {
 	 *
 	 * Callers can join this update to workflow recovery in their own transaction.
 	 * A renewed, replaced, or completed claim causes a harmless false result.
+	 * Outside a transaction, a deadlocked update is retried.
 	 *
 	 * @param Job    $job Observed expired job.
 	 * @param bool   $bury Whether attempts are exhausted.
@@ -1122,8 +1123,40 @@ class Queue {
 	 * @param string $error_message Terminal failure description.
 	 * @param int    $timeout_seconds Legacy unleased row timeout.
 	 * @return bool Whether this exact expired revision was recovered.
+	 * @throws \PDOException When the update fails for another reason, inside a transaction, or keeps deadlocking.
 	 */
 	public function recover( Job $job, bool $bury = false, int $delay_sec = 0, string $error_message = 'Stale: worker died without completing.', int $timeout_seconds = 600 ): bool {
+		$pdo = $this->conn->pdo();
+		for ( $attempt = 1; ; ++$attempt ) {
+			try {
+				return $this->recover_once( $job, $bury, $delay_sec, $error_message, $timeout_seconds );
+			} catch ( \PDOException $error ) {
+				if ( $attempt >= 3 || $pdo->inTransaction() || ! self::is_deadlock( $error ) ) {
+					throw $error;
+				}
+			}
+		}
+	}
+
+	/**
+	 * Whether a database error is a deadlock or serialization failure.
+	 *
+	 * @param \PDOException $error Database error.
+	 */
+	private static function is_deadlock( \PDOException $error ): bool {
+		return in_array( (string) $error->getCode(), array( '40001', '1213' ), true );
+	}
+
+	/**
+	 * Run one recovery update.
+	 *
+	 * @param Job    $job Observed expired job.
+	 * @param bool   $bury Whether attempts are exhausted.
+	 * @param int    $delay_sec Retry delay in seconds.
+	 * @param string $error_message Terminal failure description.
+	 * @param int    $timeout_seconds Legacy unleased row timeout.
+	 */
+	private function recover_once( Job $job, bool $bury, int $delay_sec, string $error_message, int $timeout_seconds ): bool {
 		$table = $this->conn->table( Config::table_jobs() );
 		$stmt = $this->conn->pdo()->prepare(
 			"UPDATE {$table} SET status = :status, reserved_at = NULL, claim_token = NULL,

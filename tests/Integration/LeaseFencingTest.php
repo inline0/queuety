@@ -169,7 +169,7 @@ class LeaseFencingTest extends IntegrationTestCase {
 		$this->expire( $id );
 		$this->send( $a, array( 'operation' => 'recover' ) );
 		$this->send( $b, array( 'operation' => 'recover' ) );
-		$results = array( $this->read( $a )['value'], $this->read( $b )['value'] );
+		$results = array( $this->read_value( $a ), $this->read_value( $b ) );
 		sort( $results );
 		$this->assertSame( array( false, true ), $results );
 		$this->assertSame( $job->revision + 1, $this->queue->find( $id )->revision );
@@ -350,5 +350,11 @@ class LeaseFencingTest extends IntegrationTestCase {
 		$output = fgets( $this->processes[ $process ]['pipes'][1] );
 		$this->assertIsString( $output, stream_get_contents( $this->processes[ $process ]['pipes'][2] ) );
 		return json_decode( $output, true, 512, JSON_THROW_ON_ERROR );
+	}
+
+	private function read_value( int $process ): mixed {
+		$result = $this->read( $process );
+		$this->assertArrayHasKey( 'value', $result, ( $result['error'] ?? '' ) . ': ' . ( $result['message'] ?? '' ) );
+		return $result['value'];
 	}
 }
