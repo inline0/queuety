@@ -9,7 +9,7 @@ All notable changes to Queuety are documented in this file.
 - the Getting Started, Jobs, PHP Attributes and introduction examples call `register()`, `discover_handlers()`, `dispatch()`, `workflow()` and `machine()` from `init` or a later hook instead of at the top level of a plugin file or on `plugins_loaded`, where the plugin is not initialized yet and the call throws `Queuety not initialized`; the README says the same
 - unit tests cover `discover_handlers()`, dispatchable job classes and `machine()` before initialization, and a docs test keeps the introductory examples inside hooks
 - `Queue::recover()` retries an update that MariaDB rolls back as a deadlock when two workers recover the same stale job outside a transaction, so the losing worker gets `false` instead of a `PDOException`; inside a caller's transaction the error still reaches the caller. The concurrent recovery integration test reports the subprocess error when one occurs
-- the distribution workflow's WordPress activation check installs a pinned, checksum-verified WP-CLI 2.12.0 with download retries instead of the `latest` release redirect, which GitHub answered with 504
+- the distribution workflow's WordPress activation check installs a pinned, checksum-verified WP-CLI 2.12.0 from the wp-cli builds repository, falling back to the release asset, with download retries; it no longer depends on the release download that GitHub answered with 504
 
 ## [0.23.2] - 2026-11-07
 
