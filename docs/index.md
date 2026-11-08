@@ -149,7 +149,9 @@ readonly class SendEmailJob implements Job {
     }
 }
 
-SendEmailJob::dispatch( 'user@example.com', 'Welcome', 'Hello from Queuety.' );
+add_action( 'user_register', function ( int $user_id ) {
+    SendEmailJob::dispatch( get_userdata( $user_id )->user_email, 'Welcome', 'Hello from Queuety.' );
+} );
 ```
 
 A state machine for a long-lived session:
@@ -157,15 +159,19 @@ A state machine for a long-lived session:
 ```php
 use Queuety\Enums\StateMachineStatus;
 
-Queuety::machine( 'agent_session' )
-    ->state( 'awaiting_user' )
-    ->on( 'user_message', 'planning' )
-    ->state( 'planning' )
-    ->action( PlanSessionAction::class )
-    ->on( 'planned', 'completed' )
-    ->state( 'completed', StateMachineStatus::Completed )
-    ->dispatch( [ 'thread_id' => 42 ] );
+function start_agent_session( int $thread_id ): int {
+    return Queuety::machine( 'agent_session' )
+        ->state( 'awaiting_user' )
+        ->on( 'user_message', 'planning' )
+        ->state( 'planning' )
+        ->action( PlanSessionAction::class )
+        ->on( 'planned', 'completed' )
+        ->state( 'completed', StateMachineStatus::Completed )
+        ->dispatch( [ 'thread_id' => $thread_id ] );
+}
 ```
+
+Call `start_agent_session()` from `init` or a later hook, like the rest of the API.
 
 ## How it works
 

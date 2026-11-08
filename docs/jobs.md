@@ -74,10 +74,12 @@ The `handle()` method receives the job payload and performs the work. The `confi
 
 These resource keys are part of Queuety's broader [Resource Management](/docs/features/resource-management) model, where job metadata, workflow budgets, and worker admission all work together.
 
-Register the handler:
+Register the handler from `init` or a later hook on every request. The Queuety plugin initializes itself on `plugins_loaded`, and `register()` throws before that:
 
 ```php
-Queuety::register( 'send_email', SendEmailHandler::class );
+add_action( 'init', function () {
+    Queuety::register( 'send_email', SendEmailHandler::class );
+} );
 ```
 
 Or use [PHP attributes](/docs/features/attributes) for auto-registration.

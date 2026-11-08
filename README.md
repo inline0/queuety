@@ -67,6 +67,8 @@ Queuety chooses a MySQL driver automatically. WordPress runtimes use `mysqli` by
 
 The plugin runs a worker through WordPress cron every minute for the `default` queue. Each invocation performs maintenance and processes jobs for a 20-second budget, checked between jobs, so the active job finishes. This supports recurring schedules, recovery and deadlines without a shell while WordPress cron is firing. Use dedicated `wp queuety work` processes for custom queues, lower latency or heavier workloads.
 
+The plugin initializes Queuety on `plugins_loaded`, so call the API in the examples below from `init` or a later hook, never at the top level of a plugin file. Register handler names on every request.
+
 Dispatch a job using the modern dispatch API:
 
 ```php

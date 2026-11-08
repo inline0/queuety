@@ -2,6 +2,13 @@
 
 All notable changes to Queuety are documented in this file.
 
+## [0.23.3] - 2026-11-08
+
+### Fixed
+
+- the Getting Started, Jobs, PHP Attributes and introduction examples call `register()`, `discover_handlers()`, `dispatch()`, `workflow()` and `machine()` from `init` or a later hook instead of at the top level of a plugin file or on `plugins_loaded`, where the plugin is not initialized yet and the call throws `Queuety not initialized`; the README says the same
+- unit tests cover `discover_handlers()`, dispatchable job classes and `machine()` before initialization, and a docs test keeps the introductory examples inside hooks
+
 ## [0.23.2] - 2026-11-07
 
 ### Fixed

@@ -56,6 +56,31 @@ test("documentation checks navigation, routes, frontmatter and portable body", (
     assert.ok(problems.includes(expected), expected)
 })
 
+test("introductory docs call the API from a hook, never on plugins_loaded or at the top level", async () => {
+  const call =
+    /(?:Queuety::(?:register|discover_handlers|dispatch|workflow|machine)|\w+Job::dispatch)\(/
+  for (const file of [
+    "index.md",
+    "getting-started.md",
+    "features/attributes.md",
+  ]) {
+    const text = await readFile(join(root, "docs", file), "utf8")
+    const blocks = [...text.matchAll(/```php\n([\s\S]*?)```/g)].map(
+      (match) => match[1]!
+    )
+    for (const block of blocks) {
+      assert.ok(
+        !/add_action\(\s*'plugins_loaded'/.test(block),
+        `${file} hooks the API to plugins_loaded`
+      )
+      if (file === "features/attributes.md") continue
+      for (const line of block.split("\n"))
+        if (call.test(line))
+          assert.match(line, /^\s+/, `${file} calls the API at the top level`)
+    }
+  }
+})
+
 test("CLI preserves docs counts, usage failures and help without requiring the content root", () => {
   const run = (...args: Array<string>) =>
     spawnSync(

@@ -79,16 +79,18 @@ Example output:
 
 ## Best practice
 
-Register handlers in your plugin's initialization:
+Register handlers on every request from `init`:
 
 ```php
-add_action( 'plugins_loaded', function () {
+add_action( 'init', function () {
     Queuety::discover_handlers(
         __DIR__ . '/src/Handlers',
         'MyPlugin\\Handlers'
     );
 } );
 ```
+
+The Queuety plugin initializes itself on `plugins_loaded` at the default priority, and `discover_handlers()` throws until it has. A callback on `plugins_loaded` at that same priority runs first when your plugin loads before Queuety, and a theme's `functions.php` loads after `plugins_loaded` has fired, so the callback would never run. `init` works from both plugins and themes, including in the WP-CLI request that runs the worker.
 
 This replaces manual `Queuety::register()` calls for every handler. New handlers are automatically picked up when you add a class with the attribute to the directory.
 
@@ -97,9 +99,11 @@ This replaces manual `Queuety::register()` calls for every handler. New handlers
 Auto-discovered handlers and manually registered handlers coexist in the same registry. You can use both approaches in the same project:
 
 ```php
-// Auto-discover the bulk of handlers
-Queuety::discover_handlers( __DIR__ . '/handlers', 'MyPlugin\\Handlers' );
+add_action( 'init', function () {
+    // Auto-discover the bulk of handlers
+    Queuety::discover_handlers( __DIR__ . '/handlers', 'MyPlugin\\Handlers' );
 
-// Manually register a handler without the attribute
-Queuety::register( 'legacy_handler', LegacyHandler::class );
+    // Manually register a handler without the attribute
+    Queuety::register( 'legacy_handler', LegacyHandler::class );
+} );
 ```

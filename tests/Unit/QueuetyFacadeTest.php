@@ -38,6 +38,27 @@ class QueuetyFacadeTest extends TestCase {
 		Queuety::register( 'name', 'class' );
 	}
 
+	public function test_discover_handlers_throws_before_init(): void {
+		$this->expectException( \RuntimeException::class );
+		$this->expectExceptionMessage( 'Queuety not initialized' );
+
+		Queuety::discover_handlers( __DIR__, 'Queuety\\Tests\\Unit' );
+	}
+
+	public function test_dispatchable_job_throws_before_init(): void {
+		$this->expectException( \RuntimeException::class );
+		$this->expectExceptionMessage( 'Queuety not initialized' );
+
+		\Queuety\Tests\Integration\Fixtures\SendEmailJob::dispatch( 'user@example.com', 'Welcome' );
+	}
+
+	public function test_machine_throws_before_init(): void {
+		$this->expectException( \RuntimeException::class );
+		$this->expectExceptionMessage( 'Queuety not initialized' );
+
+		Queuety::machine( 'agent_session' );
+	}
+
 	public function test_stats_throws_before_init(): void {
 		$this->expectException( \RuntimeException::class );
 		$this->expectExceptionMessage( 'Queuety not initialized' );

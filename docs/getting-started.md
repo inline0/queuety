@@ -137,21 +137,25 @@ class SendEmailHandler implements Handler {
 }
 ```
 
-Register it and dispatch:
+Register it and dispatch. The Queuety plugin initializes itself on `plugins_loaded`, so call its API from `init` or a later hook, never at the top level of a plugin file. Handler names live in memory, so register them on every request, including the WP-CLI request that runs the worker:
 
 ```php
 use Queuety\Queuety;
 
-Queuety::register( 'send_email', SendEmailHandler::class );
+add_action( 'init', function () {
+    Queuety::register( 'send_email', SendEmailHandler::class );
+} );
 
-Queuety::dispatch( 'send_email', [
-    'to'      => 'user@example.com',
-    'subject' => 'Welcome',
-    'body'    => 'Hello from Queuety!',
-] );
+add_action( 'user_register', function ( int $user_id ) {
+    Queuety::dispatch( 'send_email', [
+        'to'      => get_userdata( $user_id )->user_email,
+        'subject' => 'Welcome',
+        'body'    => 'Hello from Queuety!',
+    ] );
+} );
 ```
 
-Or use the modern dispatchable job class:
+Or use the modern dispatchable job class. It is resolved by its class name, so it needs no registration, but dispatching it still needs the initialized plugin:
 
 ```php
 use Queuety\Contracts\Job;
@@ -171,7 +175,9 @@ readonly class SendEmailJob implements Job {
     }
 }
 
-SendEmailJob::dispatch( 'user@example.com', 'Welcome', 'Hello from Queuety!' );
+add_action( 'user_register', function ( int $user_id ) {
+    SendEmailJob::dispatch( get_userdata( $user_id )->user_email, 'Welcome', 'Hello from Queuety!' );
+} );
 ```
 
 ## Your first workflow
@@ -217,14 +223,16 @@ class FormatOutputHandler implements Step {
 }
 ```
 
-Dispatch the workflow:
+Dispatch the workflow from a hook as well. Step classes are resolved by class name and need no registration:
 
 ```php
-$workflow_id = Queuety::workflow( 'generate_report' )
-    ->then( FetchDataHandler::class )
-    ->then( CallLLMHandler::class )
-    ->then( FormatOutputHandler::class )
-    ->dispatch( [ 'user_id' => 42 ] );
+add_action( 'user_register', function ( int $user_id ) {
+    $workflow_id = Queuety::workflow( 'generate_report' )
+        ->then( FetchDataHandler::class )
+        ->then( CallLLMHandler::class )
+        ->then( FormatOutputHandler::class )
+        ->dispatch( [ 'user_id' => $user_id ] );
+} );
 ```
 
 ## Start a worker
